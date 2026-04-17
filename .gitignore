@@ -9,6 +9,9 @@ build/
 *.bin
 *.map
 
+# ...except the published firmware bins, which are deployed to Pages
+!public/firmware/bins/*.bin
+
 # Local config
 config.mk
 .env
