@@ -32,8 +32,8 @@ Bandwidth caps at ~1–3 Mbps, which is fine for commands, telemetry, and parame
 
 Minimum viable path: one LED, one button.
 
-- `firmware/esp32_ble_led/` — ESP32 firmware that advertises a GATT service with one LED-state characteristic
-- `public/index.html` — Chrome page that scans for the device and toggles its LED (served by GitHub Pages via the `docs` symlink)
+- `firmware/esp32_robot/` — the robot firmware. One BLE service per robot; each capability (LED, motors, sensors) is a characteristic inside that service. Today: just the onboard LED.
+- `public/index.html` — Chrome page that flashes firmware over Web Serial and controls the robot over Web Bluetooth (served by GitHub Pages via the `docs` symlink)
 
 Once this loop works end-to-end on real hardware, scope expands to motors, sensors, and multi-robot.
 

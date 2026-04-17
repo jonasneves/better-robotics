@@ -2,7 +2,7 @@
 
 FQBN        ?= esp32:esp32:esp32cam:PartitionScheme=min_spiffs
 PORT        ?= $(shell ls /dev/cu.usbserial-* 2>/dev/null | head -1)
-SKETCH      ?= esp32_ble_led
+SKETCH      ?= esp32_robot
 BUILD_DIR   := /tmp/esp32-$(SKETCH)-build
 PUBLISH_DIR := public/firmware/bins
 BOOT_APP0   := $(shell find ~/Library/Arduino15/packages/esp32 -name boot_app0.bin 2>/dev/null | sort -V | tail -1)
@@ -58,7 +58,7 @@ preview:
 publish-firmware: compile
 	@test -n "$(BOOT_APP0)" || (echo "Could not find boot_app0.bin — run 'make setup' first" && exit 1)
 	@mkdir -p $(PUBLISH_DIR)
-	cp "$(BUILD_DIR)/$(SKETCH).ino.bin"            "$(PUBLISH_DIR)/esp32_ble_led.bin"
+	cp "$(BUILD_DIR)/$(SKETCH).ino.bin"            "$(PUBLISH_DIR)/$(SKETCH).bin"
 	cp "$(BUILD_DIR)/$(SKETCH).ino.bootloader.bin" "$(PUBLISH_DIR)/bootloader.bin"
 	cp "$(BUILD_DIR)/$(SKETCH).ino.partitions.bin" "$(PUBLISH_DIR)/partitions.bin"
 	cp "$(BOOT_APP0)"                              "$(PUBLISH_DIR)/boot_app0.bin"

@@ -1,7 +1,10 @@
-// Better Robotics — minimal BLE GATT server
+// Better Robotics — robot firmware
 //
-// Advertises a single service with one characteristic (LED state).
-// Write 0x00 to turn LED off, 0x01 to turn it on. Readable and notifiable.
+// Advertises a single BLE service that represents this robot. Each capability
+// (LED, motors, sensors, ...) is a characteristic within that service. Today
+// the only capability is the onboard LED; motors and sensors land as
+// additional characteristics without changing the service UUID or the
+// dashboard's connect flow.
 //
 // LED_PIN is the red LED on ESP32-CAM-MB (GPIO 33, active-low).
 // Adjust for other boards.

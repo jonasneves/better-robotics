@@ -1,14 +1,14 @@
 {
-  "name": "Better Robotics — LED",
+  "name": "Better Robotics",
   "version": "0.1.0",
   "builds": [
     {
       "chipFamily": "ESP32",
       "parts": [
-        { "path": "bins/bootloader.bin",    "offset": 4096 },
-        { "path": "bins/partitions.bin",    "offset": 32768 },
-        { "path": "bins/boot_app0.bin",     "offset": 57344 },
-        { "path": "bins/esp32_ble_led.bin", "offset": 65536 }
+        { "path": "bins/bootloader.bin",  "offset": 4096 },
+        { "path": "bins/partitions.bin",  "offset": 32768 },
+        { "path": "bins/boot_app0.bin",   "offset": 57344 },
+        { "path": "bins/esp32_robot.bin", "offset": 65536 }
       ]
     }
   ]
