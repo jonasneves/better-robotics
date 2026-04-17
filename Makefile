@@ -32,9 +32,11 @@ setup:
 	arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
 	arduino-cli core install esp32:esp32 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
 	@echo ""
-	@echo "If the ESP32-CAM-MB does not appear as a serial port, install the CP210x driver:"
+	@echo "If no /dev/cu.usbserial-* port appears when the ESP32-CAM-MB is plugged in,"
+	@echo "your board uses a CP210x (Silicon Labs) chip and needs its driver:"
 	@echo "  https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers"
-	@echo "Then allow it in System Settings > Privacy & Security before flashing."
+	@echo "Allow it in System Settings > Privacy & Security before flashing."
+	@echo "Boards with FTDI (FT232R) chips use Apple's built-in driver — no install needed."
 
 compile:
 	arduino-cli compile --fqbn "$(FQBN)" --build-path "$(BUILD_DIR)" firmware/$(SKETCH)

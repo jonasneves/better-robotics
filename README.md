@@ -56,6 +56,18 @@ make preview
 ```
 Chrome opens at `http://localhost:8080`. Click **Scan**, pick your ESP32, toggle the LED.
 
+## Hardware
+
+Firmware and published binaries target the **ESP32-CAM-MB** (AI Thinker ESP32-CAM module on the MB programmer carrier). Specifically:
+
+- **`LED_PIN = 33`** — the red onboard LED on the camera module, active-low. Other boards may not have an LED at that pin.
+- **FQBN `esp32:esp32:esp32cam:PartitionScheme=min_spiffs`** — sets the flash layout (`min_spiffs` to leave room for the BLE stack).
+- The bins in `public/firmware/bins/` are compiled against that FQBN. Flashing them onto a different ESP32 board will probably boot, but the LED won't respond and the partition table will be CAM-specific.
+
+To target a different ESP32 board, edit `FQBN` in the Makefile and `LED_PIN` in `firmware/esp32_ble_led/esp32_ble_led.ino`, then rerun `make publish-firmware`.
+
+**USB-serial chip:** the ESP32-CAM-MB ships with either CP210x (Silicon Labs) or FT232R (FTDI). macOS has the FTDI driver built in, but CP210x requires a [one-time driver install](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers). Either works.
+
 ## Browser support
 
 Web Bluetooth works in Chrome, Edge, and Opera (desktop + Android). It does **not** work in Safari on iOS or macOS, and it is behind a flag in Firefox. This is a deliberate constraint — the laptop is the central brain.
