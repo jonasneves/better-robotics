@@ -75,6 +75,19 @@ const logFor = (entry, msg) => {
 };
 
 const STORAGE_KEY = "better-robotics:known";
+const SETTINGS_KEY = "better-robotics:settings";
+
+// User-tunable feature flags. Persisted in localStorage so the toggle
+// survives reloads. Experimental options gate on both the flag AND the
+// presence of the underlying browser API — turning on something Chrome
+// can't deliver is a no-op, not a crash.
+const settings = Object.assign(
+  { passiveScan: false },
+  JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
+);
+function saveSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
 
 const state = {
   // id -> entry (connection + capability handles). Multiple entries can be
@@ -152,10 +165,20 @@ async function loadPaired() {
 }
 
 async function scanForNew() {
+  if (settings.passiveScan && navigator.bluetooth.requestLEScan) {
+    return scanForNewPassive();
+  }
   try {
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [SERVICE_UUID] }],
-    });
+    // If ?robot=X hint is in the URL and that robot isn't already paired,
+    // pre-filter the chooser by name — saves the user from picking out of
+    // a crowd. (Classroom: scan QR label → chooser shows one entry.)
+    const hintedName = new URLSearchParams(location.search).get("robot");
+    const useHint = hintedName
+      && ![...state.devices.values()].some(e => e.name === hintedName);
+    const filter = useHint
+      ? { name: hintedName, services: [SERVICE_UUID] }
+      : { services: [SERVICE_UUID] };
+    const device = await navigator.bluetooth.requestDevice({ filters: [filter] });
     const name = device.name || device.id;
     entryFor(device);
     log("paired", name);
@@ -164,6 +187,96 @@ async function scanForNew() {
   } catch (err) {
     if (err.name !== "NotFoundError") log(`Scan error: ${err.message}`);
   }
+}
+
+// Passive BLE scan (experimental). Uses navigator.bluetooth.requestLEScan,
+// which requires the --enable-experimental-web-platform-features Chrome flag.
+// Unlike requestDevice (which always shows the chooser), passive scan emits
+// advertisement events for every matching device — the user sees robots
+// appear in real time. Pairing still needs requestDevice; we call it with a
+// name filter once the user picks from the discovered list, so the chooser
+// is pre-filtered to the single intended target.
+let _discoverState = { scanning: false, found: new Map(), scanHandle: null };
+
+async function scanForNewPassive() {
+  if (_discoverState.scanning) return;
+  _discoverState.scanning = true;
+  _discoverState.found = new Map();
+  renderDiscovered();
+  const onAdv = (event) => {
+    const name = event.device.name;
+    if (!name) return;
+    const prev = _discoverState.found.get(name);
+    _discoverState.found.set(name, {
+      name,
+      id: event.device.id,
+      rssi: event.rssi || prev?.rssi || 0,
+    });
+    renderDiscovered();
+  };
+  navigator.bluetooth.addEventListener("advertisementreceived", onAdv);
+  try {
+    _discoverState.scanHandle = await navigator.bluetooth.requestLEScan({
+      filters: [{ services: [SERVICE_UUID] }],
+      keepRepeatedDevices: false,
+    });
+    log("Passive scan started — watching for 15 s");
+    await new Promise(r => setTimeout(r, 15000));
+  } catch (err) {
+    log(`Passive scan error: ${err.message}`);
+  } finally {
+    navigator.bluetooth.removeEventListener("advertisementreceived", onAdv);
+    try { _discoverState.scanHandle?.stop(); } catch {}
+    _discoverState.scanning = false;
+    renderDiscovered();
+  }
+}
+
+async function pairDiscovered(name) {
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ name, services: [SERVICE_UUID] }],
+    });
+    entryFor(device);
+    log("paired", name);
+    _discoverState.found.delete(name);
+    render();
+    renderDiscovered();
+    connect(device.id);
+  } catch (err) {
+    if (err.name !== "NotFoundError") log(`Pair error: ${err.message}`);
+  }
+}
+
+function renderDiscovered() {
+  const box = $("discovered");
+  const already = new Set([...state.devices.values()].map(e => e.name));
+  const list = [..._discoverState.found.values()]
+    .filter(d => !already.has(d.name))
+    .sort((a, b) => b.rssi - a.rssi);
+  const show = _discoverState.scanning || list.length > 0;
+  box.hidden = !show;
+  if (!show) { box.innerHTML = ""; return; }
+  box.innerHTML = `
+    <div class="label" style="margin-bottom: 8px;">
+      Discovered ${_discoverState.scanning ? "(scanning…)" : ""}
+    </div>
+    ${list.length === 0 ? `<div class="meta">No new robots heard yet.</div>` : ""}
+    <div class="wifi-list">
+      ${list.map(d => `
+        <div class="wifi-row">
+          <div>
+            <div>${escapeHtml(d.name)}</div>
+            <div class="meta">RSSI ${d.rssi}</div>
+          </div>
+          <button class="secondary sm" data-pair-name="${escapeHtml(d.name)}">Pair</button>
+        </div>
+      `).join("")}
+    </div>
+  `;
+  box.querySelectorAll("[data-pair-name]").forEach(btn => {
+    btn.addEventListener("click", () => pairDiscovered(btn.dataset.pairName));
+  });
 }
 
 async function restoreDevice(entry) {
@@ -785,6 +898,24 @@ document.addEventListener("DOMContentLoaded", () => {
   $("scan-btn").addEventListener("click", scanForNew);
   $("empty-scan-btn").addEventListener("click", scanForNew);
   $("connect-all-btn").addEventListener("click", connectAll);
+
+  // Settings modal — passive-scan toggle gates on both the flag and the
+  // underlying API; if Chrome lacks requestLEScan, the status line explains
+  // that the --enable-experimental-web-platform-features flag is required.
+  const passiveCheckbox = $("setting-passive-scan");
+  const passiveStatus = $("setting-passive-scan-status");
+  const passiveAvailable = !!navigator.bluetooth?.requestLEScan;
+  passiveCheckbox.checked = settings.passiveScan;
+  passiveStatus.textContent = passiveAvailable
+    ? "Scan for robots in the background without a chooser."
+    : "Unavailable — enable chrome://flags#enable-experimental-web-platform-features.";
+  if (!passiveAvailable) passiveCheckbox.disabled = true;
+  passiveCheckbox.addEventListener("change", () => {
+    settings.passiveScan = passiveCheckbox.checked;
+    saveSettings();
+  });
+  $("settings-btn").addEventListener("click", () => $("settings-modal").showModal());
+  $("settings-close").addEventListener("click", () => $("settings-modal").close());
 
   $("menu-label").addEventListener("click", () => {
     const id = menuTargetId;
