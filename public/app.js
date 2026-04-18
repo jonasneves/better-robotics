@@ -927,32 +927,29 @@ async function toggleLed(id) {
   }
 }
 
-// "Connect all" shows whenever at least one paired robot is idle. Previously
-// it was gated on ≥2 idle robots that ALSO had a BluetoothDevice handle —
-// but `getDevices()` is flag-gated on most Chromes, so after a page refresh
-// paired entries typically have device=null and the button would silently
-// hide. Now it shows; connectAll degrades gracefully when handles are
-// missing (see below).
+// "Connect all" is for the silent path only — shows when ≥1 idle robot has
+// a BluetoothDevice handle already attached (will connect without a chooser).
+// Robots that need pairing carry their own per-card "Pair" button which is
+// explicit about opening the native chooser. This makes the batch action
+// 100% predictable: clicking it never pops a dialog.
 function updateHeaderActions() {
-  const idle = [...state.devices.values()].filter(e => e.status === "idle").length;
-  $("connect-all-btn").hidden = idle < 1;
+  const readyIdle = [...state.devices.values()]
+    .filter(e => e.status === "idle" && e.device).length;
+  $("connect-all-btn").hidden = readyIdle < 1;
 }
 
 function connectAll() {
+  // Strictly the silent path — robots that already have a BluetoothDevice
+  // handle connect in parallel with no chooser. Anything needing a chooser
+  // stays the per-card "Pair" button's job. This keeps Connect all's
+  // behavior 100% consistent: always silent, never surprises the user with
+  // a native dialog.
   const all = [...state.devices.values()].filter(e => e.status === "idle");
   const ready = all.filter(e => e.device);
-  const needsPicker = all.filter(e => !e.device);
-  // Ready ones fire in parallel — no chooser, no gesture issue.
+  const needsPair = all.filter(e => !e.device);
   ready.forEach(e => connect(e.id));
-  // Chrome allows one chooser per user gesture. We fire the first that needs
-  // a picker now (still inside the click's activation window) and log an
-  // honest note that the rest need individual re-pair clicks. Fail-loud
-  // beats fail-silent.
-  if (needsPicker.length > 0) {
-    connect(needsPicker[0].id);
-    if (needsPicker.length > 1) {
-      log(`${needsPicker.length - 1} more need individual Connect — Chrome allows one pairing chooser per click`);
-    }
+  if (needsPair.length > 0) {
+    log(`${needsPair.length} robot(s) need pairing — click Pair on each card`);
   }
 }
 
@@ -1016,7 +1013,9 @@ function renderEntry(entry) {
       <div style="display: flex; gap: 4px;">
         ${connected
           ? `<button class="secondary sm" data-action="disconnect">Disconnect</button>`
-          : `<button class="sm" data-action="connect" ${connecting ? "disabled" : ""}>${connecting ? "…" : "Connect"}</button>`}
+          : `<button class="sm" data-action="connect" ${connecting ? "disabled" : ""}>${
+              connecting ? "…" : (entry.device ? "Connect" : "Pair")
+            }</button>`}
         <button class="icon" data-action="menu" aria-label="More actions">⋯</button>
       </div>
     </div>
