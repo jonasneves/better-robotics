@@ -1,159 +1,24 @@
-const SERVICE_UUID          = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d91";
-const LED_CHAR_UUID         = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d92";
-const WIFI_SCAN_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d93";
-const WIFI_JOIN_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d94";
-const WIFI_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d95";
-const OTA_DATA_CHAR_UUID    = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d96";
-const OTA_STATUS_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d97";
-const FW_INFO_CHAR_UUID     = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d98";
-const MOTOR_CHAR_UUID       = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d99";
-const CAMERA_SIGNAL_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9a";  // write: SDP/ICE chunks in
-const CAMERA_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9b";  // read+notify: SDP/ICE chunks out + status
+import {
+  SERVICE_UUID, LED_CHAR_UUID,
+  WIFI_SCAN_CHAR_UUID, WIFI_JOIN_CHAR_UUID, WIFI_STATUS_CHAR_UUID,
+  OTA_DATA_CHAR_UUID, OTA_STATUS_CHAR_UUID, FW_INFO_CHAR_UUID,
+  MOTOR_CHAR_UUID,
+  CAMERA_SIGNAL_CHAR_UUID, CAMERA_STATUS_CHAR_UUID,
+  decodeJson, encodeJson,
+} from "./ble.js";
+import { $, escapeHtml } from "./dom.js";
+import { log, logFor, setLogRenderer } from "./log.js";
+import { settings, saveSettings } from "./settings.js";
+import {
+  state, persist, loadKnown,
+  makeEntry, entryFor, attachDevice, setDisconnectHandler,
+} from "./state.js";
 
-const decodeJson = (dv) => {
-  try {
-    const text = new TextDecoder().decode(dv);
-    return text ? JSON.parse(text) : null;
-  } catch { return null; }
-};
-const encodeJson = (obj) => new TextEncoder().encode(JSON.stringify(obj));
-
-const $ = (id) => document.getElementById(id);
-// Log is a three-column grid (time · name · msg). Name is suppressed on
-// older lines in a burst from the same robot so a stream of events reads
-// as one group with a single anchor. Adjacent-duplicate coalescing
-// rewrites the newest line with a (xN) counter instead of stacking.
-let _lastLogNode = null;
-let _lastLogMsgNode = null;
-let _lastLogNameNode = null;
-let _lastLogKey = null;
-let _lastLogName = null;
-let _lastLogCount = 0;
-const _errRe = /\b(fail(?:ed|ure)?|error|rejected|timeout|cancelled|stalled|stuck|not found)\b/i;
-const _okRe  = /\b(paired|joined|installed|done|ready|enabled|ok)\b/i;
-const _logClass = (msg) => _errRe.test(msg) ? "err" : _okRe.test(msg) ? "ok" : "";
-const log = (msg, name = "") => {
-  const el = $("log");
-  const now = new Date().toLocaleTimeString();
-  const key = `${name}|${msg}`;
-  if (key === _lastLogKey && _lastLogMsgNode) {
-    _lastLogCount++;
-    _lastLogMsgNode.textContent = `${msg} (×${_lastLogCount})`;
-    return;
-  }
-  _lastLogKey = key;
-  _lastLogCount = 1;
-  const line = document.createElement("div");
-  const cls = _logClass(msg);
-  if (cls) line.className = cls;
-  if (!name) line.classList.add("sys");
-  const timeSpan = document.createElement("span");
-  timeSpan.className = "log-time";
-  timeSpan.textContent = now;
-  const nameSpan = document.createElement("span");
-  nameSpan.className = "log-name";
-  nameSpan.textContent = name;
-  const msgSpan = document.createElement("span");
-  msgSpan.className = "log-msg";
-  msgSpan.textContent = msg;
-  line.append(timeSpan, nameSpan, msgSpan);
-  el.prepend(line);
-  // Suppress the previous line's name when this burst continues from it —
-  // anchor name stays on the newest line, older siblings go anonymous.
-  if (name && name === _lastLogName && _lastLogNameNode) {
-    _lastLogNameNode.classList.add("dup");
-  }
-  _lastLogNode = line;
-  _lastLogMsgNode = msgSpan;
-  _lastLogNameNode = nameSpan;
-  _lastLogName = name;
-};
-const logFor = (entry, msg) => {
-  log(msg, entry.name);
-  if (entry.lastEvent !== msg) {
-    entry.lastEvent = msg;
-    renderEntry(entry);
-  }
-};
-
-const STORAGE_KEY = "better-robotics:known";
-const SETTINGS_KEY = "better-robotics:settings";
-
-// User-tunable feature flags. Persisted in localStorage so the toggle
-// survives reloads. Experimental options gate on both the flag AND the
-// presence of the underlying browser API — turning on something Chrome
-// can't deliver is a no-op, not a crash.
-const settings = Object.assign(
-  { passiveScan: false, voice: false },
-  JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
-);
-function saveSettings() {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-}
-
-const state = {
-  // id -> entry (connection + capability handles). Multiple entries can be
-  // connected simultaneously — connection state is tracked per-entry via
-  // entry.status; there's no single "active" robot.
-  devices: new Map(),
-};
-
-function persist() {
-  const out = [];
-  for (const e of state.devices.values()) out.push({ id: e.id, name: e.name });
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
-}
-
-function loadKnown() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
-  catch { return []; }
-}
-
-function attachDevice(entry, device) {
-  entry.device = device;
-  device.addEventListener("gattserverdisconnected", () => onDisconnected(entry.id));
-}
-
-function makeEntry(id, name) {
-  return {
-    id, name,
-    device: null,
-    status: "idle",
-    ledChar: null, ledOn: false,
-    wifiScanChar: null, wifiJoinChar: null, wifiStatusChar: null,
-    wifiStatus: { st: "idle" }, wifiNetworks: null, wifiScanning: false,
-    otaDataChar: null, otaStatusChar: null, otaStatus: { st: "idle" }, fwInfo: null,
-    motorChar: null, motorLeft: 0, motorRight: 0,
-    motorSending: false, motorPending: null,
-    // Camera (optional). cameraSignalChar/cameraStatusChar present → robot
-    // advertises WebRTC camera. cameraPc/cameraStream non-null while a
-    // session is live; cameraRecvBuf assembles chunked inbound signaling.
-    cameraSignalChar: null, cameraStatusChar: null,
-    cameraPc: null, cameraStream: null,
-    cameraRecvBuf: null, cameraStatus: null,
-    lastEvent: null,
-    // DOM node for this card. Owned by render()/renderEntry(); null until
-    // first mounted. Holding it per-entry is the foundation for the future
-    // LLM-orchestrated interface — one state change mutates one card, and
-    // a get_robot_state(id) tool can return just this entry without touching
-    // siblings. It's also what lets slider drags on one robot survive state
-    // changes on other robots.
-    node: null,
-  };
-}
-
-function entryFor(device) {
-  const existing = state.devices.get(device.id);
-  if (existing) {
-    if (!existing.device) attachDevice(existing, device);
-    return existing;
-  }
-  const entry = makeEntry(device.id, device.name || device.id);
-  attachDevice(entry, device);
-  state.devices.set(device.id, entry);
-  persist();
-  return entry;
-}
+// Wire the back-edges that state.js and log.js couldn't do themselves without
+// pulling render/connect into their files. Lazy injection keeps the imports
+// acyclic.
+setLogRenderer((entry) => renderEntry(entry));
+setDisconnectHandler((id) => onDisconnected(id));
 
 async function loadPaired() {
   // Restore remembered robots first — works even when getDevices() is missing.
