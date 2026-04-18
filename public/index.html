@@ -151,6 +151,24 @@
       <button type="button" class="overlay-action" id="prep-sshkey-load">Upload</button>
     </div>
   </div>
+  <div class="field">
+    <label>Capabilities</label>
+    <div class="caps-list">
+      <label class="cap-row">
+        <input type="checkbox" id="prep-cap-led">
+        <span>LED — GPIO <input type="number" id="prep-cap-led-pin" value="17" min="0" max="40"></span>
+      </label>
+      <label class="cap-row">
+        <input type="checkbox" id="prep-cap-motors">
+        <span>Motors (H-bridge / PWM)</span>
+      </label>
+      <label class="cap-row">
+        <input type="checkbox" id="prep-cap-camera" checked>
+        <span>Camera (auto-detect, needs picamera2 + aiortc)</span>
+      </label>
+    </div>
+    <div class="meta" style="margin-top: 4px;">Only checked capabilities will appear on the robot's dashboard card.</div>
+  </div>
   <div class="row" style="margin-top: 12px;">
     <button id="prep-pick-btn" class="secondary sm">Pick SD card directory</button>
     <span class="meta" id="prep-pick-meta">not picked</span>

@@ -1467,6 +1467,18 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       await writeFile(dirHandle, "firstrun.sh", firstrun);
 
+      // Capability config — firmware reads this at boot to know which
+      // hardware the user declared. Absent → defaults all-on for backward
+      // compat with pre-config Pis.
+      prepLog("Writing pi-robot.conf…");
+      const piConfig = {
+        led_enabled: $("prep-cap-led").checked,
+        led_pin: parseInt($("prep-cap-led-pin").value, 10) || 17,
+        motors_enabled: $("prep-cap-motors").checked,
+        camera_enabled: $("prep-cap-camera").checked ? "auto" : false,
+      };
+      await writeFile(dirHandle, "pi-robot.conf", JSON.stringify(piConfig, null, 2));
+
       prepLog("Patching cmdline.txt…");
       const oldCmd = await readTextFile(dirHandle, "cmdline.txt");
       if (oldCmd === null) throw new Error("cmdline.txt not found on card");

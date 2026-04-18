@@ -70,9 +70,26 @@ MOTOR_WATCHDOG_MS = 500
 #                 tracked client-side via wifi-scan notifications; it doesn't
 #                 change connection state.)
 
-LED_PIN = 17       # BCM pin — change to match your wiring.
 SCAN_MAX = 10      # Bounded so the full JSON fits in one ATT read.
 OTA_TARGET = "/home/pi/better-robotics/firmware/pi_robot/pi_robot.py"
+
+# Capability config. Written by the browser's Customize-card flow onto the
+# boot partition. Declares which capabilities this physical robot actually has —
+# don't advertise LED if no LED is wired, don't advertise motors if no H-bridge.
+# Missing or unreadable file → default to all capabilities on, so existing Pis
+# OTA'd from pre-config versions keep working.
+CONFIG_PATH = "/boot/firmware/pi-robot.conf"
+def _load_config() -> dict:
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+_config = _load_config()
+LED_ENABLED    = bool(_config.get("led_enabled", True))
+LED_PIN        = int(_config.get("led_pin", 17))
+MOTORS_ENABLED = bool(_config.get("motors_enabled", True))
+CAMERA_ENABLED = _config.get("camera_enabled", "auto")  # "auto" | True | False
 OTA_OP_ABORT = 0x00
 OTA_OP_BEGIN = 0x01
 OTA_OP_CHUNK = 0x02
@@ -84,28 +101,29 @@ CAM_OP_CHUNK  = 0x02
 CAM_OP_COMMIT = 0x03
 CAM_OP_STOP   = 0x04
 
-# Optional camera stack. We import lazily and tolerate failure so Pis without
-# a camera (or without aiortc installed) run the rest of the firmware cleanly.
-# ImportError OR OSError at camera init both degrade to "no camera" — the
-# signal/status characteristics simply aren't registered.
+# Optional camera stack. Gated on config: if CAMERA_ENABLED is False we skip
+# the imports entirely. "auto" attempts import and tolerates failure — a Pi
+# without aiortc or without picamera2 installed simply doesn't advertise the
+# camera chars.
 _camera_available = False
-try:
-    from picamera2 import Picamera2  # type: ignore
-    from aiortc import (  # type: ignore
-        RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
-        MediaStreamTrack,
-    )
-    from aiortc.rtcrtpsender import RTCRtpSender  # type: ignore
-    import av  # type: ignore
-    import fractions
-    _camera_available = True
-except ImportError as _e:
-    _camera_import_err = str(_e)
+if CAMERA_ENABLED is not False:
+    try:
+        from picamera2 import Picamera2  # type: ignore
+        from aiortc import (  # type: ignore
+            RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
+            MediaStreamTrack,
+        )
+        from aiortc.rtcrtpsender import RTCRtpSender  # type: ignore
+        import av  # type: ignore
+        import fractions
+        _camera_available = True
+    except ImportError as _e:
+        _camera_import_err = str(_e)
 
 logging.basicConfig(format="%(asctime)s %(message)s", level=logging.INFO)
 log = logging.getLogger("pi_robot")
 
-led = LED(LED_PIN)
+led = LED(LED_PIN) if LED_ENABLED else None
 _led_state = 0
 _server: BlessServer | None = None
 _loop: asyncio.AbstractEventLoop | None = None
@@ -530,7 +548,7 @@ def on_write(characteristic: BlessGATTCharacteristic, value: bytearray, **_) -> 
     global _led_state
     uuid = characteristic.uuid.lower()
     if uuid == LED_CHAR_UUID:
-        if len(value) == 0:
+        if len(value) == 0 or led is None:
             return
         _led_state = 1 if value[0] else 0
         led.on() if _led_state else led.off()
@@ -592,14 +610,15 @@ async def main() -> None:
     _server.write_request_func = on_write
 
     await _server.add_new_service(SERVICE_UUID)
-    await _server.add_new_characteristic(
-        SERVICE_UUID, LED_CHAR_UUID,
-        GATTCharacteristicProperties.read
-        | GATTCharacteristicProperties.write
-        | GATTCharacteristicProperties.notify,
-        bytearray([_led_state]),
-        GATTAttributePermissions.readable | GATTAttributePermissions.writeable,
-    )
+    if LED_ENABLED:
+        await _server.add_new_characteristic(
+            SERVICE_UUID, LED_CHAR_UUID,
+            GATTCharacteristicProperties.read
+            | GATTCharacteristicProperties.write
+            | GATTCharacteristicProperties.notify,
+            bytearray([_led_state]),
+            GATTAttributePermissions.readable | GATTAttributePermissions.writeable,
+        )
     await _server.add_new_characteristic(
         SERVICE_UUID, WIFI_SCAN_CHAR_UUID,
         GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
@@ -636,14 +655,15 @@ async def main() -> None:
         _json_bytes(FW_INFO),
         GATTAttributePermissions.readable,
     )
-    await _server.add_new_characteristic(
-        SERVICE_UUID, MOTOR_CHAR_UUID,
-        GATTCharacteristicProperties.read
-        | GATTCharacteristicProperties.write
-        | GATTCharacteristicProperties.notify,
-        bytearray([0, 0]),
-        GATTAttributePermissions.readable | GATTAttributePermissions.writeable,
-    )
+    if MOTORS_ENABLED:
+        await _server.add_new_characteristic(
+            SERVICE_UUID, MOTOR_CHAR_UUID,
+            GATTCharacteristicProperties.read
+            | GATTCharacteristicProperties.write
+            | GATTCharacteristicProperties.notify,
+            bytearray([0, 0]),
+            GATTAttributePermissions.readable | GATTAttributePermissions.writeable,
+        )
 
     if _camera_available:
         # Camera chars are strictly additive. If picamera2 / aiortc aren't
@@ -669,7 +689,9 @@ async def main() -> None:
     log.info("Advertising on service %s", SERVICE_UUID)
     log.info("Ctrl+C to stop.")
     asyncio.create_task(_check_current_wifi())
-    asyncio.create_task(_motor_watchdog_task())
+    if MOTORS_ENABLED:
+        asyncio.create_task(_motor_watchdog_task())
+    log.info("capabilities: led=%s motors=%s camera=%s", LED_ENABLED, MOTORS_ENABLED, _camera_available)
     try:
         await asyncio.Event().wait()
     finally:
