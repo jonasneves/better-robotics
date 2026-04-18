@@ -632,35 +632,36 @@
       log("Update not supported by this firmware");
       return;
     }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".py";
-    input.addEventListener("change", async () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      log(`OTA uploading ${file.name} (${bytes.length} B)…`);
-      try {
-        const ch = entry.otaDataChar;
-        const begin = new Uint8Array(5);
-        begin[0] = 0x01;
-        new DataView(begin.buffer).setUint32(1, bytes.length, false);
-        await ch.writeValueWithResponse(begin);
-        const CHUNK = 180;  // safe under the negotiated ATT MTU on macOS/Chrome.
-        for (let i = 0; i < bytes.length; i += CHUNK) {
-          const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
-          const frame = new Uint8Array(slice.length + 1);
-          frame[0] = 0x02;
-          frame.set(slice, 1);
-          await ch.writeValueWithResponse(frame);
-        }
-        await ch.writeValueWithResponse(new Uint8Array([0x03]));
-        log("OTA commit sent — robot restarting");
-      } catch (err) {
-        log(`OTA failed: ${err.message}`);
+    log("Fetching latest pi_robot.py…");
+    let bytes;
+    try {
+      const resp = await fetch("firmware/pi_robot/pi_robot.py", { cache: "no-cache" });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      bytes = new Uint8Array(await resp.arrayBuffer());
+    } catch (err) {
+      log(`Fetch failed: ${err.message}`);
+      return;
+    }
+    log(`OTA streaming ${bytes.length} B to ${entry.name}…`);
+    try {
+      const ch = entry.otaDataChar;
+      const begin = new Uint8Array(5);
+      begin[0] = 0x01;
+      new DataView(begin.buffer).setUint32(1, bytes.length, false);
+      await ch.writeValueWithResponse(begin);
+      const CHUNK = 180;  // safe under the negotiated ATT MTU on macOS/Chrome.
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+        const frame = new Uint8Array(slice.length + 1);
+        frame[0] = 0x02;
+        frame.set(slice, 1);
+        await ch.writeValueWithResponse(frame);
       }
-    });
-    input.click();
+      await ch.writeValueWithResponse(new Uint8Array([0x03]));
+      log("OTA commit sent — robot restarting");
+    } catch (err) {
+      log(`OTA failed: ${err.message}`);
+    }
   }
 
   async function toggleLed(id) {
