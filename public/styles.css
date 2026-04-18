@@ -433,7 +433,9 @@ button.icon:hover { background: var(--line); color: var(--ink); }
   gap: 10px;
   font-size: 14px;
 }
-.caps-list .cap-row input[type="checkbox"] { margin: 0; flex: none; }
+/* width: auto beats the ambient .field input { width: 100% } which would
+   otherwise stretch the checkbox across the whole row. */
+.caps-list .cap-row input[type="checkbox"] { margin: 0; flex: none; width: auto; }
 /* Override .field label's block / muted / margin rules inside a cap-row. */
 .caps-list .cap-row label {
   display: inline;
