@@ -1,6 +1,6 @@
 # Current working model — better-robotics
 
-Last updated: 2026-04-18 (after dashboard refactor + prepare-modal fold)
+Last updated: 2026-04-18 (after ESP32 TLS tuning + README/vision refresh)
 
 ## Project shape (stable — don't re-question unless new evidence)
 
@@ -13,12 +13,16 @@ Last updated: 2026-04-18 (after dashboard refactor + prepare-modal fold)
 
 ## Pending, roughly ranked
 
-### 1. ESP32 URL-trigger OTA fails with http -1 on CAM-MB (diagnosis pending)
-- Firmware confirmed new (fw-info read returns esp32/url JSON). HTTPS GET to neevs.io fails before data flows.
-- `HTTPClient.GET()` returns -1 = `HTTPC_ERROR_CONNECTION_FAILED`. Root cause most likely **TLS handshake under memory pressure** — BLE stack + mbedTLS fight for heap on ESP32-CAM.
-- **Workaround shipped:** dashboard auto-falls back to BLE stream after 8s of no progress. Works, just slow.
-- **Real-fix candidates:** `client.setBufferSizes(4096, 512)` to shrink TLS buffers; enable heap debug; drop unused cipher suites; longer timeout; alternative: move the data plane onto signal (different tradeoff — still TLS, still memory pressure, adds a WebSocket client lib).
-- **Open decision:** invest in TLS tuning or accept BLE-stream fallback as good enough for CAM-MB (S3 is the recommended hardware anyway — might not be worth fighting).
+### 1. ESP32 URL-trigger OTA still fails with http -1 on CAM-MB (partial fix shipped, awaiting validation)
+- Firmware confirmed new on-device (fw-info read returns esp32/url JSON). HTTPS GET fails before data flows.
+- `HTTPClient.GET()` returns -1 = `HTTPC_ERROR_CONNECTION_FAILED`. Root cause most likely **TLS handshake under memory pressure** — BLE stack + mbedTLS co-resident on ESP32-CAM.
+- **Shipped mitigations:** setFollowRedirects, 20s timeout, free-heap logging in the failure message so we can confirm memory pressure next attempt.
+- **Couldn't ship:** `setBufferSizes(rx, tx)` — the API went away in ESP32 Arduino 3.x (WiFiClientSecure → NetworkClientSecure).
+- **BLE-stream fallback still active** — dashboard auto-retries over BLE after 8s silence, so users aren't stuck.
+- **Next moves if heap logs confirm memory pressure:**
+  1. Run the HTTPS fetch in a dedicated FreeRTOS task (separate stack, can allocate larger buffers without stealing from BLE).
+  2. Alternative: signal/WebSocket transport (different tradeoff — still TLS).
+  3. Accept BLE fallback as good enough for CAM-MB (S3 is the recommended hardware; CAM-MB quirks may not be worth fighting indefinitely).
 
 ### 2. Would a Service Worker improve the architecture? (open question)
 - **Yes for:** offline dashboard (cache static assets + firmware bins so pairing+basic use works without internet, OTA keeps working after a WiFi drop), PWA installability (Add to Home Screen for classroom/demo iPads and Android), faster repeat visits.
@@ -42,6 +46,11 @@ Last updated: 2026-04-18 (after dashboard refactor + prepare-modal fold)
 - **Reconsider when:** streaming video, multi-robot coordination, or another feature requires browser-as-source for bulk data that doesn't fit BLE.
 
 ## Recently landed (context for what's "done")
+- **Vision-led README + `docs/hardware.md` split.** Tagline matches the website; board-specific FQBNs / LED pins / kext notes moved out.
+- **New tagline:** "Pair any robot in a browser tab. No network, no accounts, no servers." Set on the website and GitHub About.
+- **Setup section split into two top-level cards** (ESP32 / Pi), label moved outside, CTA buttons anchored to the bottom so they align across cards.
+- **SSH Upload overlay** in the prepare dialog — replaces the separate "Load from file…" row with a code-block-style button in the textarea corner.
+- **ESP32 advertising resumes on disconnect** — no more reboot-to-re-pair; matches the Pi's BlueZ behavior.
 - **Dashboard split into html/css/js; prepare.html folded into a `<dialog>` inside index.html.** styles.css and app.js linked; IIFE-scoped prepare logic shares helpers. `?prepare` URL param auto-opens the dialog.
 - Per-card "last activity" footer; log lines prefixed with robot name.
 - Motors with watchdog (both platforms)
