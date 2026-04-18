@@ -1010,7 +1010,7 @@ function renderEntry(entry) {
         <button class="name-trigger" data-action="menu" aria-label="More actions for ${escapeHtml(name)}">
           <span class="dot${dotClass}"></span>
           <span>${escapeHtml(name)}</span>
-          <svg class="caret" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1 L5 5 L9 1" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="caret" aria-hidden="true">›</span>
         </button>
         ${statusText ? `<div class="status">${statusText}</div>` : ""}
       </div>
@@ -1123,10 +1123,19 @@ function renderEntry(entry) {
 }
 
 let menuTargetId = null;
+let menuTriggerEl = null;
 
 function openMenu(triggerBtn, id) {
-  menuTargetId = id;
   const menu = $("robot-menu");
+  // Toggle: clicking the same trigger while its menu is open closes it.
+  if (menuTargetId === id && menu.matches(":popover-open")) {
+    closeMenu();
+    return;
+  }
+  if (menuTriggerEl) menuTriggerEl.classList.remove("menu-open");
+  menuTargetId = id;
+  menuTriggerEl = triggerBtn;
+  triggerBtn.classList.add("menu-open");
   const rect = triggerBtn.getBoundingClientRect();
   // Position below, left-aligned with the name trigger, clamped into viewport.
   const menuWidth = 220;
@@ -1139,6 +1148,8 @@ function openMenu(triggerBtn, id) {
 function closeMenu() {
   const menu = $("robot-menu");
   if (menu.hidePopover) menu.hidePopover();
+  if (menuTriggerEl) menuTriggerEl.classList.remove("menu-open");
+  menuTriggerEl = null;
   menuTargetId = null;
 }
 
@@ -1208,6 +1219,19 @@ document.addEventListener("DOMContentLoaded", () => {
   $("scan-btn").addEventListener("click", scanForNew);
   $("empty-scan-btn").addEventListener("click", scanForNew);
   $("connect-all-btn").addEventListener("click", connectAll);
+
+  // Close the (manual-mode) robot menu on outside-click or Escape.
+  // Clicks on the trigger itself are routed to openMenu which handles toggle.
+  document.addEventListener("click", (e) => {
+    const menu = $("robot-menu");
+    if (!menu.matches(":popover-open")) return;
+    if (e.target.closest("#robot-menu")) return;          // inside the menu
+    if (e.target.closest("[data-action='menu']")) return; // the trigger itself
+    closeMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeMenu();
+  });
 
   // Start/stop the gamepad poll loop when a pad connects/disconnects. No
   // loop runs when no gamepad is attached — zero idle cost.
