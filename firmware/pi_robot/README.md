@@ -16,14 +16,14 @@ Four characteristics under one service UUID:
 Flash Raspberry Pi OS to the card normally, then with the boot partition mounted at `/Volumes/bootfs`:
 
 ```bash
-WIFI_SSID='YourNet' WIFI_PASS='yourpass' USER_PASS='sudopass' make sd-prep
+USER_PASS='sudopass' make sd-prep
 ```
 
-This renders `firstrun.template.sh` into `/Volumes/bootfs/firstrun.sh` with your values baked in, patches `cmdline.txt` to trigger it at first boot, and prints a live-progress URL like `https://neevs.io/better-robotics/?setup=betterpi-abc12345`.
+`sd-prep` stages aarch64 Python wheels (`bless`, `bleak`, `dbus-fast`, `async-timeout`, `gpiozero`) into `/boot/firmware/wheels/` and the pi_robot source into `/boot/firmware/betterpi/`, then renders `firstrun.sh` with your values and patches `cmdline.txt`.
 
-On first boot the Pi joins WiFi **once** (only to `pip install` deps), fetches firmware from [neevs.io/better-robotics/firmware/pi_robot/](https://neevs.io/better-robotics/firmware/pi_robot/), sets up a venv, enables the systemd service, then cleans up and reboots. Each stage emits a progress event to [signal.neevs.io](https://signal.neevs.io) so the dashboard shows live setup status; the same events are appended to `/boot/firmware/firstrun.status` as an offline breadcrumb.
+First boot runs entirely offline: no WiFi, no captive portal, no PyPI roundtrip. `firstrun.sh` copies the staged firmware into `/home/pi/better-robotics/firmware/pi_robot/`, creates a venv with `--system-site-packages` (so it picks up `python3-lgpio` from the Bookworm image), `pip install --no-index --find-links=/boot/firmware/wheels`, enables the systemd service, and reboots. Progress is appended to `/boot/firmware/firstrun.status` as an offline breadcrumb; if the Pi happens to already have internet (e.g. from a previous session), the same events also stream to [signal.neevs.io](https://signal.neevs.io) for live dashboard status.
 
-After that, the Pi runs BLE-only by default. New WiFi networks are onboarded from the dashboard via the `wifi-scan` + `wifi-join` characteristics. The SD card holds no credentials after first boot.
+After that, the Pi runs BLE-only. WiFi is onboarded from the dashboard via the `wifi-scan` + `wifi-join` characteristics whenever a network is wanted. The SD card holds no credentials.
 
 ## Manual run (development)
 

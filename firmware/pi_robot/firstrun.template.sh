@@ -1,11 +1,14 @@
 #!/bin/bash
-# Better Robotics — one-time first-boot provisioning for the Pi.
+# Better Robotics — offline first-boot provisioning for the Pi.
 # Generated from firstrun.template.sh by prepare-sd.py. Do not edit the
 # copy on the SD card directly — regenerate with `make sd-prep`.
 #
-# Runs via systemd.run= from cmdline.txt on first boot. Sets up user,
-# SSH, joins WiFi once to fetch + install the pi_robot firmware, emits
-# progress to signal.neevs.io, then cleans up and reboots.
+# Everything the Pi needs is staged on the boot partition:
+#   /boot/firmware/betterpi/   pi_robot.py + requirements.txt + service unit
+#   /boot/firmware/wheels/     aarch64 Python wheels (bless + bleak + etc.)
+# So firstrun needs no network — no WiFi, no pip index, no GH Pages
+# roundtrip. After it finishes, pi_robot advertises BLE and the
+# dashboard onboards WiFi from there.
 
 set +e  # Never abort — Pi must stay rebootable and SSH-reachable on any failure.
 
@@ -15,20 +18,18 @@ echo "=== firstrun.sh start $(date -Iseconds) ==="
 
 BOOTFS=/boot/firmware
 STATUS_FILE=$BOOTFS/firstrun.status
+STAGED=$BOOTFS/betterpi
+WHEELS=$BOOTFS/wheels
 
 HOSTNAME=__REPLACE_HOSTNAME__
 USER_NAME=__REPLACE_USER_NAME__
 USER_PASS=__REPLACE_USER_PASS__
-WIFI_SSID=__REPLACE_WIFI_SSID__
-WIFI_PASS=__REPLACE_WIFI_PASS__
 SSH_KEY=__REPLACE_SSH_KEY__
-FIRMWARE_URL=__REPLACE_FIRMWARE_URL__
 SIGNAL_ROOM=__REPLACE_SIGNAL_ROOM__
 SIGNAL_URL="https://signal.neevs.io/${SIGNAL_ROOM}"
 
-# emit STEP [MSG] — best-effort progress notification over two channels:
-#   signal.neevs.io    for live dashboard streaming (needs internet)
-#   firstrun.status    as an offline breadcrumb on the FAT32 boot partition
+# emit STEP [MSG] — best-effort progress. Signal needs internet and will
+# be silent on a truly offline first boot; the status file always lands.
 emit() {
     local step="$1"; shift
     local msg="${*:-}"
@@ -39,16 +40,6 @@ emit() {
         -H "Content-Type: application/json" \
         -d "{\"peer\":\"pi\",\"ttl\":7200000,\"data\":{\"step\":\"$step\",\"t\":$t,\"msg\":\"$msg\"}}" \
         >/dev/null 2>&1 &
-}
-
-retry() {
-    local tries=$1; shift
-    local i
-    for i in $(seq 1 "$tries"); do
-        "$@" && return 0
-        sleep $((i * 2))
-    done
-    return 1
 }
 
 : > "$STATUS_FILE"
@@ -79,128 +70,39 @@ systemctl enable ssh
 systemctl start ssh
 emit ssh_enabled
 
-# --- WiFi (one-time, for pip install) ---
-# This is the part that tends to go wrong on first boot: NM isn't fully up,
-# the scan cache is empty, or a dual-band SSID's preferred band auth-fails.
-# We wait for NM, force a rescan, then try three variants: default, 2.4-only,
-# 5-only. Each failure emits the actual nmcli error so diagnosis is possible
-# from the dashboard without shell access.
-raspi-config nonint do_wifi_country US || true
-rfkill unblock wifi || true
-nmcli radio wifi on || true
-
-emit wifi_waiting_nm
-for i in $(seq 1 60); do
-    nmcli -t -f RUNNING general 2>/dev/null | grep -q '^running$' && break
-    sleep 1
-done
-WLAN_STATE=""
-for i in $(seq 1 60); do
-    WLAN_STATE=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | awk -F: '/^wlan0:/ {print $2}')
-    case "$WLAN_STATE" in connected|disconnected) break ;; esac
-    sleep 1
-done
-emit wifi_ready "wlan0=${WLAN_STATE:-missing}"
-
-SSID_VISIBLE=0
-for i in 1 2 3; do
-    nmcli dev wifi rescan 2>/dev/null || true
-    sleep 6
-    if nmcli -t -f SSID dev wifi list 2>/dev/null | grep -Fqx "$WIFI_SSID"; then
-        SSID_VISIBLE=1; break
-    fi
-done
-VISIBLE_SSIDS=$(nmcli -t -f SSID dev wifi list 2>/dev/null | sort -u | head -15 | tr '\n' ',' | sed 's/,$//' | head -c 200)
-emit wifi_visible "seen=${SSID_VISIBLE} nearby=[${VISIBLE_SSIDS}]"
-
-wifi_try() {
-    local band="$1"  # "" | "bg" (2.4 GHz) | "a" (5 GHz)
-    local tmp="betterpi-wifi-try"
-    nmcli connection delete "$tmp" >/dev/null 2>&1
-    local add_args=(type wifi ifname wlan0 con-name "$tmp" ssid "$WIFI_SSID"
-                    802-11-wireless-security.key-mgmt wpa-psk
-                    802-11-wireless-security.psk "$WIFI_PASS")
-    [ -n "$band" ] && add_args+=(802-11-wireless.band "$band")
-    if ! nmcli connection add "${add_args[@]}" >/dev/null 2>&1; then
-        emit wifi_attempt_failed "band=${band:-auto} add profile failed"
-        return 1
-    fi
-    local err rc
-    err=$(nmcli --wait 30 connection up "$tmp" 2>&1); rc=$?
-    if [ $rc -eq 0 ]; then
-        return 0
-    fi
-    local clean; clean=$(printf '%s' "$err" | tr '\n' ' ' | tr -d '"' | head -c 150)
-    emit wifi_attempt_failed "band=${band:-auto} $clean"
-    nmcli connection delete "$tmp" >/dev/null 2>&1
-    return $rc
-}
-
-emit wifi_joining "$WIFI_SSID"
-if wifi_try "" || wifi_try bg || wifi_try a; then
-    emit wifi_joined "$WIFI_SSID"
-else
-    emit wifi_failed "$WIFI_SSID"
-fi
-
-# --- Wait for routable internet ---
-ONLINE=0
-for i in $(seq 1 60); do
-    if curl -fsS -m 3 -o /dev/null https://neevs.io/better-robotics/index.html; then
-        ONLINE=1; break
-    fi
-    sleep 1
-done
-emit online "$ONLINE"
-
+# --- Firmware install (from staged files, no network) ---
 INSTALL_OK=0
-if [ "$ONLINE" = "1" ]; then
-    DEST="/home/$USER_NAME/better-robotics/firmware/pi_robot"
-    install -d -o "$USER_NAME" -g "$USER_NAME" "$DEST"
-
-    emit firmware_fetch_start
-    FETCH_OK=1
-    for f in pi_robot.py requirements.txt pi-robot.service; do
-        if retry 3 curl -fsSL -m 10 "$FIRMWARE_URL/$f" -o "$DEST/$f"; then
-            chown "$USER_NAME:$USER_NAME" "$DEST/$f"
-        else
-            FETCH_OK=0
-            emit firmware_fetch_failed "$f"
-            break
-        fi
-    done
-
-    if [ "$FETCH_OK" = "1" ]; then
-        emit firmware_fetched
-
-        emit apt_install_start
-        retry 3 apt-get update
-        apt-get install -y python3-venv python3-pip
-        emit apt_install_done
-
-        emit venv_create_start
-        sudo -u "$USER_NAME" python3 -m venv "$DEST/.venv"
-        emit venv_created
-
-        emit pip_install_start "this is the slow step (~2 min)"
-        sudo -u "$USER_NAME" "$DEST/.venv/bin/pip" install --upgrade pip >/dev/null
-        if sudo -u "$USER_NAME" "$DEST/.venv/bin/pip" install -r "$DEST/requirements.txt"; then
-            emit pip_installed
-
-            install -m 644 "$DEST/pi-robot.service" /etc/systemd/system/pi-robot.service
-            systemctl daemon-reload
-            systemctl enable pi-robot.service
-            emit service_enabled
-            INSTALL_OK=1
-        else
-            emit pip_install_failed
-        fi
+DEST="/home/$USER_NAME/better-robotics/firmware/pi_robot"
+install -d -o "$USER_NAME" -g "$USER_NAME" "$DEST"
+for f in pi_robot.py requirements.txt pi-robot.service; do
+    if [ -f "$STAGED/$f" ]; then
+        install -m 644 -o "$USER_NAME" -g "$USER_NAME" "$STAGED/$f" "$DEST/$f"
+    else
+        emit firmware_missing "$f not staged on boot partition"
     fi
+done
+emit firmware_staged
+
+emit venv_create_start
+sudo -u "$USER_NAME" python3 -m venv --system-site-packages "$DEST/.venv"
+emit venv_created
+
+emit pip_install_start "installing from /boot/firmware/wheels"
+PIP_ERR=$(sudo -u "$USER_NAME" "$DEST/.venv/bin/pip" install --no-index --find-links="$WHEELS" bless gpiozero 2>&1)
+PIP_RC=$?
+if [ $PIP_RC -eq 0 ]; then
+    emit pip_installed
+    install -m 644 "$DEST/pi-robot.service" /etc/systemd/system/pi-robot.service
+    systemctl daemon-reload
+    systemctl enable pi-robot.service
+    emit service_enabled
+    INSTALL_OK=1
 else
-    emit offline "could not reach neevs.io — firmware install skipped"
+    CLEAN=$(printf '%s' "$PIP_ERR" | tr '\n' ' ' | tr -d '"' | head -c 200)
+    emit pip_install_failed "$CLEAN"
 fi
 
-# --- Cleanup: always clear the systemd.run trigger so we never re-run this script. ---
+# --- Cleanup: always clear the systemd.run trigger so we never re-run. ---
 sed -i 's| systemd\.run=[^ ]*||g; s| systemd\.run_success_action=[^ ]*||g; s| systemd\.unit=[^ ]*||g' "$BOOTFS/cmdline.txt"
 if [ "$INSTALL_OK" = "1" ]; then
     rm -f "$BOOTFS/firstrun.sh"
@@ -209,6 +111,5 @@ else
     emit install_failed "SSH in and re-run manually — firstrun.sh left in place for inspection"
 fi
 
-# Give the last emit's background curl time to land before we return and systemd reboots.
-sleep 3
+sleep 3  # give background curls a moment to flush
 exit 0

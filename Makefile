@@ -25,8 +25,8 @@ help:
 	@echo "  \033[36mpreview\033[0m             Serve dashboard at http://localhost:8080"
 	@echo "  \033[36mpublish-firmware\033[0m    Package firmware bins into public/firmware/bins/ for web flashing"
 	@echo "  \033[36mpublish-pi-firmware\033[0m Publish Pi firmware to public/firmware/pi_robot/ for SD-card first-boot fetch"
-	@echo "  \033[36msd-prep\033[0m             Write firstrun.sh + patch cmdline.txt on an inserted Pi SD card"
-	@echo "                     Required env: WIFI_SSID WIFI_PASS USER_PASS"
+	@echo "  \033[36msd-prep\033[0m             Stage wheels + firmware + firstrun.sh on an inserted Pi SD card"
+	@echo "                     Required env: USER_PASS"
 	@echo ""
 
 setup:
