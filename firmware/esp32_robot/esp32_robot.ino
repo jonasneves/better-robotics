@@ -415,6 +415,18 @@ class OtaDataCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+// ESP32's Arduino BLE library stops advertising when a central connects and
+// doesn't auto-resume on disconnect — a 1:1-session default that makes the
+// robot un-pair-able without a reboot. Restart advertising here so the
+// behavior matches the Pi (BlueZ keeps advertising by default) and the
+// operator can reconnect any time without power-cycling the device.
+class ServerCallbacks : public BLEServerCallbacks {
+  void onDisconnect(BLEServer* /*srv*/) override {
+    BLEDevice::startAdvertising();
+    Serial.println("client disconnected; advertising resumed");
+  }
+};
+
 class LedCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* ch) override {
     String value = ch->getValue();
@@ -490,6 +502,7 @@ void setup() {
 
   BLEDevice::init(name);
   BLEServer* server = BLEDevice::createServer();
+  server->setCallbacks(new ServerCallbacks());
   // Default numHandles is 15; every characteristic eats 2 handles (decl + val)
   // and every CCCD (2902) eats 1 more. This service needs 19 with current
   // characteristics — 32 leaves room for future ones without another silent
