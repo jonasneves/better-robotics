@@ -199,6 +199,31 @@
       align-items: flex-start;
     }
     .setup-item button { margin-top: 4px; }
+    .help-hint {
+      background: transparent;
+      color: var(--ink-muted);
+      border: none;
+      padding: 0;
+      min-height: unset;
+      font-size: 12px;
+      text-decoration: underline;
+      text-decoration-style: dotted;
+      text-underline-offset: 3px;
+      cursor: help;
+    }
+    .help-hint:hover { color: var(--ink); }
+    .help-popover {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.04);
+      padding: 10px 12px;
+      max-width: 280px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .help-popover::backdrop { background: transparent; }
     .motor-sliders {
       display: flex;
       gap: 16px;
@@ -322,12 +347,12 @@
       <div class="setup-item">
         <div class="label">Flash an ESP32</div>
         <div class="meta">Full firmware over USB — takes a blank chip to a working robot in one click.</div>
-        <div class="meta" style="font-size: 11px;">S3 boards: no driver. CAM-MB with CP2102: needs the <a href="https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers">Silicon Labs driver</a> once.</div>
         <esp-web-install-button manifest="firmware/manifest.json">
           <button slot="activate" class="secondary">Flash firmware</button>
           <span slot="unsupported" class="meta">Web Serial required (Chrome or Edge desktop).</span>
           <span slot="not-allowed" class="meta">HTTPS required to flash.</span>
         </esp-web-install-button>
+        <button type="button" class="help-hint" popovertarget="esp32-drivers">Do I need a driver?</button>
       </div>
       <div class="setup-item">
         <div class="label">Customize a Pi SD card</div>
@@ -355,6 +380,11 @@
     <div class="log" id="log">Ready.</div>
   </section>
 </main>
+
+<div id="esp32-drivers" class="help-popover" popover>
+  <strong>ESP32-S3:</strong> no driver — native USB.<br>
+  <strong>CAM-MB with CP2102:</strong> install the <a href="https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers">Silicon Labs driver</a> once, then allow it in System Settings → Privacy &amp; Security.
+</div>
 
 <div id="robot-menu" class="menu" popover="auto">
   <button class="menu-item" id="menu-label">Show label</button>
