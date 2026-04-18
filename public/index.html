@@ -239,6 +239,17 @@
     </div>
   </section>
 
+  <section class="card" id="setup-card" hidden>
+    <div class="card-header">
+      <div>
+        <div class="label" id="setup-title">Pi setup in progress</div>
+        <div class="meta" id="setup-meta">Waiting for the Pi to come online…</div>
+      </div>
+      <button class="icon" id="setup-dismiss" aria-label="Dismiss">×</button>
+    </div>
+    <div class="log" id="setup-events"></div>
+  </section>
+
   <section class="card">
     <div class="card-header" id="robots-header" hidden>
       <div class="label">Your robots</div>
@@ -651,7 +662,91 @@
     return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  const SETUP_LABELS = {
+    start: "Starting setup",
+    hostname_set: "Hostname set",
+    user_created: "User account created",
+    ssh_enabled: "SSH enabled",
+    wifi_joining: "Joining WiFi…",
+    wifi_joined: "WiFi connected",
+    wifi_failed: "WiFi failed",
+    online: (m) => m === "1" ? "Internet reachable" : "No internet",
+    offline: "Offline — firmware install skipped",
+    firmware_fetch_start: "Fetching firmware…",
+    firmware_fetched: "Firmware fetched",
+    firmware_fetch_failed: "Firmware fetch failed",
+    apt_install_start: "Installing system packages…",
+    apt_install_done: "System packages installed",
+    venv_create_start: "Creating Python environment…",
+    venv_created: "Python environment ready",
+    pip_install_start: "Installing Python dependencies (slow)…",
+    pip_installed: "Python dependencies installed",
+    pip_install_failed: "Python install failed",
+    service_enabled: "Robot service enabled",
+    done: "Setup complete — Pi is rebooting",
+    install_failed: "Setup incomplete — SSH in to debug",
+  };
+  const TERMINAL_STEPS = new Set(["done", "install_failed"]);
+
+  function initSetupPanel() {
+    const room = new URLSearchParams(window.location.search).get("setup");
+    if (!room) return;
+
+    const card = $("setup-card");
+    const meta = $("setup-meta");
+    const events = $("setup-events");
+    card.hidden = false;
+
+    let stuckTimer = null;
+    let terminal = false;
+
+    function resetStuckTimer() {
+      clearTimeout(stuckTimer);
+      if (terminal) return;
+      stuckTimer = setTimeout(() => {
+        meta.textContent = "No updates for 2 min — Pi may be stuck. Try: ssh pi@betterpi.local then tail -f /var/log/betterpi-firstrun.log";
+      }, 120_000);
+    }
+
+    function renderEvent(step, msg, t) {
+      if (!step) return;
+      const labelSource = SETUP_LABELS[step];
+      const label = typeof labelSource === "function" ? labelSource(msg) : (labelSource || step);
+      const when = t ? new Date(t * 1000).toLocaleTimeString() : new Date().toLocaleTimeString();
+      const detail = msg && typeof labelSource !== "function" ? ` — ${msg}` : "";
+      events.textContent = `[${when}] ${label}${detail}\n` + events.textContent;
+      meta.textContent = label;
+      if (TERMINAL_STEPS.has(step)) {
+        terminal = true;
+        clearTimeout(stuckTimer);
+        $("setup-title").textContent = step === "done" ? "Pi setup complete" : "Pi setup incomplete";
+      }
+      resetStuckTimer();
+    }
+
+    const ws = new WebSocket(`wss://signal.neevs.io/${encodeURIComponent(room)}/ws`);
+    ws.onmessage = (e) => {
+      let msg; try { msg = JSON.parse(e.data); } catch { return; }
+      if (msg.type === "state" && msg.peers && msg.peers.pi && msg.peers.pi.data) {
+        renderEvent(msg.peers.pi.data.step, msg.peers.pi.data.msg, msg.peers.pi.data.t);
+      } else if (msg.type === "signal" && msg.peer === "pi" && msg.data) {
+        renderEvent(msg.data.step, msg.data.msg, msg.data.t);
+      }
+    };
+    ws.onerror = () => { meta.textContent = "Could not reach signal.neevs.io"; };
+
+    $("setup-dismiss").addEventListener("click", () => {
+      ws.close();
+      clearTimeout(stuckTimer);
+      card.hidden = true;
+      history.replaceState({}, "", window.location.pathname);
+    });
+
+    resetStuckTimer();
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
+    initSetupPanel();
     if (!navigator.bluetooth) {
       $("unsupported").hidden = false;
       $("scan-btn").disabled = true;

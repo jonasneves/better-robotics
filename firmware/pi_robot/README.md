@@ -13,7 +13,15 @@ Four characteristics under one service UUID:
 
 ## SD-card first boot
 
-Prepare the card with `firstrun.sh` + `cmdline.txt` in the FAT32 boot partition. On first boot the Pi joins WiFi **once** (only to `pip install` deps), fetches firmware from [neevs.io/better-robotics/firmware/pi_robot/](https://neevs.io/better-robotics/firmware/pi_robot/), sets up a venv, enables the systemd service, then cleans up and reboots.
+Flash Raspberry Pi OS to the card normally, then with the boot partition mounted at `/Volumes/bootfs`:
+
+```bash
+WIFI_SSID='YourNet' WIFI_PASS='yourpass' USER_PASS='sudopass' make sd-prep
+```
+
+This renders `firstrun.template.sh` into `/Volumes/bootfs/firstrun.sh` with your values baked in, patches `cmdline.txt` to trigger it at first boot, and prints a live-progress URL like `https://neevs.io/better-robotics/?setup=betterpi-abc12345`.
+
+On first boot the Pi joins WiFi **once** (only to `pip install` deps), fetches firmware from [neevs.io/better-robotics/firmware/pi_robot/](https://neevs.io/better-robotics/firmware/pi_robot/), sets up a venv, enables the systemd service, then cleans up and reboots. Each stage emits a progress event to [signal.neevs.io](https://signal.neevs.io) so the dashboard shows live setup status; the same events are appended to `/boot/firmware/firstrun.status` as an offline breadcrumb.
 
 After that, the Pi runs BLE-only by default. New WiFi networks are onboarded from the dashboard via the `wifi-scan` + `wifi-join` characteristics. The SD card holds no credentials after first boot.
 
