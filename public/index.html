@@ -319,6 +319,14 @@
       background: #fff8e1;
       transition: background 1.5s;
     }
+    .last-event {
+      margin-top: 12px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--line);
+      font-family: "SF Mono", ui-monospace, Menlo, monospace;
+      font-size: 11px;
+      color: var(--ink-muted);
+    }
     @media print {
       body > main, #robot-menu { display: none !important; }
       .label-modal {
@@ -453,7 +461,15 @@
   // Robot-scoped logging. Any event that belongs to a specific robot gets
   // its name prefixed so multi-robot logs stay legible. System-wide events
   // (scan errors, bluetooth off, paired-device listing) use bare log().
-  const logFor = (entry, msg) => log(`${entry.name}: ${msg}`);
+  // Also stores the message as the entry's last-activity line so each card
+  // shows its most recent event inline without scrolling to the global log.
+  const logFor = (entry, msg) => {
+    log(`${entry.name}: ${msg}`);
+    if (entry.lastEvent !== msg) {
+      entry.lastEvent = msg;
+      render();
+    }
+  };
 
   const STORAGE_KEY = "better-robotics:known";
 
@@ -508,6 +524,7 @@
       motorRight: 0,
       motorSending: false,
       motorPending: null,
+      lastEvent: null,
     };
     attachDevice(entry, device);
     state.devices.set(device.id, entry);
@@ -527,6 +544,7 @@
           otaDataChar: null, otaStatusChar: null, otaStatus: { st: "idle" }, fwInfo: null,
           motorChar: null, motorLeft: 0, motorRight: 0,
           motorSending: false, motorPending: null,
+          lastEvent: null,
         });
       }
     }
@@ -1016,6 +1034,9 @@
               `).join("")}
             </div>
           ` : ""}
+        ` : ""}
+        ${entry.lastEvent ? `
+          <div class="last-event">${escapeHtml(entry.lastEvent)}</div>
         ` : ""}
       `;
       robot.querySelectorAll("[data-action]").forEach(btn => {
