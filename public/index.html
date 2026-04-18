@@ -828,12 +828,23 @@
         frame[0] = 0x04;
         frame.set(new TextEncoder().encode(payload), 1);
         log(`OTA trigger → ${entry.name} will fetch ${bytes.length} B over WiFi`);
+        let triggerSent = false;
         try {
           await entry.otaDataChar.writeValueWithResponse(frame);
+          triggerSent = true;
         } catch (err) {
-          log(`OTA trigger failed: ${err.message}`);
+          log(`OTA trigger failed: ${err.message} — falling back to BLE stream`);
         }
-        return;
+        if (triggerSent) {
+          // Give the ESP32 ~8 seconds to start fetching. It should transition
+          // through "fetching" → "receiving" quickly; if status is "failed"
+          // in that window the URL-trigger path didn't work (TLS handshake,
+          // DNS, connection refused, etc) and we fall back to BLE stream.
+          await new Promise(r => setTimeout(r, 8000));
+          if (entry.otaStatus?.st !== "failed") return;
+          log(`URL-trigger failed (${entry.otaStatus.err || "?"}) — falling back to BLE stream`);
+        }
+        // fall through to BLE stream
       }
 
       // Fallback: stream the whole binary over BLE (Pi always, or ESP32 offline).
