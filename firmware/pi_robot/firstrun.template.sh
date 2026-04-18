@@ -80,15 +80,64 @@ systemctl start ssh
 emit ssh_enabled
 
 # --- WiFi (one-time, for pip install) ---
+# This is the part that tends to go wrong on first boot: NM isn't fully up,
+# the scan cache is empty, or a dual-band SSID's preferred band auth-fails.
+# We wait for NM, force a rescan, then try three variants: default, 2.4-only,
+# 5-only. Each failure emits the actual nmcli error so diagnosis is possible
+# from the dashboard without shell access.
 raspi-config nonint do_wifi_country US || true
 rfkill unblock wifi || true
 nmcli radio wifi on || true
-emit wifi_joining "$WIFI_SSID"
-for i in $(seq 1 30); do
-    nmcli device status 2>/dev/null | grep -q '^wlan0' && break
+
+emit wifi_waiting_nm
+for i in $(seq 1 60); do
+    nmcli -t -f RUNNING general 2>/dev/null | grep -q '^running$' && break
     sleep 1
 done
-if retry 3 nmcli dev wifi connect "$WIFI_SSID" password "$WIFI_PASS"; then
+WLAN_STATE=""
+for i in $(seq 1 60); do
+    WLAN_STATE=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | awk -F: '/^wlan0:/ {print $2}')
+    case "$WLAN_STATE" in connected|disconnected) break ;; esac
+    sleep 1
+done
+emit wifi_ready "wlan0=${WLAN_STATE:-missing}"
+
+SSID_VISIBLE=0
+for i in 1 2 3; do
+    nmcli dev wifi rescan 2>/dev/null || true
+    sleep 6
+    if nmcli -t -f SSID dev wifi list 2>/dev/null | grep -Fqx "$WIFI_SSID"; then
+        SSID_VISIBLE=1; break
+    fi
+done
+VISIBLE_SSIDS=$(nmcli -t -f SSID dev wifi list 2>/dev/null | sort -u | head -15 | tr '\n' ',' | sed 's/,$//' | head -c 200)
+emit wifi_visible "seen=${SSID_VISIBLE} nearby=[${VISIBLE_SSIDS}]"
+
+wifi_try() {
+    local band="$1"  # "" | "bg" (2.4 GHz) | "a" (5 GHz)
+    local tmp="betterpi-wifi-try"
+    nmcli connection delete "$tmp" >/dev/null 2>&1
+    local add_args=(type wifi ifname wlan0 con-name "$tmp" ssid "$WIFI_SSID"
+                    802-11-wireless-security.key-mgmt wpa-psk
+                    802-11-wireless-security.psk "$WIFI_PASS")
+    [ -n "$band" ] && add_args+=(802-11-wireless.band "$band")
+    if ! nmcli connection add "${add_args[@]}" >/dev/null 2>&1; then
+        emit wifi_attempt_failed "band=${band:-auto} add profile failed"
+        return 1
+    fi
+    local err rc
+    err=$(nmcli --wait 30 connection up "$tmp" 2>&1); rc=$?
+    if [ $rc -eq 0 ]; then
+        return 0
+    fi
+    local clean; clean=$(printf '%s' "$err" | tr '\n' ' ' | tr -d '"' | head -c 150)
+    emit wifi_attempt_failed "band=${band:-auto} $clean"
+    nmcli connection delete "$tmp" >/dev/null 2>&1
+    return $rc
+}
+
+emit wifi_joining "$WIFI_SSID"
+if wifi_try "" || wifi_try bg || wifi_try a; then
     emit wifi_joined "$WIFI_SSID"
 else
     emit wifi_failed "$WIFI_SSID"
