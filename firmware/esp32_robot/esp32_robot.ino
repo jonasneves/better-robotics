@@ -268,9 +268,13 @@ static void otaFetchUrl(const String& url, size_t expectedSize, const uint8_t ex
     publishOta("failed", 0, expectedSize, "wifi not connected");
     return;
   }
-  WiFiClientSecure client;
+  size_t heapBefore = ESP.getFreeHeap();
+  Serial.printf("OTA fetch: free heap = %u\n", heapBefore);
+  NetworkClientSecure client;
   client.setInsecure();  // integrity is guaranteed by the sha256 check below
   HTTPClient http;
+  http.setTimeout(20000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   if (!http.begin(client, url)) {
     publishOta("failed", 0, expectedSize, "http.begin failed");
     return;
@@ -278,7 +282,12 @@ static void otaFetchUrl(const String& url, size_t expectedSize, const uint8_t ex
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
     http.end();
-    String err = "http "; err += code;
+    String err = "http ";
+    err += code;
+    err += " heap=";
+    err += (int)heapBefore;
+    err += "/";
+    err += (int)ESP.getFreeHeap();
     publishOta("failed", 0, expectedSize, err.c_str());
     return;
   }
