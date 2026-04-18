@@ -1,0 +1,16 @@
+{
+  "version": "1",
+  "files": [
+    { "src": "pi_robot.py", "dest": "/home/pi/better-robotics/firmware/pi_robot/pi_robot.py", "mode": "644" },
+    { "src": "pi-robot.service", "dest": "/etc/systemd/system/pi-robot.service", "mode": "644" },
+    { "src": "usb-gadget-setup.sh", "dest": "/usr/local/bin/usb-gadget-setup.sh", "mode": "755" },
+    { "src": "usb-gadget.service", "dest": "/etc/systemd/system/usb-gadget.service", "mode": "644" }
+  ],
+  "post_install": [
+    "systemctl daemon-reload",
+    "systemctl enable usb-gadget.service",
+    "systemctl enable serial-getty@ttyGS0.service",
+    "sed -i 's/modules-load=dwc2,g_ether/modules-load=dwc2,libcomposite/' /boot/firmware/cmdline.txt"
+  ],
+  "reboot": true
+}

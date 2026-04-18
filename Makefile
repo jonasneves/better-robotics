@@ -74,10 +74,12 @@ publish-firmware: compile
 
 publish-pi-firmware:
 	@mkdir -p public/firmware/pi_robot/wheels
-	cp firmware/pi_robot/pi_robot.py           public/firmware/pi_robot/pi_robot.py
-	cp firmware/pi_robot/requirements.txt      public/firmware/pi_robot/requirements.txt
-	cp firmware/pi_robot/pi-robot.service      public/firmware/pi_robot/pi-robot.service
-	cp firmware/pi_robot/firstrun.template.sh  public/firmware/pi_robot/firstrun.template.sh
+	# Copy every regular file from firmware/pi_robot/ — avoids the trap of
+	# adding a new helper (usb-gadget-setup.sh, ota-manifest.json, …) and
+	# forgetting to update this list.
+	find firmware/pi_robot/ -maxdepth 1 -type f \
+		-not -name 'README.md' \
+		-exec cp {} public/firmware/pi_robot/ \;
 	rm -f public/firmware/pi_robot/wheels/*.whl
 	pip download --no-deps --platform manylinux2014_aarch64 --python-version 311 --implementation cp --only-binary=:all: -d public/firmware/pi_robot/wheels/ bless bleak dbus-fast dbus-next typing-extensions
 	pip download --no-deps --platform manylinux2014_aarch64 --python-version 313 --implementation cp --only-binary=:all: -d public/firmware/pi_robot/wheels/ bless bleak dbus-fast dbus-next typing-extensions
