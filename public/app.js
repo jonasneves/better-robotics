@@ -542,6 +542,22 @@ async function toggleLed(id) {
   }
 }
 
+// "Connect all" is only shown when ≥2 idle entries already have a device
+// handle. Chrome allows one chooser per user gesture, so batch-connect can't
+// restore entries that need a new pairing prompt — for those, per-card
+// Connect remains the right path.
+function updateHeaderActions() {
+  const idleReady = [...state.devices.values()]
+    .filter(e => e.status === "idle" && e.device).length;
+  $("connect-all-btn").hidden = idleReady < 2;
+}
+
+function connectAll() {
+  const targets = [...state.devices.values()]
+    .filter(e => e.status === "idle" && e.device);
+  targets.forEach(e => connect(e.id));
+}
+
 // Two-level render. render() reconciles the list (add / remove / order)
 // against state.devices; renderEntry() rebuilds one card's innards. Most
 // state changes go through renderEntry so a notification for robot A never
@@ -560,6 +576,7 @@ function render() {
   }
   empty.hidden = true;
   header.hidden = false;
+  updateHeaderActions();
 
   // Drop nodes for entries that are no longer in state (e.g., forgetDevice).
   const ids = new Set(state.devices.keys());
@@ -679,6 +696,7 @@ function renderEntry(entry) {
       }
     });
   });
+  updateHeaderActions();
 }
 
 let menuTargetId = null;
@@ -766,6 +784,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   $("scan-btn").addEventListener("click", scanForNew);
   $("empty-scan-btn").addEventListener("click", scanForNew);
+  $("connect-all-btn").addEventListener("click", connectAll);
 
   $("menu-label").addEventListener("click", () => {
     const id = menuTargetId;
