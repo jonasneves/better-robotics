@@ -387,12 +387,13 @@ class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type
         super().stop()
 
 
-async def _run_install_cmd(label: str, argv: list[str]) -> int:
+async def _run_install_cmd(label: str, argv: list[str]) -> tuple[int, list[str]]:
     _set_cam_status(st="installing", step=label)
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
+    tail: list[str] = []  # last N lines, echoed to dashboard on failure
     while True:
         line = await proc.stdout.readline()
         if not line:
@@ -400,7 +401,11 @@ async def _run_install_cmd(label: str, argv: list[str]) -> int:
         text = line.decode(errors="replace").strip()
         if text:
             _set_cam_status(st="installing", step=label, log=text[:160])
-    return await proc.wait()
+            tail.append(text)
+            if len(tail) > 12:
+                tail.pop(0)
+    rc = await proc.wait()
+    return rc, tail
 
 
 async def _cam_install() -> None:
@@ -415,25 +420,38 @@ async def _cam_install() -> None:
         return
     _cam_installing = True
     try:
-        rc = await _run_install_cmd("apt update", ["apt-get", "update"])
+        def fail(step: str, rc: int, tail: list[str]) -> None:
+            # Show the last informative line — pip surfaces its real error at
+            # the tail (ERROR: Could not find a version… / Failed to build X).
+            err_line = next(
+                (t for t in reversed(tail) if "error" in t.lower() or "failed" in t.lower()),
+                tail[-1] if tail else "",
+            )
+            _set_cam_status(st="install_failed", err=f"{step} rc={rc}: {err_line[:160]}")
+
+        rc, tail = await _run_install_cmd("apt update", ["apt-get", "update"])
         if rc != 0:
-            _set_cam_status(st="install_failed", err=f"apt update rc={rc}")
-            return
-        rc = await _run_install_cmd(
+            fail("apt update", rc, tail); return
+        rc, tail = await _run_install_cmd(
             "apt install",
             ["apt-get", "install", "-y",
-             "python3-picamera2", "ffmpeg", "libsrtp2-dev"],
+             # Build deps too — aiortc pulls in cffi, cryptography, pylibsrtp
+             # which can fall back to source build on some Pi OS images.
+             "python3-picamera2", "ffmpeg", "libsrtp2-dev",
+             "python3-dev", "libffi-dev", "libssl-dev", "build-essential"],
         )
         if rc != 0:
-            _set_cam_status(st="install_failed", err=f"apt install rc={rc}")
-            return
-        rc = await _run_install_cmd(
+            fail("apt install", rc, tail); return
+        # `python3 -m pip` beats `pip` for portability — service PATH may not
+        # have a bare `pip` entry. Run inside the venv's python so packages
+        # land where pi_robot.py can import them.
+        rc, tail = await _run_install_cmd(
             "pip install",
-            ["pip", "install", "--break-system-packages", "aiortc", "av"],
+            ["python3", "-m", "pip", "install",
+             "--break-system-packages", "aiortc", "av"],
         )
         if rc != 0:
-            _set_cam_status(st="install_failed", err=f"pip install rc={rc}")
-            return
+            fail("pip install", rc, tail); return
         _set_cam_status(st="installed", step="restarting service")
         await asyncio.sleep(2)  # let the notify flush before we die
         subprocess.Popen(["systemctl", "restart", "pi-robot"])
