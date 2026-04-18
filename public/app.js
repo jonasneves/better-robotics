@@ -316,20 +316,25 @@ async function connect(id) {
   try {
     const server = await entry.device.gatt.connect();
     const service = await server.getPrimaryService(SERVICE_UUID);
-    const ch = await service.getCharacteristic(LED_CHAR_UUID);
-    entry.ledChar = ch;
-
-    const value = await ch.readValue();
-    entry.ledOn = value.getUint8(0) !== 0;
-
-    await ch.startNotifications();
-    ch.addEventListener("characteristicvaluechanged", (e) => {
-      entry.ledOn = e.target.value.getUint8(0) !== 0;
-      renderEntry(entry);
-      logFor(entry, `LED → ${entry.ledOn ? "on" : "off"}`);
-    });
-
+    // Every capability is optional. A robot that advertises only the service
+    // (no chars) is still "connected" — the card just won't show any controls.
+    // LED is no longer a hard dependency; Pi capability config may omit it.
     entry.status = "connected";
+
+    try {
+      const ch = await service.getCharacteristic(LED_CHAR_UUID);
+      entry.ledChar = ch;
+      const value = await ch.readValue();
+      entry.ledOn = value.getUint8(0) !== 0;
+      await ch.startNotifications();
+      ch.addEventListener("characteristicvaluechanged", (e) => {
+        entry.ledOn = e.target.value.getUint8(0) !== 0;
+        renderEntry(entry);
+        logFor(entry, `LED → ${entry.ledOn ? "on" : "off"}`);
+      });
+    } catch {
+      entry.ledChar = null;  // robot declared no LED — skip silently.
+    }
 
     // WiFi characteristics are optional — older firmwares may not expose them.
     try {
@@ -1029,7 +1034,7 @@ function renderEntry(entry) {
             connecting ? "…" : (entry.device ? "Connect" : "Pair")
           }</button>`}
     </div>
-    ${connected ? `
+    ${connected && entry.ledChar ? `
       <div class="robot-controls row">
         <div>
           <div class="label">LED</div>
