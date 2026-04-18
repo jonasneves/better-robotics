@@ -1,11 +1,8 @@
-import {
-  SERVICE_UUID,
-  WIFI_SCAN_CHAR_UUID, WIFI_JOIN_CHAR_UUID, WIFI_STATUS_CHAR_UUID,
-  OTA_DATA_CHAR_UUID, OTA_STATUS_CHAR_UUID, FW_INFO_CHAR_UUID,
-  MOTOR_CHAR_UUID,
-  CAMERA_SIGNAL_CHAR_UUID, CAMERA_STATUS_CHAR_UUID,
-  decodeJson, encodeJson,
-} from "./ble.js";
+// Dashboard entry point. Orchestrates capability modules, connection
+// lifecycle, and top-level UI (menus, modals, header actions). Per-card
+// rendering is driven by the capability registry — adding a capability
+// doesn't require editing this file.
+import { SERVICE_UUID } from "./ble.js";
 import { $, escapeHtml } from "./dom.js";
 import { log, logFor, setLogRenderer } from "./log.js";
 import { settings, saveSettings } from "./settings.js";
@@ -14,21 +11,25 @@ import {
   makeEntry, entryFor, attachDevice, setDisconnectHandler,
 } from "./state.js";
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
-import { toggleLed } from "./capabilities/led.js";
+import { updateFirmware, updateFromFile } from "./capabilities/ota.js";
+import { initGamepad } from "./gamepad.js";
+import { initVoice } from "./voice.js";
+import { initPrepare } from "./prepare.js";
 
-// Wire the back-edges that state, log, and capability modules couldn't do
-// themselves without pulling render/connect into their files. Lazy injection
-// keeps the imports acyclic.
+// Wire back-edges so modules can trigger renders without importing render.
 setLogRenderer((entry) => renderEntry(entry));
 setDisconnectHandler((id) => onDisconnected(id));
 setCapabilityRenderer((entry) => renderEntry(entry));
+
+// ─────────────────────────────────────────────────────────────────────────
+// Connection lifecycle
+// ─────────────────────────────────────────────────────────────────────────
 
 async function loadPaired() {
   // Restore remembered robots first — works even when getDevices() is missing.
   for (const { id, name } of loadKnown()) {
     if (!state.devices.has(id)) state.devices.set(id, makeEntry(id, name));
   }
-  // Reattach live BluetoothDevice objects if the browser exposes them.
   if (navigator.bluetooth.getDevices) {
     try {
       const paired = await navigator.bluetooth.getDevices();
@@ -45,9 +46,8 @@ async function scanForNew() {
     return scanForNewPassive();
   }
   try {
-    // If ?robot=X hint is in the URL and that robot isn't already paired,
-    // pre-filter the chooser by name — saves the user from picking out of
-    // a crowd. (Classroom: scan QR label → chooser shows one entry.)
+    // If ?robot=X hint is present and that robot isn't already paired,
+    // pre-filter the chooser by name so the user picks from one entry.
     const hintedName = new URLSearchParams(location.search).get("robot");
     const useHint = hintedName
       && ![...state.devices.values()].some(e => e.name === hintedName);
@@ -65,13 +65,11 @@ async function scanForNew() {
   }
 }
 
-// Passive BLE scan (experimental). Uses navigator.bluetooth.requestLEScan,
-// which requires the --enable-experimental-web-platform-features Chrome flag.
-// Unlike requestDevice (which always shows the chooser), passive scan emits
-// advertisement events for every matching device — the user sees robots
-// appear in real time. Pairing still needs requestDevice; we call it with a
-// name filter once the user picks from the discovered list, so the chooser
-// is pre-filtered to the single intended target.
+// Passive BLE scan (experimental). Uses requestLEScan behind Chrome's
+// --enable-experimental-web-platform-features flag. Emits advertisement
+// events for every matching device; user sees robots appear in real time.
+// Pairing still needs requestDevice, but with a name filter it's a one-
+// entry chooser.
 let _discoverState = { scanning: false, found: new Map(), scanHandle: null };
 
 async function scanForNewPassive() {
@@ -156,8 +154,8 @@ function renderDiscovered() {
 }
 
 async function restoreDevice(entry) {
-  // Ask the user to pick this robot again — chooser shows, filtered to the saved name.
-  // Necessary on browsers that don't expose navigator.bluetooth.getDevices().
+  // Ask the user to pick this robot again — chooser shows, filtered to the
+  // saved name. Required on browsers without getDevices().
   const device = await navigator.bluetooth.requestDevice({
     filters: [{ name: entry.name, services: [SERVICE_UUID] }],
   });
@@ -167,7 +165,6 @@ async function restoreDevice(entry) {
 async function connect(id) {
   const entry = state.devices.get(id);
   if (!entry) return;
-
   if (!entry.device) {
     try {
       log("reconnecting…", entry.name);
@@ -177,104 +174,16 @@ async function connect(id) {
       return;
     }
   }
-
   entry.status = "connecting";
   renderEntry(entry);
-
   try {
     const server = await entry.device.gatt.connect();
     const service = await server.getPrimaryService(SERVICE_UUID);
-    // Every capability is optional. A robot that advertises only the service
-    // (no chars) is still "connected" — the card just won't show any controls.
-    // LED is no longer a hard dependency; Pi capability config may omit it.
+    // A robot advertising only the service (no chars) is still "connected" —
+    // the card shows the header only. Every capability is optional.
     entry.status = "connected";
-
-    // Modular capabilities (LED, and later motors/wifi/ota/camera) probe
-    // themselves via the registry. Inline capabilities below are scheduled
-    // for the next extraction pass.
     for (const cap of CAPABILITIES) {
-      try { await cap.probe(entry, service); } catch { /* optional capability */ }
-    }
-
-    // WiFi characteristics are optional — older firmwares may not expose them.
-    try {
-      entry.wifiScanChar   = await service.getCharacteristic(WIFI_SCAN_CHAR_UUID);
-      entry.wifiJoinChar   = await service.getCharacteristic(WIFI_JOIN_CHAR_UUID);
-      entry.wifiStatusChar = await service.getCharacteristic(WIFI_STATUS_CHAR_UUID);
-      entry.wifiStatus = decodeJson(await entry.wifiStatusChar.readValue()) || { st: "idle" };
-      await entry.wifiStatusChar.startNotifications();
-      entry.wifiStatusChar.addEventListener("characteristicvaluechanged", (e) => {
-        entry.wifiStatus = decodeJson(e.target.value) || { st: "idle" };
-        const { st, ssid, err: errMsg } = entry.wifiStatus;
-        logFor(entry, `WiFi ${st}${ssid ? ` [${ssid}]` : ""}${errMsg ? ` — ${errMsg}` : ""}`);
-        renderEntry(entry);
-      });
-      await entry.wifiScanChar.startNotifications();
-      entry.wifiScanChar.addEventListener("characteristicvaluechanged", (e) => {
-        entry.wifiNetworks = decodeJson(e.target.value) || [];
-        entry.wifiScanning = false;
-        renderEntry(entry);
-      });
-    } catch {
-      entry.wifiScanChar = null;  // robot has no WiFi onboarding — that's fine.
-    }
-
-    // OTA: also optional on older firmwares.
-    try {
-      entry.otaDataChar   = await service.getCharacteristic(OTA_DATA_CHAR_UUID);
-      entry.otaStatusChar = await service.getCharacteristic(OTA_STATUS_CHAR_UUID);
-      try {
-        const info = await service.getCharacteristic(FW_INFO_CHAR_UUID);
-        entry.fwInfo = decodeJson(await info.readValue());
-      } catch {}
-      entry.otaStatus = decodeJson(await entry.otaStatusChar.readValue()) || { st: "idle" };
-      await entry.otaStatusChar.startNotifications();
-      entry.otaStatusChar.addEventListener("characteristicvaluechanged", (e) => {
-        entry.otaStatus = decodeJson(e.target.value) || { st: "idle" };
-        const { st, n = 0, total = 0, err: errMsg } = entry.otaStatus;
-        const pct = total ? Math.round(100 * n / total) : 0;
-        logFor(entry, `OTA ${st}${total ? ` ${pct}%` : ""}${errMsg ? ` — ${errMsg}` : ""}`);
-        renderEntry(entry);
-      });
-    } catch {
-      entry.otaDataChar = null;
-    }
-
-    // Motors: optional on older firmwares.
-    try {
-      entry.motorChar = await service.getCharacteristic(MOTOR_CHAR_UUID);
-      const cur = await entry.motorChar.readValue();
-      entry.motorLeft = cur.getInt8(0);
-      entry.motorRight = cur.getInt8(1);
-      await entry.motorChar.startNotifications();
-      entry.motorChar.addEventListener("characteristicvaluechanged", (e) => {
-        const l = e.target.value.getInt8(0);
-        const r = e.target.value.getInt8(1);
-        // Notify fires on changes only — most interesting when the watchdog
-        // cuts motors to zero after silence.
-        if (l !== entry.motorLeft || r !== entry.motorRight) {
-          if (l === 0 && r === 0 && (entry.motorLeft || entry.motorRight)) {
-            log("motors stopped (watchdog)", entry.name);
-          }
-          entry.motorLeft = l;
-          entry.motorRight = r;
-          renderEntry(entry);
-        }
-      });
-    } catch {
-      entry.motorChar = null;
-    }
-
-    // Camera (optional). Missing chars = robot has no camera stack.
-    try {
-      entry.cameraSignalChar = await service.getCharacteristic(CAMERA_SIGNAL_CHAR_UUID);
-      entry.cameraStatusChar = await service.getCharacteristic(CAMERA_STATUS_CHAR_UUID);
-      await entry.cameraStatusChar.startNotifications();
-      entry.cameraStatusChar.addEventListener("characteristicvaluechanged", (e) => {
-        handleCameraChunk(entry, new Uint8Array(e.target.value.buffer));
-      });
-    } catch {
-      entry.cameraSignalChar = null;
+      try { await cap.probe(entry, service); } catch { /* optional */ }
     }
   } catch (err) {
     entry.status = "error";
@@ -293,28 +202,16 @@ function onDisconnected(id) {
   const entry = state.devices.get(id);
   if (!entry) return;
   entry.status = "idle";
-  entry.ledChar = null;
-  entry.wifiScanChar = entry.wifiJoinChar = entry.wifiStatusChar = null;
-  entry.wifiNetworks = null;
-  entry.wifiScanning = false;
-  entry.otaDataChar = entry.otaStatusChar = null;
-  entry.fwInfo = null;
-  entry.motorChar = null;
-  entry.motorLeft = entry.motorRight = 0;
-  entry.cameraSignalChar = entry.cameraStatusChar = null;
-  if (entry.cameraPc) { try { entry.cameraPc.close(); } catch {} entry.cameraPc = null; }
-  entry.cameraStream = null;
-  entry.cameraStatus = { st: "idle" };
+  for (const cap of CAPABILITIES) cap.cleanup(entry);
   renderEntry(entry);
 }
 
 async function forgetDevice(id) {
   const entry = state.devices.get(id);
   if (!entry) return;
-  // Resolve a BluetoothDevice handle if we don't already have one. Without
-  // this, our Forget only clears localStorage and Chrome keeps the device
-  // in its per-origin paired list — you'd see it come back as "Paired" in
-  // the next requestDevice chooser.
+  // Resolve a BluetoothDevice handle if not already attached. Without it,
+  // Forget clears localStorage but Chrome keeps the per-origin paired list —
+  // next requestDevice would show the robot as already paired.
   let device = entry.device;
   if (!device && navigator.bluetooth.getDevices) {
     try {
@@ -335,484 +232,13 @@ async function forgetDevice(id) {
   render();
 }
 
-async function scanWifi(id) {
-  const entry = state.devices.get(id);
-  if (!entry || !entry.wifiScanChar) return;
-  entry.wifiScanning = true;
-  renderEntry(entry);
-  try {
-    // Triggers a rescan on the device; we also get the cached value right now.
-    const v = await entry.wifiScanChar.readValue();
-    const cached = decodeJson(v);
-    if (cached && cached.length) {
-      entry.wifiNetworks = cached;
-      renderEntry(entry);
-    }
-    // Fresh results arrive via the scan notification handler.
-  } catch (err) {
-    entry.wifiScanning = false;
-    logFor(entry, `WiFi scan failed: ${err.message}`);
-    renderEntry(entry);
-  }
-}
+// ─────────────────────────────────────────────────────────────────────────
+// Header actions
+// ─────────────────────────────────────────────────────────────────────────
 
-async function joinWifi(id, ssid, secured) {
-  const entry = state.devices.get(id);
-  if (!entry || !entry.wifiJoinChar) return;
-  let password = "";
-  if (secured) {
-    password = prompt(`Password for ${ssid}:`);
-    if (password === null) return;
-  }
-  try {
-    await entry.wifiJoinChar.writeValueWithResponse(encodeJson({ s: ssid, p: password }));
-  } catch (err) {
-    logFor(entry, `WiFi join failed: ${err.message}`);
-  }
-}
-
-// Keep the screen (and therefore the BLE radio's task scheduling) awake
-// while a potentially-long OTA runs. macOS putting the display to sleep
-// has been observed to throttle the BLE write loop enough to stall a
-// 10-minute stream. Auto-released on tab hide; we don't re-acquire since
-// user has probably bailed on the transfer by then.
-let wakeLock = null;
-async function acquireWakeLock() {
-  if (!("wakeLock" in navigator)) return;
-  try { wakeLock = await navigator.wakeLock.request("screen"); }
-  catch { wakeLock = null; }
-}
-async function releaseWakeLock() {
-  if (wakeLock) { try { await wakeLock.release(); } catch {} wakeLock = null; }
-}
-
-async function streamOtaBytes(entry, bytes) {
-  const ch = entry.otaDataChar;
-  // Clear any lingering OTA session before we start a fresh one (opcode 0x00).
-  try { await ch.writeValueWithResponse(new Uint8Array([0x00])); } catch {}
-  const begin = new Uint8Array(5);
-  begin[0] = 0x01;
-  new DataView(begin.buffer).setUint32(1, bytes.length, false);
-  await ch.writeValueWithResponse(begin);
-  const CHUNK = 180;  // safe under the negotiated ATT MTU on macOS/Chrome.
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
-    const frame = new Uint8Array(slice.length + 1);
-    frame[0] = 0x02;
-    frame.set(slice, 1);
-    await ch.writeValueWithResponse(frame);
-  }
-  await ch.writeValueWithResponse(new Uint8Array([0x03]));
-}
-
-async function updateFirmware(id) {
-  const entry = state.devices.get(id);
-  if (!entry || !entry.otaDataChar) {
-    log("Update not supported by this firmware");
-    return;
-  }
-  const fetchUrl = entry.fwInfo?.url || "firmware/pi_robot/pi_robot.py";
-  logFor(entry, `fetching ${fetchUrl}…`);
-  let bytes;
-  try {
-    const resp = await fetch(fetchUrl, { cache: "no-cache" });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    bytes = new Uint8Array(await resp.arrayBuffer());
-  } catch (err) {
-    logFor(entry, `fetch failed: ${err.message}`);
-    return;
-  }
-  await acquireWakeLock();
-  try {
-    // Route to the right data plane: if the robot has WiFi joined and
-    // advertises a URL-trigger-capable firmware, send a small BLE command and
-    // let the robot pull the binary itself over WiFi. 10 min → 10 sec on the
-    // ESP32's 1.6 MB bin.
-    const canUrlTrigger =
-      entry.fwInfo?.type === "esp32" && entry.wifiStatus?.st === "joined";
-
-    if (canUrlTrigger) {
-      const hashBuf = await crypto.subtle.digest("SHA-256", bytes);
-      const sha256 = [...new Uint8Array(hashBuf)]
-        .map(b => b.toString(16).padStart(2, "0")).join("");
-      const absoluteUrl = new URL(fetchUrl, location.href).toString();
-      const payload = JSON.stringify({ url: absoluteUrl, size: bytes.length, sha256 });
-      const frame = new Uint8Array(1 + payload.length);
-      frame[0] = 0x04;
-      frame.set(new TextEncoder().encode(payload), 1);
-      logFor(entry, `OTA trigger — will fetch ${bytes.length} B over WiFi`);
-      let triggerSent = false;
-      try {
-        await entry.otaDataChar.writeValueWithResponse(frame);
-        triggerSent = true;
-      } catch (err) {
-        logFor(entry, `OTA trigger failed: ${err.message} — falling back to BLE stream`);
-      }
-      if (triggerSent) {
-        // Give the ESP32 ~8 seconds to start fetching. It should transition
-        // through "fetching" → "receiving" quickly; if status is "failed"
-        // in that window the URL-trigger path didn't work (TLS handshake,
-        // DNS, connection refused, etc) and we fall back to BLE stream.
-        await new Promise(r => setTimeout(r, 8000));
-        if (entry.otaStatus?.st !== "failed") return;
-        logFor(entry, `URL-trigger failed (${entry.otaStatus.err || "?"}) — falling back to BLE stream`);
-      }
-      // fall through to BLE stream
-    }
-
-    // Fallback: stream the whole binary over BLE (Pi always, or ESP32 offline).
-    logFor(entry, `OTA streaming ${bytes.length} B…`);
-    try {
-      await streamOtaBytes(entry, bytes);
-      logFor(entry, "OTA commit sent — robot restarting");
-    } catch (err) {
-      logFor(entry, `OTA failed: ${err.message}`);
-    }
-  } finally {
-    await releaseWakeLock();
-  }
-}
-
-async function updateFromFile(id) {
-  const entry = state.devices.get(id);
-  if (!entry || !entry.otaDataChar) {
-    log("Update not supported by this firmware");
-    return;
-  }
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = ".py,.bin";
-  input.addEventListener("change", async () => {
-    const file = input.files && input.files[0];
-    if (!file) return;
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    // Local file — always BLE-stream. URL-trigger needs a URL the robot
-    // can reach, and a data:/blob: URL isn't useful to the ESP32.
-    logFor(entry, `OTA streaming ${file.name} (${bytes.length} B)…`);
-    await acquireWakeLock();
-    try {
-      await streamOtaBytes(entry, bytes);
-      logFor(entry, "OTA commit sent — robot restarting");
-    } catch (err) {
-      logFor(entry, `OTA failed: ${err.message}`);
-    } finally {
-      await releaseWakeLock();
-    }
-  });
-  input.click();
-}
-
-// WebRTC camera session. Signaling (SDP + ICE) rides over two BLE chars using
-// the same chunked protocol as OTA: 0x01 begin [size], 0x02 chunk, 0x03 commit,
-// 0x04 stop. The browser is the offerer; the Pi answers with its PiCamera track.
-// Once the PeerConnection transitions to connected, video frames flow over the
-// WebRTC ICE path (LAN direct when possible, relay otherwise) — BLE is only
-// the signaling channel, never the media channel.
-const CAM_OP_BEGIN   = 0x01;
-const CAM_OP_CHUNK   = 0x02;
-const CAM_OP_COMMIT  = 0x03;
-const CAM_OP_STOP    = 0x04;
-const CAM_OP_INSTALL = 0x05;
-const CAM_CHUNK_BYTES = 180;
-
-async function sendCameraSignal(entry, msg) {
-  const bytes = new TextEncoder().encode(JSON.stringify(msg));
-  const ch = entry.cameraSignalChar;
-  if (!ch) return;
-  const begin = new Uint8Array(5);
-  begin[0] = CAM_OP_BEGIN;
-  new DataView(begin.buffer).setUint32(1, bytes.length, false);
-  await ch.writeValueWithResponse(begin);
-  for (let i = 0; i < bytes.length; i += CAM_CHUNK_BYTES) {
-    const slice = bytes.subarray(i, Math.min(i + CAM_CHUNK_BYTES, bytes.length));
-    const frame = new Uint8Array(slice.length + 1);
-    frame[0] = CAM_OP_CHUNK;
-    frame.set(slice, 1);
-    await ch.writeValueWithResponse(frame);
-  }
-  await ch.writeValueWithResponse(new Uint8Array([CAM_OP_COMMIT]));
-}
-
-function handleCameraChunk(entry, data) {
-  if (data.length === 0) return;
-  const op = data[0];
-  if (op === CAM_OP_BEGIN) {
-    entry.cameraRecvBuf = [];
-  } else if (op === CAM_OP_CHUNK) {
-    if (entry.cameraRecvBuf) entry.cameraRecvBuf.push(data.subarray(1));
-  } else if (op === CAM_OP_COMMIT) {
-    if (!entry.cameraRecvBuf) return;
-    const total = entry.cameraRecvBuf.reduce((n, c) => n + c.length, 0);
-    const merged = new Uint8Array(total);
-    let off = 0;
-    for (const c of entry.cameraRecvBuf) { merged.set(c, off); off += c.length; }
-    entry.cameraRecvBuf = null;
-    let msg;
-    try { msg = JSON.parse(new TextDecoder().decode(merged)); }
-    catch { return; }
-    handleCameraMessage(entry, msg);
-  }
-}
-
-async function handleCameraMessage(entry, msg) {
-  if (msg.t === "status") {
-    entry.cameraStatus = msg.d || { st: "idle" };
-    renderEntry(entry);
-    return;
-  }
-  if (msg.t === "answer" && entry.cameraPc) {
-    try {
-      await entry.cameraPc.setRemoteDescription(
-        new RTCSessionDescription({ sdp: msg.d.sdp, type: msg.d.type })
-      );
-    } catch (err) {
-      logFor(entry, `camera answer error: ${err.message}`);
-    }
-  }
-}
-
-async function startCamera(id) {
-  const entry = state.devices.get(id);
-  if (!entry || !entry.cameraSignalChar) return;
-  if (entry.cameraPc) return;
-  entry.cameraStatus = { st: "starting" };
-  renderEntry(entry);
-  const pc = new RTCPeerConnection();
-  entry.cameraPc = pc;
-  pc.addTransceiver("video", { direction: "recvonly" });
-  pc.ontrack = (e) => {
-    entry.cameraStream = e.streams[0];
-    const video = entry.node?.querySelector(`video[data-cam-id="${id}"]`);
-    if (video) video.srcObject = entry.cameraStream;
-  };
-  pc.onicecandidate = async (e) => {
-    if (!e.candidate) return;
-    try {
-      await sendCameraSignal(entry, {
-        t: "ice",
-        d: {
-          candidate: e.candidate.candidate,
-          sdpMid: e.candidate.sdpMid,
-          sdpMLineIndex: e.candidate.sdpMLineIndex,
-        },
-      });
-    } catch {}
-  };
-  pc.onconnectionstatechange = () => {
-    entry.cameraStatus = { st: `pc-${pc.connectionState}` };
-    renderEntry(entry);
-    if (pc.connectionState === "failed" || pc.connectionState === "closed") {
-      stopCamera(id);
-    }
-  };
-  try {
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await sendCameraSignal(entry, {
-      t: "offer",
-      d: { sdp: offer.sdp, type: offer.type },
-    });
-    logFor(entry, "camera offer sent");
-  } catch (err) {
-    logFor(entry, `camera start failed: ${err.message}`);
-    stopCamera(id);
-  }
-}
-
-async function installCamera(id) {
-  const entry = state.devices.get(id);
-  if (!entry?.cameraSignalChar) return;
-  if (!confirm(
-    "Install camera support on this Pi?\n\n" +
-    "Downloads ~100MB (picamera2 + aiortc + av). Takes 1-3 min on a Pi 4. " +
-    "The Pi needs internet access (WiFi joined) for the install to succeed."
-  )) return;
-  try {
-    await entry.cameraSignalChar.writeValueWithResponse(new Uint8Array([CAM_OP_INSTALL]));
-    logFor(entry, "camera install requested");
-  } catch (err) {
-    logFor(entry, `camera install error: ${err.message}`);
-  }
-}
-
-async function stopCamera(id) {
-  const entry = state.devices.get(id);
-  if (!entry) return;
-  try { await entry.cameraSignalChar?.writeValueWithResponse(new Uint8Array([CAM_OP_STOP])); } catch {}
-  if (entry.cameraPc) { try { entry.cameraPc.close(); } catch {} entry.cameraPc = null; }
-  entry.cameraStream = null;
-  entry.cameraStatus = { st: "idle" };
-  renderEntry(entry);
-}
-
-// Gamepad drive. The first connected Standard-layout gamepad drives the
-// currently-selected robot: left stick Y → left motor, right stick Y → right
-// motor (tank drive). Deadzone 0.10 suppresses idle stick drift. Commands go
-// through sendMotors which already drops-intermediate-values, so 60 Hz polling
-// doesn't flood BLE.
-const GAMEPAD_DEADZONE = 0.10;
-let _gamepadTargetId = null;
-let _gamepadRafHandle = null;
-
-function pickGamepadTarget() {
-  if (_gamepadTargetId) {
-    const e = state.devices.get(_gamepadTargetId);
-    if (e && e.motorChar && e.status === "connected") return _gamepadTargetId;
-  }
-  for (const e of state.devices.values()) {
-    if (e.motorChar && e.status === "connected") return e.id;
-  }
-  return null;
-}
-
-function gamepadTick() {
-  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-  const pad = [...pads].find(p => p && p.connected);
-  if (!pad) {
-    _gamepadRafHandle = null;
-    setGamepadTarget(null);
-    return;
-  }
-  const id = pickGamepadTarget();
-  setGamepadTarget(id);
-  if (id) {
-    const ly = pad.axes[1] ?? 0;  // left stick Y (down = +1 → reverse)
-    const ry = pad.axes[3] ?? 0;  // right stick Y
-    const toMotor = (v) => {
-      const dz = Math.abs(v) < GAMEPAD_DEADZONE ? 0 : v;
-      return Math.round(-dz * 100);  // invert so stick-up = forward
-    };
-    sendMotors(id, toMotor(ly), toMotor(ry));
-  }
-  _gamepadRafHandle = requestAnimationFrame(gamepadTick);
-}
-
-// Gamepad target is surfaced as a small 🎮 indicator on the driven robot's
-// card (see renderEntry). When it changes, re-render the before/after cards
-// so the indicator moves with the selection.
-function setGamepadTarget(id) {
-  if (id === _gamepadTargetId) return;
-  const prev = _gamepadTargetId;
-  _gamepadTargetId = id;
-  if (prev) {
-    const e = state.devices.get(prev);
-    if (e) renderEntry(e);
-  }
-  if (id) {
-    const e = state.devices.get(id);
-    if (e) renderEntry(e);
-  }
-}
-
-function startGamepadLoop() {
-  if (_gamepadRafHandle) return;
-  _gamepadRafHandle = requestAnimationFrame(gamepadTick);
-}
-
-// Voice commands (experimental). Uses webkitSpeechRecognition — Chrome's
-// speech-to-text path goes through Google's cloud service, which bends the
-// "no network" story. Strictly opt-in via Settings. Grammar is intentionally
-// tiny so we can match with case-insensitive string tests instead of a
-// parser — scales poorly past a dozen commands, but fits the current verbs.
-let _recognition = null;
-function resolveRobotByName(fragment) {
-  const norm = (s) => s.toLowerCase().replace(/[\s-]/g, "");
-  const needle = norm(fragment);
-  return [...state.devices.values()].find(e => norm(e.name).includes(needle))
-    || [...state.devices.values()].find(e => norm(e.name).endsWith(needle.slice(-4)));
-}
-function dispatchVoice(transcript) {
-  const t = transcript.toLowerCase().trim();
-  log(`voice heard: "${transcript}"`);
-  if (/\b(connect all|join all)\b/.test(t)) return connectAll();
-  if (/\b(stop|halt|emergency|e.?stop)\b/.test(t)) {
-    for (const e of state.devices.values()) {
-      if (e.motorChar && e.status === "connected") sendMotors(e.id, 0, 0);
-    }
-    return;
-  }
-  const ledOn = t.match(/\b(l.?e.?d|light)\s+on(?:\s+(\w[\w-]*))?/);
-  if (ledOn) {
-    const target = ledOn[1] ? resolveRobotByName(ledOn[1]) : null;
-    const candidates = target ? [target] : [...state.devices.values()].filter(e => e.ledChar);
-    for (const e of candidates) if (!e.ledOn) toggleLed(e.id);
-    return;
-  }
-  const ledOff = t.match(/\b(l.?e.?d|light)\s+off(?:\s+(\w[\w-]*))?/);
-  if (ledOff) {
-    const target = ledOff[1] ? resolveRobotByName(ledOff[1]) : null;
-    const candidates = target ? [target] : [...state.devices.values()].filter(e => e.ledChar);
-    for (const e of candidates) if (e.ledOn) toggleLed(e.id);
-    return;
-  }
-  log("voice: no match");
-}
-function startVoice() {
-  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Rec) { log("Voice unavailable — SpeechRecognition missing"); return; }
-  if (_recognition) return;
-  _recognition = new Rec();
-  _recognition.continuous = true;
-  _recognition.interimResults = false;
-  _recognition.lang = "en-US";
-  _recognition.onresult = (e) => {
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) dispatchVoice(e.results[i][0].transcript);
-    }
-  };
-  _recognition.onerror = (e) => log(`voice error: ${e.error}`);
-  _recognition.onend = () => {
-    // Chrome auto-stops after silence; auto-resume if user still wants it.
-    if (_recognition && settings.voice) { try { _recognition.start(); } catch {} }
-  };
-  try { _recognition.start(); } catch (err) { log(`voice start failed: ${err.message}`); }
-  $("voice-btn").classList.add("listening");
-}
-function stopVoice() {
-  if (!_recognition) return;
-  _recognition.onend = null;
-  try { _recognition.stop(); } catch {}
-  _recognition = null;
-  $("voice-btn").classList.remove("listening");
-}
-
-async function sendMotors(id, left, right) {
-  const entry = state.devices.get(id);
-  if (!entry || !entry.motorChar) return;
-  const clamp = (v) => Math.max(-100, Math.min(100, Math.round(Number(v) || 0)));
-  // Drop-intermediate-values: slider input events fire faster than BLE
-  // writes can complete ("GATT operation already in progress" otherwise).
-  // We always queue the latest wanted value; while a write is in flight,
-  // newer calls just update the pending intent. Latest intent wins.
-  entry.motorPending = [clamp(left), clamp(right)];
-  if (entry.motorSending) return;
-  entry.motorSending = true;
-  try {
-    while (entry.motorPending) {
-      const [l, r] = entry.motorPending;
-      entry.motorPending = null;
-      try {
-        // Int8 wire encoding: negatives become 0x80..0xFF via two's complement.
-        await entry.motorChar.writeValueWithResponse(
-          Uint8Array.of(l & 0xff, r & 0xff));
-      } catch (err) {
-        logFor(entry, `motors write failed: ${err.message}`);
-        break;
-      }
-    }
-  } finally {
-    entry.motorSending = false;
-  }
-}
-
-// toggleLed now lives in capabilities/led.js. Voice commands import it from
-// there via the module path; app.js doesn't need a local copy.
-
-// "Connect all" is for the silent path only — shows when ≥1 idle robot has
-// a BluetoothDevice handle already attached (will connect without a chooser).
-// Robots that need pairing carry their own per-card "Pair" button which is
-// explicit about opening the native chooser. This makes the batch action
-// 100% predictable: clicking it never pops a dialog.
+// Connect all shows when ≥1 idle robot has a BluetoothDevice handle already
+// attached (silent reconnect possible). Robots needing pairing carry their
+// own per-card "Pair" button that's explicit about opening the chooser.
 function updateHeaderActions() {
   const readyIdle = [...state.devices.values()]
     .filter(e => e.status === "idle" && e.device).length;
@@ -820,11 +246,6 @@ function updateHeaderActions() {
 }
 
 function connectAll() {
-  // Strictly the silent path — robots that already have a BluetoothDevice
-  // handle connect in parallel with no chooser. Anything needing a chooser
-  // stays the per-card "Pair" button's job. This keeps Connect all's
-  // behavior 100% consistent: always silent, never surprises the user with
-  // a native dialog.
   const all = [...state.devices.values()].filter(e => e.status === "idle");
   const ready = all.filter(e => e.device);
   const needsPair = all.filter(e => !e.device);
@@ -834,11 +255,14 @@ function connectAll() {
   }
 }
 
-// Two-level render. render() reconciles the list (add / remove / order)
-// against state.devices; renderEntry() rebuilds one card's innards. Most
-// state changes go through renderEntry so a notification for robot A never
-// touches robot B's DOM — a slider being dragged on one card isn't
-// interrupted by a sibling's OTA progress notify.
+// ─────────────────────────────────────────────────────────────────────────
+// Rendering
+// ─────────────────────────────────────────────────────────────────────────
+
+// render() reconciles the robot-list DOM with state.devices. renderEntry()
+// rebuilds one card's innards by composing capability renderSection outputs.
+// A notify for robot A never touches robot B's DOM — slider drags on one
+// card survive sibling state changes.
 function render() {
   const list = $("robot-list");
   const empty = $("empty-state");
@@ -854,13 +278,11 @@ function render() {
   header.hidden = false;
   updateHeaderActions();
 
-  // Drop nodes for entries that are no longer in state (e.g., forgetDevice).
   const ids = new Set(state.devices.keys());
   for (const child of [...list.children]) {
     if (!ids.has(child.dataset.entryId)) child.remove();
   }
 
-  // Mount or re-order in state-map order. Nodes are owned by entry.node.
   let prev = null;
   for (const entry of state.devices.values()) {
     if (!entry.node) {
@@ -878,160 +300,61 @@ function render() {
 }
 
 function renderEntry(entry) {
-  if (!entry.node) { render(); return; }  // first mount goes through list render
-  const { id, name, status, ledOn } = entry;
+  if (!entry.node) { render(); return; }
+  const { id, name, status } = entry;
   const connected = status === "connected";
   const connecting = status === "connecting";
+  // Text only for states the dot can't communicate: transitional and error.
   const statusText = connecting ? "Connecting…" : status === "error" ? "Error" : "";
   const dotClass = connected ? " connected" : status === "error" ? " error" : "";
 
+  const sections = CAPABILITIES.map(c => c.renderSection(entry)).join("");
   entry.node.innerHTML = `
     <div class="row">
       <div>
-        <button class="name-trigger" data-action="menu" aria-label="More actions for ${escapeHtml(name)}">
-          <span class="dot${dotClass}"></span>
-          <span>${escapeHtml(name)}</span>
-          <span class="caret" aria-hidden="true">›</span>
-        </button>
+        <div class="label"><span class="dot${dotClass}"></span>${escapeHtml(name)}</div>
         ${statusText ? `<div class="status">${statusText}</div>` : ""}
       </div>
-      ${connected
-        ? `<button class="secondary sm" data-action="disconnect">Disconnect</button>`
-        : `<button class="sm" data-action="connect" ${connecting ? "disabled" : ""}>${
-            connecting ? "…" : (entry.device ? "Connect" : "Pair")
-          }</button>`}
+      <div style="display: flex; gap: 4px;">
+        ${connected
+          ? `<button class="secondary sm" data-action="disconnect">Disconnect</button>`
+          : `<button class="sm" data-action="connect" ${connecting ? "disabled" : ""}>${
+              connecting ? "…" : (entry.device ? "Connect" : "Pair")
+            }</button>`}
+        <button class="icon" data-action="menu" aria-label="More actions">⋯</button>
+      </div>
     </div>
-    ${CAPABILITIES.map(c => c.renderSection(entry)).join("")}
-    ${connected && entry.motorChar ? `
-      <div class="robot-controls row">
-        <div>
-          <div class="label">Motors${_gamepadTargetId === entry.id ? ` <span class="gamepad-dot" title="gamepad controlling this robot">🎮</span>` : ""}</div>
-          <div class="meta">L: ${entry.motorLeft} · R: ${entry.motorRight}</div>
-        </div>
-        <button class="secondary sm" data-action="motors-stop">Stop</button>
-      </div>
-      <div class="motor-sliders">
-        <label>L <input type="range" min="-100" max="100" value="${entry.motorLeft}" data-action="motor-left"></label>
-        <label>R <input type="range" min="-100" max="100" value="${entry.motorRight}" data-action="motor-right"></label>
-      </div>
-    ` : ""}
-    ${connected && entry.wifiScanChar ? `
-      <div class="robot-controls row">
-        <div>
-          <div class="label">WiFi</div>
-          <div class="meta">${escapeHtml(wifiSummary(entry))}</div>
-        </div>
-        <button class="secondary sm" data-action="scan-wifi" ${entry.wifiScanning ? "disabled" : ""}>
-          ${entry.wifiScanning ? "Scanning…" : "Scan"}
-        </button>
-      </div>
-      ${entry.wifiNetworks && entry.wifiNetworks.length ? `
-        <div class="wifi-list">
-          ${entry.wifiNetworks.map(n => `
-            <div class="wifi-row">
-              <div>
-                <div>${escapeHtml(n.s)}</div>
-                <div class="meta">${n.r} · ${n.p ? "secured" : "open"}</div>
-              </div>
-              <button class="secondary sm" data-action="join-wifi" data-ssid="${escapeHtml(n.s)}" data-secured="${n.p ? 1 : 0}">Join</button>
-            </div>
-          `).join("")}
-        </div>
-      ` : ""}
-    ` : ""}
-    ${connected && entry.cameraSignalChar ? (() => {
-      const s = entry.cameraStatus || { st: "idle" };
-      const label = s.step
-        ? `${s.st} — ${s.step}`
-        : (s.err ? `${s.st} — ${s.err}` : s.st);
-      let action = "";
-      if (s.st === "uninstalled" || s.st === "install_failed") {
-        action = `<button class="secondary sm" data-action="camera-install">Install camera support</button>`;
-      } else if (s.st === "installing" || s.st === "installed") {
-        action = `<button class="secondary sm" disabled>Installing…</button>`;
-      } else if (entry.cameraPc) {
-        action = `<button class="secondary sm" data-action="camera-stop">Stop</button>`;
-      } else {
-        action = `<button class="secondary sm" data-action="camera-start">Start</button>`;
-      }
-      return `
-        <div class="robot-controls">
-          <div class="row">
-            <div>
-              <div class="label">Camera</div>
-              <div class="meta">${escapeHtml(label)}</div>
-            </div>
-            ${action}
-          </div>
-          ${s.log ? `<div class="meta install-log">${escapeHtml(s.log)}</div>` : ""}
-          ${entry.cameraPc ? `
-            <video class="robot-camera" data-cam-id="${entry.id}" autoplay playsinline muted></video>
-          ` : ""}
-        </div>
-      `;
-    })() : ""}
-    ${entry.lastEvent ? `
-      <div class="last-event">${escapeHtml(entry.lastEvent)}</div>
-    ` : ""}
+    ${sections}
+    ${entry.lastEvent ? `<div class="last-event">${escapeHtml(entry.lastEvent)}</div>` : ""}
   `;
-  // Modular capabilities own their action wiring. Inline data-actions below
-  // (scan-wifi, motors-stop, camera-*, menu, connect/disconnect) are handled
-  // by the legacy dispatcher until they migrate to capability modules.
   for (const cap of CAPABILITIES) cap.wireActions(entry, entry.node);
-  entry.node.querySelectorAll("[data-action]").forEach(btn => {
-    const action = btn.dataset.action;
-    if (action === "motor-left" || action === "motor-right") {
-      btn.addEventListener("input", () => {
-        const l = entry.node.querySelector('[data-action="motor-left"]').value;
-        const r = entry.node.querySelector('[data-action="motor-right"]').value;
-        sendMotors(id, l, r);
-      });
-      return;
-    }
-    btn.addEventListener("click", () => {
-      if (action === "connect") connect(id);
-      else if (action === "disconnect") disconnect(id);
-      else if (action === "menu") openMenu(btn, id);
-      else if (action === "scan-wifi") scanWifi(id);
-      else if (action === "join-wifi") joinWifi(id, btn.dataset.ssid, btn.dataset.secured === "1");
-      else if (action === "motors-stop") {
-        entry.node.querySelector('[data-action="motor-left"]').value = 0;
-        entry.node.querySelector('[data-action="motor-right"]').value = 0;
-        sendMotors(id, 0, 0);
-      }
-      else if (action === "camera-start")   startCamera(id);
-      else if (action === "camera-stop")    stopCamera(id);
-      else if (action === "camera-install") installCamera(id);
-    });
-  });
-  // After innerHTML rebuild, rebind the live video element to its MediaStream.
-  // Without this, pausing/resuming the camera section would drop the stream
-  // visibly even though the PeerConnection is still receiving frames.
-  if (entry.cameraStream) {
-    const video = entry.node.querySelector(`video[data-cam-id="${entry.id}"]`);
-    if (video) video.srcObject = entry.cameraStream;
-  }
+  for (const cap of CAPABILITIES) cap.postRender?.(entry);
+
+  // Header-level actions (connect / disconnect / menu). Capability-level
+  // actions are wired by the respective capability modules above.
+  const connectBtn = entry.node.querySelector('[data-action="connect"]');
+  if (connectBtn) connectBtn.addEventListener("click", () => connect(id));
+  const disconnectBtn = entry.node.querySelector('[data-action="disconnect"]');
+  if (disconnectBtn) disconnectBtn.addEventListener("click", () => disconnect(id));
+  const menuBtn = entry.node.querySelector('[data-action="menu"]');
+  if (menuBtn) menuBtn.addEventListener("click", () => openMenu(menuBtn, id));
+
   updateHeaderActions();
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Menu + label
+// ─────────────────────────────────────────────────────────────────────────
+
 let menuTargetId = null;
-let menuTriggerEl = null;
 
 function openMenu(triggerBtn, id) {
-  const menu = $("robot-menu");
-  // Toggle: clicking the same trigger while its menu is open closes it.
-  if (menuTargetId === id && menu.matches(":popover-open")) {
-    closeMenu();
-    return;
-  }
-  if (menuTriggerEl) menuTriggerEl.classList.remove("menu-open");
   menuTargetId = id;
-  menuTriggerEl = triggerBtn;
-  triggerBtn.classList.add("menu-open");
+  const menu = $("robot-menu");
   const rect = triggerBtn.getBoundingClientRect();
-  // Position below, left-aligned with the name trigger, clamped into viewport.
+  // Position below-right of trigger, nudging left if it would overflow viewport.
   const menuWidth = 220;
-  const left = Math.min(rect.left, window.innerWidth - menuWidth - 8);
+  const left = Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8);
   menu.style.top = `${rect.bottom + 6}px`;
   menu.style.left = `${Math.max(8, left)}px`;
   if (menu.showPopover) menu.showPopover();
@@ -1040,8 +363,6 @@ function openMenu(triggerBtn, id) {
 function closeMenu() {
   const menu = $("robot-menu");
   if (menu.hidePopover) menu.hidePopover();
-  if (menuTriggerEl) menuTriggerEl.classList.remove("menu-open");
-  menuTriggerEl = null;
   menuTargetId = null;
 }
 
@@ -1074,14 +395,9 @@ function highlightKnownRobotFromUrl() {
   });
 }
 
-function wifiSummary(entry) {
-  const { st, ssid, err } = entry.wifiStatus || {};
-  if (st === "joined")  return `Connected to ${ssid || "network"}`;
-  if (st === "joining") return `Joining${ssid ? ` ${ssid}` : ""}…`;
-  if (st === "failed")  return `Failed${err ? ` — ${err}` : ""}`;
-  return "Not configured";
-}
-
+// ─────────────────────────────────────────────────────────────────────────
+// Boot
+// ─────────────────────────────────────────────────────────────────────────
 
 function setBluetoothAvailable(available) {
   $("bluetooth-off").hidden = !!available;
@@ -1097,87 +413,16 @@ document.addEventListener("DOMContentLoaded", () => {
     $("scan-btn").disabled = true;
     return;
   }
-  // Adapter-level availability — surfaces "Bluetooth is off" as a distinct
-  // state so Scan failures aren't opaque.
   if (navigator.bluetooth.getAvailability) {
     navigator.bluetooth.getAvailability().then(setBluetoothAvailable);
     navigator.bluetooth.addEventListener("availabilitychanged", (e) => {
       setBluetoothAvailable(e.value);
     });
   }
+
   $("scan-btn").addEventListener("click", scanForNew);
   $("empty-scan-btn").addEventListener("click", scanForNew);
   $("connect-all-btn").addEventListener("click", connectAll);
-
-  // Close the (manual-mode) robot menu on outside-click or Escape.
-  // Clicks on the trigger itself are routed to openMenu which handles toggle.
-  document.addEventListener("click", (e) => {
-    const menu = $("robot-menu");
-    if (!menu.matches(":popover-open")) return;
-    if (e.target.closest("#robot-menu")) return;          // inside the menu
-    if (e.target.closest("[data-action='menu']")) return; // the trigger itself
-    closeMenu();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeMenu();
-  });
-
-  // Start/stop the gamepad poll loop when a pad connects/disconnects. No
-  // loop runs when no gamepad is attached — zero idle cost.
-  window.addEventListener("gamepadconnected", (e) => {
-    log(`Gamepad connected: ${e.gamepad.id}`);
-    startGamepadLoop();
-  });
-  window.addEventListener("gamepaddisconnected", (e) => {
-    log(`Gamepad disconnected: ${e.gamepad.id}`);
-    setGamepadTarget(null);
-  });
-  if (navigator.getGamepads && [...navigator.getGamepads()].some(p => p)) {
-    startGamepadLoop();
-  }
-
-  // Settings modal — passive-scan toggle gates on both the flag and the
-  // underlying API; if Chrome lacks requestLEScan, the status line explains
-  // that the --enable-experimental-web-platform-features flag is required.
-  const passiveCheckbox = $("setting-passive-scan");
-  const passiveStatus = $("setting-passive-scan-status");
-  const passiveAvailable = !!navigator.bluetooth?.requestLEScan;
-  passiveCheckbox.checked = settings.passiveScan;
-  passiveStatus.textContent = passiveAvailable
-    ? "Scan for robots in the background without a chooser."
-    : "Unavailable — enable chrome://flags#enable-experimental-web-platform-features.";
-  if (!passiveAvailable) passiveCheckbox.disabled = true;
-  passiveCheckbox.addEventListener("change", () => {
-    settings.passiveScan = passiveCheckbox.checked;
-    saveSettings();
-  });
-  // Voice commands: show mic only when enabled AND a recognizer is present.
-  // Chrome's speech-to-text uses a cloud backend; we flag that in the status.
-  const voiceCheckbox = $("setting-voice");
-  const voiceStatus = $("setting-voice-status");
-  const voiceAvailable = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-  voiceCheckbox.checked = settings.voice && voiceAvailable;
-  voiceStatus.textContent = voiceAvailable
-    ? "Commands: connect all · stop · LED on/off <name>. Chrome routes speech-to-text through Google's cloud."
-    : "Unavailable — no SpeechRecognition in this browser.";
-  if (!voiceAvailable) voiceCheckbox.disabled = true;
-  const applyVoice = () => {
-    const on = settings.voice && voiceAvailable;
-    $("voice-btn").hidden = !on;
-    if (!on) stopVoice();
-  };
-  applyVoice();
-  voiceCheckbox.addEventListener("change", () => {
-    settings.voice = voiceCheckbox.checked;
-    saveSettings();
-    applyVoice();
-  });
-  $("voice-btn").addEventListener("click", () => {
-    if (_recognition) stopVoice(); else startVoice();
-  });
-
-  $("settings-btn").addEventListener("click", () => $("settings-modal").showModal());
-  $("settings-close").addEventListener("click", () => $("settings-modal").close());
 
   $("menu-label").addEventListener("click", () => {
     const id = menuTargetId;
@@ -1209,8 +454,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!id) return;
     const entry = state.devices.get(id);
     if (!entry) return;
-    // entry.device may be null for robots restored from localStorage that we
-    // haven't reconnected to in this session. entry.name is always set.
     const name = entry.name;
     closeMenu();
     if (confirm(`Forget ${name}?\n\nYou'll need to pair it again to use it.`)) {
@@ -1218,223 +461,31 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // Settings modal — passive-scan + voice. Voice is wired via its own module
+  // init so the recognition state + mic button stay encapsulated there.
+  const passiveCheckbox = $("setting-passive-scan");
+  const passiveStatus = $("setting-passive-scan-status");
+  const passiveAvailable = !!navigator.bluetooth?.requestLEScan;
+  passiveCheckbox.checked = settings.passiveScan;
+  passiveStatus.textContent = passiveAvailable
+    ? "Scan for robots in the background without a chooser."
+    : "Unavailable — enable chrome://flags#enable-experimental-web-platform-features.";
+  if (!passiveAvailable) passiveCheckbox.disabled = true;
+  passiveCheckbox.addEventListener("change", () => {
+    settings.passiveScan = passiveCheckbox.checked;
+    saveSettings();
+  });
+  $("settings-btn").addEventListener("click", () => $("settings-modal").showModal());
+  $("settings-close").addEventListener("click", () => $("settings-modal").close());
+
+  initGamepad();
+  initVoice({ connectAll });
+  initPrepare();
+
   loadPaired().then(() => {
     // Fold setup once robots exist — setup is onboarding-phase, pairing is
-    // the everyday use. User can re-expand at any time; state isn't forced.
+    // the everyday use. User can re-expand; state isn't forced on re-render.
     $("setup-section").open = state.devices.size === 0;
     highlightKnownRobotFromUrl();
   });
 });
-
-// ============================================================
-// Prepare SD card dialog. Scoped via IIFE so its state (dirHandle,
-// handlers) doesn't bleed into the dashboard's globals; $ and helpers
-// are shared via closure.
-// ============================================================
-(() => {
-  const FIRMWARE_URL    = "firmware/pi_robot";
-  const FIRMWARE_FILES  = ["pi_robot.py", "requirements.txt", "pi-robot.service"];
-  const SSH_KEY_STORE   = "better-robotics:ssh-pub";
-  const CMDLINE_USB     = " modules-load=dwc2,g_ether";
-  const CONFIG_USB_MARKER = "# Better Robotics: USB gadget mode";
-  const CONFIG_USB_LINES  = `\n${CONFIG_USB_MARKER}\n[all]\ndtoverlay=dwc2\n`;
-  const SYSTEMD_RUN =
-    " systemd.run=/boot/firmware/firstrun.sh" +
-    " systemd.run_success_action=reboot" +
-    " systemd.unit=kernel-command-line.target";
-
-  let dirHandle = null;
-
-  function prepLog(msg, cls) {
-    const el = document.createElement("div");
-    if (cls) el.className = cls;
-    el.textContent = msg;
-    $("prep-progress").prepend(el);
-  }
-
-  const shSingleQuote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
-  const ensureDir = (parent, name) => parent.getDirectoryHandle(name, { create: true });
-
-  async function writeFile(dir, name, contents) {
-    const h = await dir.getFileHandle(name, { create: true });
-    const w = await h.createWritable();
-    await w.write(contents);
-    await w.close();
-  }
-  async function readTextFile(dir, name) {
-    try {
-      const h = await dir.getFileHandle(name);
-      const f = await h.getFile();
-      return await f.text();
-    } catch { return null; }
-  }
-  async function fetchBlob(url) {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`${url} → ${r.status}`);
-    return r.blob();
-  }
-
-  function patchCmdline(text) {
-    let line = text.replace(/\n+$/, "").trim();
-    line = line.replace(/\s+systemd\.run=\S+/g, "");
-    line = line.replace(/\s+systemd\.run_success_action=\S+/g, "");
-    line = line.replace(/\s+systemd\.unit=\S+/g, "");
-    line = line.replace(/\s+modules-load=\S+/g, "");
-    return line + CMDLINE_USB + SYSTEMD_RUN + "\n";
-  }
-  function patchConfig(text) {
-    if (text.includes(CONFIG_USB_MARKER)) return text;
-    return text.replace(/\n*$/, "") + CONFIG_USB_LINES;
-  }
-  function renderFirstrun(template, values) {
-    let out = template;
-    for (const [k, v] of Object.entries(values)) {
-      out = out.replaceAll(`__REPLACE_${k}__`, shSingleQuote(v));
-    }
-    return out;
-  }
-
-  async function runPrepare() {
-    $("prep-go-btn").disabled = true;
-    $("prep-progress").hidden = false;
-    $("prep-progress").innerHTML = "";
-
-    const hostname = $("prep-hostname").value.trim() || "betterpi";
-    const username = $("prep-username").value.trim() || "pi";
-    const password = $("prep-password").value;
-    const sshKey   = $("prep-sshkey").value.trim();
-
-    if (!password) {
-      prepLog("Sudo password required.", "err");
-      $("prep-go-btn").disabled = false;
-      return;
-    }
-    if (!sshKey) {
-      prepLog("No SSH key — recovery will require re-flashing the SD card.", "err");
-      // non-fatal: continue without an ssh_authorized_keys step.
-    }
-
-    try {
-      prepLog("Validating SD card…");
-      const cfg = await readTextFile(dirHandle, "config.txt");
-      if (cfg === null || (!cfg.includes("[cm4]") && !cfg.includes("arm_64bit"))) {
-        prepLog("Warning: picked directory doesn't look like a Pi boot partition.", "err");
-      }
-
-      prepLog("Fetching firstrun template…");
-      const template = await (await fetch(`${FIRMWARE_URL}/firstrun.template.sh`)).text();
-
-      prepLog("Fetching firmware files…");
-      const betterpi = await ensureDir(dirHandle, "betterpi");
-      for (const f of FIRMWARE_FILES) {
-        await writeFile(betterpi, f, await fetchBlob(`${FIRMWARE_URL}/${f}`));
-        prepLog(`  ✓ ${f}`, "ok");
-      }
-
-      prepLog("Fetching wheels manifest…");
-      const manifest = await (await fetch(`${FIRMWARE_URL}/wheels/manifest.json`)).json();
-      const wheels = await ensureDir(dirHandle, "wheels");
-      for await (const entry of wheels.values()) {
-        if (entry.kind === "file") await wheels.removeEntry(entry.name).catch(() => {});
-      }
-      for (const filename of manifest.wheels) {
-        await writeFile(wheels, filename, await fetchBlob(`${FIRMWARE_URL}/wheels/${filename}`));
-        prepLog(`  ✓ ${filename}`, "ok");
-      }
-
-      prepLog("Rendering firstrun.sh…");
-      const firstrun = renderFirstrun(template, {
-        HOSTNAME:  hostname,
-        USER_NAME: username,
-        USER_PASS: password,
-        SSH_KEY:   sshKey,
-      });
-      await writeFile(dirHandle, "firstrun.sh", firstrun);
-
-      // Capability config — firmware reads this at boot to know which
-      // hardware the user declared. Absent → defaults all-on for backward
-      // compat with pre-config Pis.
-      prepLog("Writing pi-robot.conf…");
-      const piConfig = {
-        led_enabled: $("prep-cap-led").checked,
-        led_pin: parseInt($("prep-cap-led-pin").value, 10) || 17,
-        motors_enabled: $("prep-cap-motors").checked,
-        camera_enabled: $("prep-cap-camera").checked ? "auto" : false,
-      };
-      await writeFile(dirHandle, "pi-robot.conf", JSON.stringify(piConfig, null, 2));
-
-      prepLog("Patching cmdline.txt…");
-      const oldCmd = await readTextFile(dirHandle, "cmdline.txt");
-      if (oldCmd === null) throw new Error("cmdline.txt not found on card");
-      await writeFile(dirHandle, "cmdline.txt", patchCmdline(oldCmd));
-
-      prepLog("Enabling USB gadget mode…");
-      const oldCfg = await readTextFile(dirHandle, "config.txt");
-      if (oldCfg === null) throw new Error("config.txt not found on card");
-      await writeFile(dirHandle, "config.txt", patchConfig(oldCfg));
-
-      try { localStorage.setItem(SSH_KEY_STORE, sshKey); } catch {}
-      prepLog("Done. Eject the card and boot the Pi.", "ok");
-    } catch (err) {
-      prepLog(`Error: ${err.message}`, "err");
-    } finally {
-      $("prep-go-btn").disabled = false;
-    }
-  }
-
-  function openDialog() {
-    $("prepare-dialog").showModal();
-  }
-  function closeDialog() {
-    $("prepare-dialog").close();
-  }
-
-  function init() {
-    const supported = !!window.showDirectoryPicker;
-    if (!supported) {
-      $("prep-unsupported").hidden = false;
-      $("prep-pick-btn").disabled = true;
-    }
-
-    // Restore SSH key (public, safe to persist across sessions). Pre-fill
-    // is its own "remembered" indicator — no separate meta line needed.
-    try {
-      const saved = localStorage.getItem(SSH_KEY_STORE);
-      if (saved) $("prep-sshkey").value = saved;
-    } catch {}
-
-    $("prepare-open-btn").addEventListener("click", openDialog);
-    $("prepare-close").addEventListener("click", closeDialog);
-    $("prep-cancel-btn").addEventListener("click", closeDialog);
-
-    $("prep-sshkey-load").addEventListener("click", () => {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = ".pub,text/*";
-      input.addEventListener("change", async () => {
-        const file = input.files && input.files[0];
-        if (!file) return;
-        $("prep-sshkey").value = (await file.text()).trim();
-      });
-      input.click();
-    });
-
-    $("prep-pick-btn").addEventListener("click", async () => {
-      try {
-        dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
-        $("prep-pick-meta").textContent = dirHandle.name;
-        $("prep-go-btn").disabled = false;
-      } catch { /* user cancelled */ }
-    });
-
-    $("prep-go-btn").addEventListener("click", runPrepare);
-
-    // Bookmark / QR-code support: ?prepare in the URL auto-opens the dialog.
-    if (new URLSearchParams(location.search).get("prepare") !== null) {
-      openDialog();
-    }
-  }
-
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-  else init();
-})();
