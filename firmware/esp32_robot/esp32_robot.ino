@@ -13,12 +13,25 @@
 #include <BLE2902.h>
 #include <WiFi.h>
 #include <Preferences.h>
+#include <Update.h>
 
 #define SERVICE_UUID          "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d91"
 #define LED_CHAR_UUID         "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d92"
 #define WIFI_SCAN_CHAR_UUID   "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d93"
 #define WIFI_JOIN_CHAR_UUID   "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d94"
 #define WIFI_STATUS_CHAR_UUID "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d95"
+#define OTA_DATA_CHAR_UUID    "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d96"
+#define OTA_STATUS_CHAR_UUID  "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d97"
+#define FW_INFO_CHAR_UUID     "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d98"
+
+// Shared BLE OTA protocol (matches firmware/pi_robot/pi_robot.py):
+//   ota-data   (write)    — binary frames with 1-byte opcode:
+//       0x01 [size:u32 BE]   begin — reset buffer, expect `size` bytes
+//       0x02 [payload]       chunk — append to flash
+//       0x03                 commit — finalize OTA + restart
+//   ota-status (read+notify) — UTF-8 JSON: {"st":...,"n":...,"total":...,"err":...}
+//   fw-info    (read)     — UTF-8 JSON: {"type":"esp32","url":"firmware/bins/esp32_robot.bin"}
+// The dashboard reads fw-info to know where to fetch the update binary from.
 
 // Shared BLE WiFi spec (matches firmware/pi_robot/pi_robot.py):
 //   wifi-scan   — read + notify. UTF-8 JSON: [{"s":ssid,"r":0..100,"p":0|1}].
@@ -36,6 +49,14 @@ BLECharacteristic* ledChar        = nullptr;
 BLECharacteristic* wifiScanChar   = nullptr;
 BLECharacteristic* wifiJoinChar   = nullptr;
 BLECharacteristic* wifiStatusChar = nullptr;
+BLECharacteristic* otaDataChar    = nullptr;
+BLECharacteristic* otaStatusChar  = nullptr;
+BLECharacteristic* fwInfoChar     = nullptr;
+
+// OTA state — Update class handles flash writes into the inactive OTA slot.
+bool otaInProgress = false;
+size_t otaExpected = 0;
+size_t otaReceived = 0;
 
 Preferences prefs;
 
@@ -150,6 +171,64 @@ static void applyLed(bool on) {
   }
 }
 
+static void publishOta(const char* st, size_t n = 0, size_t total = 0, const char* err = nullptr) {
+  String payload = "{\"st\":\""; payload += st; payload += "\"";
+  payload += ",\"n\":"; payload += (unsigned)n;
+  if (total) { payload += ",\"total\":"; payload += (unsigned)total; }
+  if (err)   { payload += ",\"err\":\""; payload += err; payload += "\""; }
+  payload += "}";
+  if (otaStatusChar) {
+    otaStatusChar->setValue((uint8_t*)payload.c_str(), payload.length());
+    otaStatusChar->notify();
+  }
+  Serial.printf("ota-status → %s\n", payload.c_str());
+}
+
+class OtaDataCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* ch) override {
+    String v = ch->getValue();
+    if (v.length() == 0) return;
+    uint8_t op = (uint8_t)v[0];
+    if (op == 0x01) {
+      if (v.length() < 5) { publishOta("failed", 0, 0, "bad begin"); return; }
+      otaExpected = ((uint32_t)(uint8_t)v[1] << 24)
+                  | ((uint32_t)(uint8_t)v[2] << 16)
+                  | ((uint32_t)(uint8_t)v[3] << 8)
+                  |  (uint32_t)(uint8_t)v[4];
+      otaReceived = 0;
+      if (!Update.begin(otaExpected)) {
+        publishOta("failed", 0, otaExpected, "Update.begin failed");
+        return;
+      }
+      otaInProgress = true;
+      publishOta("receiving", 0, otaExpected);
+    } else if (op == 0x02) {
+      if (!otaInProgress) { publishOta("failed", 0, 0, "no active session"); return; }
+      size_t len = v.length() - 1;
+      size_t w = Update.write((uint8_t*)(v.c_str() + 1), len);
+      if (w != len) {
+        Update.abort();
+        otaInProgress = false;
+        publishOta("failed", otaReceived, otaExpected, "write short");
+        return;
+      }
+      otaReceived += len;
+      publishOta("receiving", otaReceived, otaExpected);
+    } else if (op == 0x03) {
+      if (!otaInProgress) { publishOta("failed", 0, 0, "no active session"); return; }
+      publishOta("committing", otaReceived, otaExpected);
+      if (!Update.end(true)) {
+        otaInProgress = false;
+        publishOta("failed", otaReceived, otaExpected, "Update.end failed");
+        return;
+      }
+      publishOta("done", otaReceived, otaExpected);
+      delay(500);  // let the notify flush before the restart
+      ESP.restart();
+    }
+  }
+};
+
 class LedCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* ch) override {
     String value = ch->getValue();
@@ -235,6 +314,25 @@ void setup() {
   );
   wifiStatusChar->addDescriptor(new BLE2902());
   wifiStatusChar->setValue("{\"st\":\"idle\"}");
+
+  otaDataChar = service->createCharacteristic(
+    OTA_DATA_CHAR_UUID,
+    BLECharacteristic::PROPERTY_WRITE
+  );
+  otaDataChar->setCallbacks(new OtaDataCallbacks());
+
+  otaStatusChar = service->createCharacteristic(
+    OTA_STATUS_CHAR_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+  );
+  otaStatusChar->addDescriptor(new BLE2902());
+  otaStatusChar->setValue("{\"st\":\"idle\"}");
+
+  fwInfoChar = service->createCharacteristic(
+    FW_INFO_CHAR_UUID,
+    BLECharacteristic::PROPERTY_READ
+  );
+  fwInfoChar->setValue("{\"type\":\"esp32\",\"url\":\"firmware/bins/esp32_robot.bin\"}");
 
   service->start();
 

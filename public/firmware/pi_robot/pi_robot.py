@@ -35,6 +35,9 @@ WIFI_JOIN_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d94"
 WIFI_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d95"
 OTA_DATA_CHAR_UUID    = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d96"
 OTA_STATUS_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d97"
+FW_INFO_CHAR_UUID     = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d98"
+
+FW_INFO = {"type": "pi", "url": "firmware/pi_robot/pi_robot.py"}
 
 # BLE OTA protocol:
 #   ota-data  (write) — binary frames with 1-byte opcode:
@@ -292,6 +295,8 @@ def on_read(characteristic: BlessGATTCharacteristic, **_) -> bytearray:
         return _json_bytes(_wifi_status)
     if uuid == OTA_STATUS_CHAR_UUID:
         return _json_bytes(_ota_status)
+    if uuid == FW_INFO_CHAR_UUID:
+        return _json_bytes(FW_INFO)
     return characteristic.value
 
 
@@ -390,6 +395,12 @@ async def main() -> None:
         SERVICE_UUID, OTA_STATUS_CHAR_UUID,
         GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
         _json_bytes(_ota_status),
+        GATTAttributePermissions.readable,
+    )
+    await _server.add_new_characteristic(
+        SERVICE_UUID, FW_INFO_CHAR_UUID,
+        GATTCharacteristicProperties.read,
+        _json_bytes(FW_INFO),
         GATTAttributePermissions.readable,
     )
 

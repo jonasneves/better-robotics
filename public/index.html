@@ -350,6 +350,7 @@
   const WIFI_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d95";
   const OTA_DATA_CHAR_UUID    = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d96";
   const OTA_STATUS_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d97";
+  const FW_INFO_CHAR_UUID     = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d98";
 
   const decodeJson = (dv) => {
     try {
@@ -413,6 +414,7 @@
       otaDataChar: null,
       otaStatusChar: null,
       otaStatus: { st: "idle" },
+      fwInfo: null,
     };
     attachDevice(entry, device);
     state.devices.set(device.id, entry);
@@ -429,7 +431,7 @@
           ledChar: null, ledOn: false,
           wifiScanChar: null, wifiJoinChar: null, wifiStatusChar: null,
           wifiStatus: { st: "idle" }, wifiNetworks: null, wifiScanning: false,
-          otaDataChar: null, otaStatusChar: null, otaStatus: { st: "idle" },
+          otaDataChar: null, otaStatusChar: null, otaStatus: { st: "idle" }, fwInfo: null,
         });
       }
     }
@@ -535,6 +537,10 @@
       try {
         entry.otaDataChar   = await service.getCharacteristic(OTA_DATA_CHAR_UUID);
         entry.otaStatusChar = await service.getCharacteristic(OTA_STATUS_CHAR_UUID);
+        try {
+          const info = await service.getCharacteristic(FW_INFO_CHAR_UUID);
+          entry.fwInfo = decodeJson(await info.readValue());
+        } catch {}
         entry.otaStatus = decodeJson(await entry.otaStatusChar.readValue()) || { st: "idle" };
         await entry.otaStatusChar.startNotifications();
         entry.otaStatusChar.addEventListener("characteristicvaluechanged", (e) => {
@@ -569,6 +575,7 @@
     entry.wifiNetworks = null;
     entry.wifiScanning = false;
     entry.otaDataChar = entry.otaStatusChar = null;
+    entry.fwInfo = null;
     if (state.connectedId === id) state.connectedId = null;
     log(`Disconnected from ${entry.name}`);
     render();
@@ -632,10 +639,11 @@
       log("Update not supported by this firmware");
       return;
     }
-    log("Fetching latest pi_robot.py…");
+    const fetchUrl = entry.fwInfo?.url || "firmware/pi_robot/pi_robot.py";
+    log(`Fetching ${fetchUrl}…`);
     let bytes;
     try {
-      const resp = await fetch("firmware/pi_robot/pi_robot.py", { cache: "no-cache" });
+      const resp = await fetch(fetchUrl, { cache: "no-cache" });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       bytes = new Uint8Array(await resp.arrayBuffer());
     } catch (err) {
