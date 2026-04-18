@@ -2,7 +2,7 @@
 // config onto the boot partition of a Pi SD card. Self-contained module — no
 // BLE state, no dashboard state; just File System Access API over the picked
 // directory handle.
-import { $ } from "./dom.js";
+import { $, wireDialogOutsideClick } from "./dom.js";
 
 const FIRMWARE_URL    = "firmware/pi_robot";
 const FIRMWARE_FILES  = [
@@ -182,6 +182,7 @@ export function initPrepare() {
   $("prepare-open-btn").addEventListener("click", openDialog);
   $("prepare-close").addEventListener("click", closeDialog);
   $("prep-cancel-btn").addEventListener("click", closeDialog);
+  wireDialogOutsideClick($("prepare-dialog"));
 
   $("prep-sshkey-load").addEventListener("click", () => {
     const input = document.createElement("input");

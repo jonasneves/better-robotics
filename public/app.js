@@ -3,7 +3,7 @@
 // rendering is driven by the capability registry — adding a capability
 // doesn't require editing this file.
 import { SERVICE_UUID } from "./ble.js";
-import { $, escapeHtml } from "./dom.js";
+import { $, escapeHtml, wireDialogOutsideClick } from "./dom.js";
 import { log, logFor, setLogRenderer } from "./log.js";
 import { settings, saveSettings } from "./settings.js";
 import {
@@ -425,6 +425,26 @@ document.addEventListener("DOMContentLoaded", () => {
   $("scan-btn").addEventListener("click", scanForNew);
   $("empty-scan-btn").addEventListener("click", scanForNew);
   $("connect-all-btn").addEventListener("click", connectAll);
+
+  // Consistent close-on-outside-click for every modal dialog. Escape is
+  // already native on <dialog> opened via showModal(). Dialogs owned by
+  // other modules (prepare.js, recovery.js) wire themselves at their init.
+  wireDialogOutsideClick($("settings-modal"));
+  wireDialogOutsideClick($("label-modal"));
+
+  // robot-menu is popover="manual" so neither Escape nor outside-click are
+  // native — both need explicit listeners. Keep these at document level so
+  // the menu can be closed regardless of what the user clicked on.
+  document.addEventListener("click", (e) => {
+    const menu = $("robot-menu");
+    if (!menu.matches(":popover-open")) return;
+    if (e.target.closest("#robot-menu")) return;           // click inside the menu
+    if (e.target.closest("[data-action='menu']")) return;  // trigger handles its own toggle
+    closeMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $("robot-menu").matches(":popover-open")) closeMenu();
+  });
 
   $("menu-label").addEventListener("click", () => {
     const id = menuTargetId;

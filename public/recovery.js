@@ -7,7 +7,7 @@
 // usb-gadget.service. Plug USB-C to the host; a "BetterPi" serial device
 // shows up; user picks it via the browser's port chooser. serial-getty runs
 // a login prompt on the Pi side.
-import { $ } from "./dom.js";
+import { $, wireDialogOutsideClick } from "./dom.js";
 import { log } from "./log.js";
 
 let _port = null;
@@ -86,6 +86,7 @@ export function openRecoveryDialog() {
 
 export function initRecovery() {
   $("recovery-close").addEventListener("click", () => $("recovery-modal").close());
+  wireDialogOutsideClick($("recovery-modal"));
   $("recovery-connect").addEventListener("click", () => _port ? disconnect() : connect());
   $("recovery-send").addEventListener("click", send);
   $("recovery-input").addEventListener("keydown", (e) => {
