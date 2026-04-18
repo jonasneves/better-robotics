@@ -12,7 +12,7 @@ import {
 } from "./state.js";
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
 import { updateFirmware, updateFromFile } from "./capabilities/ota.js";
-import { restartService } from "./capabilities/admin.js";
+import { restartService } from "./capabilities/ops.js";
 import { initRecovery, openRecoveryDialog } from "./recovery.js";
 import { initGamepad } from "./gamepad.js";
 import { initVoice } from "./voice.js";

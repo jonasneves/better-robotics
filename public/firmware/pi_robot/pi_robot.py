@@ -46,12 +46,14 @@ MOTOR_CHAR_UUID       = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d99"
 #   camera-status (notify)  — status + outbound SDP answer / ICE back to browser
 CAMERA_SIGNAL_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9a"
 CAMERA_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9b"
-# Admin channel for out-of-band ops the user may need when BLE is alive but
-# the service is stuck. Opcodes: 0x01 = restart pi-robot.service. Works only
-# while the GATT server is up — "service dead" recovery still requires SSH
-# or a power cycle.
-ADMIN_CHAR_UUID         = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9c"
-ADMIN_OP_RESTART = 0x01
+# Ops channel — one JSON-command chan for every out-of-band action the
+# dashboard needs to run on the Pi. Format: single write of utf-8 JSON like
+# {"op": "restart-service"} or {"op": "install-pkg", "args": {"name":"camera"}}.
+# Each op routes to its own status flow (e.g. install-pkg streams progress
+# via camera-status notify). Consolidates what used to be scattered opcodes
+# across ADMIN_CHAR and CAMERA_SIGNAL into one surface; adding a new admin
+# action means one new op name in _ops_dispatch, no new characteristic.
+OPS_CHAR_UUID           = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9c"
 
 FW_INFO = {
     "type": "pi",
@@ -117,7 +119,6 @@ CAM_OP_BEGIN   = 0x01
 CAM_OP_CHUNK   = 0x02
 CAM_OP_COMMIT  = 0x03
 CAM_OP_STOP    = 0x04
-CAM_OP_INSTALL = 0x05
 
 # Optional camera stack. Gated on config: if CAMERA_ENABLED is False we skip
 # the imports entirely. "auto" attempts import and tolerates failure — a Pi
@@ -560,6 +561,32 @@ async def _cam_install() -> None:
         _cam_installing = False
 
 
+def _ops_handle_write(data: bytearray) -> None:
+    """Single-write JSON command channel. Message: {"op": "...", "args":{}}.
+    Each op routes to its own side-effect + status flow — install-pkg streams
+    progress via camera-status; restart-service has no status (BLE just drops
+    when systemd kills the process). Tiny messages fit in one ATT MTU; no
+    chunking needed at this surface. Add a new op here to expose it."""
+    try:
+        msg = json.loads(bytes(data).decode("utf-8"))
+    except Exception as e:
+        log.warning("ops: bad JSON — %s", e)
+        return
+    op = msg.get("op")
+    args = msg.get("args") or {}
+    if op == "restart-service":
+        log.info("ops: restart-service")
+        subprocess.Popen(["systemctl", "restart", "pi-robot.service"])
+    elif op == "install-pkg":
+        name = args.get("name")
+        if name == "camera":
+            _schedule(_cam_install())
+        else:
+            log.warning("ops: unknown package %r", name)
+    else:
+        log.warning("ops: unknown op %r", op)
+
+
 async def _cam_handle_message(msg: dict) -> None:
     """Signaling messages from the browser. t=offer creates a new pc; answer
     is sent back via camera-status notify. t=ice adds a candidate. t=stop
@@ -649,8 +676,6 @@ def _cam_handle_write(data: bytearray) -> None:
         _schedule(_cam_handle_message(msg))
     elif op == CAM_OP_STOP:
         _schedule(_cam_handle_message({"t": "stop"}))
-    elif op == CAM_OP_INSTALL:
-        _schedule(_cam_install())
 
 
 async def _motor_watchdog_task() -> None:
@@ -775,10 +800,8 @@ def on_write(characteristic: BlessGATTCharacteristic, value: bytearray, **_) -> 
     if uuid == CAMERA_SIGNAL_CHAR_UUID:
         _cam_handle_write(value)
         return
-    if uuid == ADMIN_CHAR_UUID:
-        if len(value) >= 1 and value[0] == ADMIN_OP_RESTART:
-            log.info("admin: restart service requested")
-            subprocess.Popen(["systemctl", "restart", "pi-robot"])
+    if uuid == OPS_CHAR_UUID:
+        _ops_handle_write(value)
         return
 
 
@@ -891,10 +914,10 @@ async def main() -> None:
     else:
         log.info("camera: disabled in pi-robot.conf")
 
-    # Admin char is always registered — it's the "soft restart" escape hatch
-    # for cases where BLE is alive but the service needs a refresh.
+    # Ops channel — always registered. Generic JSON command surface for
+    # restart, install, and future admin actions.
     await _server.add_new_characteristic(
-        SERVICE_UUID, ADMIN_CHAR_UUID,
+        SERVICE_UUID, OPS_CHAR_UUID,
         GATTCharacteristicProperties.write,
         bytearray(),
         GATTAttributePermissions.writeable,

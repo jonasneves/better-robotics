@@ -19,7 +19,6 @@ const CAM_OP_BEGIN   = 0x01;
 const CAM_OP_CHUNK   = 0x02;
 const CAM_OP_COMMIT  = 0x03;
 const CAM_OP_STOP    = 0x04;
-const CAM_OP_INSTALL = 0x05;
 const CAM_CHUNK_BYTES = 180;
 
 let renderEntry = () => {};
@@ -139,20 +138,17 @@ export async function stopCamera(id) {
   renderEntry(entry);
 }
 
+// Camera install routes through the shared ops channel — camera.js doesn't
+// know what "install" means anymore, it just tells ops "install-pkg
+// camera". Status streams back via camera-status as the Pi runs apt + pip.
+import { installPackage } from "./ops.js";
 export async function installCamera(id) {
-  const entry = state.devices.get(id);
-  if (!entry?.cameraSignalChar) return;
-  if (!confirm(
-    "Install camera support on this Pi?\n\n" +
-    "Downloads ~100MB (picamera2 + aiortc + av). Takes 1-3 min on a Pi 4. " +
-    "The Pi needs internet access (WiFi joined) for the install to succeed."
-  )) return;
-  try {
-    await entry.cameraSignalChar.writeValueWithResponse(new Uint8Array([CAM_OP_INSTALL]));
-    logFor(entry, "camera install requested");
-  } catch (err) {
-    logFor(entry, `camera install error: ${err.message}`);
-  }
+  return installPackage(id, "camera", {
+    confirm:
+      "Install camera support on this Pi?\n\n" +
+      "Downloads ~100MB (picamera2 + aiortc + av). Takes 1-3 min on a Pi 4. " +
+      "The Pi needs internet access (WiFi joined) for the install to succeed.",
+  });
 }
 
 export const camera = {

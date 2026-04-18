@@ -12,7 +12,7 @@ export const FW_INFO_CHAR_UUID     = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d98";
 export const MOTOR_CHAR_UUID       = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d99";
 export const CAMERA_SIGNAL_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9a";
 export const CAMERA_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9b";
-export const ADMIN_CHAR_UUID          = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9c";
+export const OPS_CHAR_UUID            = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9c";
 
 // Chunked-frame protocol shared by OTA and camera signaling. Begin carries a
 // u32 big-endian length, chunks append, commit parses + acts, stop tears down.
