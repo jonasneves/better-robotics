@@ -11,9 +11,11 @@ Run:
     python3 pi_robot.py
 """
 
+import ast
 import asyncio
 import json
 import logging
+import os
 import socket
 import subprocess
 
@@ -31,6 +33,19 @@ LED_CHAR_UUID         = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d92"
 WIFI_SCAN_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d93"
 WIFI_JOIN_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d94"
 WIFI_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d95"
+OTA_DATA_CHAR_UUID    = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d96"
+OTA_STATUS_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d97"
+
+# BLE OTA protocol:
+#   ota-data  (write) — binary frames with 1-byte opcode:
+#       0x01 [size:u32 big-endian]     begin — reset buffer, expect `size` bytes
+#       0x02 [payload bytes]           chunk — append to buffer
+#       0x03                           commit — validate + install + restart
+#   ota-status (read+notify) — UTF-8 JSON:
+#       {"st":"idle|receiving|committing|done|failed","n":received,"total":size,"err":msg}
+# On commit: the new file's Python syntax is ast-parsed before atomic rename.
+# After install, pi_robot.py restarts its own service via systemctl; the BLE
+# link drops and the dashboard reconnects to the new version.
 
 # Shared BLE WiFi spec (also implemented on ESP32):
 #   wifi-scan   — read + notify. UTF-8 JSON: [{"s":ssid,"r":0..100,"p":0|1}].
@@ -43,6 +58,10 @@ WIFI_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d95"
 
 LED_PIN = 17       # BCM pin — change to match your wiring.
 SCAN_MAX = 10      # Bounded so the full JSON fits in one ATT read.
+OTA_TARGET = "/home/pi/better-robotics/firmware/pi_robot/pi_robot.py"
+OTA_OP_BEGIN = 0x01
+OTA_OP_CHUNK = 0x02
+OTA_OP_COMMIT = 0x03
 
 logging.basicConfig(format="%(asctime)s %(message)s", level=logging.INFO)
 log = logging.getLogger("pi_robot")
@@ -53,6 +72,9 @@ _server: BlessServer | None = None
 _loop: asyncio.AbstractEventLoop | None = None
 _wifi_status: dict = {"st": "idle"}
 _wifi_scan: list[dict] = []
+_ota_status: dict = {"st": "idle", "n": 0}
+_ota_buffer: bytearray = bytearray()
+_ota_size: int = 0
 
 
 def device_name() -> str:
@@ -155,6 +177,66 @@ async def _wifi_scan_task() -> None:
         _debug_log("scan exception", repr(e))
 
 
+def _set_ota_status(st: str, n: int = 0, total: int = 0, err: str | None = None) -> None:
+    global _ota_status
+    s: dict = {"st": st, "n": n}
+    if total:
+        s["total"] = total
+    if err:
+        s["err"] = err
+    _ota_status = s
+    _publish(OTA_STATUS_CHAR_UUID, _json_bytes(_ota_status))
+    log.info("ota-status → %s", _ota_status)
+
+
+async def _ota_commit() -> None:
+    global _ota_buffer, _ota_size
+    try:
+        if len(_ota_buffer) != _ota_size:
+            _set_ota_status("failed", err=f"size mismatch {len(_ota_buffer)} != {_ota_size}")
+            _ota_buffer = bytearray()
+            return
+        try:
+            ast.parse(bytes(_ota_buffer))
+        except SyntaxError as e:
+            _set_ota_status("failed", err=f"SyntaxError: {e}"[:120])
+            _ota_buffer = bytearray()
+            return
+        tmp = OTA_TARGET + ".new"
+        with open(tmp, "wb") as f:
+            f.write(_ota_buffer)
+        os.replace(tmp, OTA_TARGET)
+        _set_ota_status("done", n=len(_ota_buffer), total=_ota_size)
+        _ota_buffer = bytearray()
+        # Let the notify flush over BLE before systemd kills us.
+        await asyncio.sleep(0.5)
+        subprocess.Popen(["systemctl", "restart", "pi-robot.service"])
+    except Exception as e:
+        _set_ota_status("failed", err=str(e)[:120])
+
+
+def _ota_handle_write(data: bytearray) -> None:
+    global _ota_buffer, _ota_size
+    if not data:
+        return
+    op = data[0]
+    if op == OTA_OP_BEGIN:
+        if len(data) < 5:
+            _set_ota_status("failed", err="bad begin frame")
+            return
+        _ota_size = int.from_bytes(bytes(data[1:5]), "big")
+        _ota_buffer = bytearray()
+        _set_ota_status("receiving", n=0, total=_ota_size)
+    elif op == OTA_OP_CHUNK:
+        _ota_buffer.extend(data[1:])
+        _set_ota_status("receiving", n=len(_ota_buffer), total=_ota_size)
+    elif op == OTA_OP_COMMIT:
+        _set_ota_status("committing", n=len(_ota_buffer), total=_ota_size)
+        _schedule(_ota_commit())
+    else:
+        _set_ota_status("failed", err=f"unknown op 0x{op:02x}")
+
+
 async def _check_current_wifi() -> None:
     """On startup, reflect the actual current connection state."""
     try:
@@ -208,6 +290,8 @@ def on_read(characteristic: BlessGATTCharacteristic, **_) -> bytearray:
         return _json_bytes(_wifi_scan)
     if uuid == WIFI_STATUS_CHAR_UUID:
         return _json_bytes(_wifi_status)
+    if uuid == OTA_STATUS_CHAR_UUID:
+        return _json_bytes(_ota_status)
     return characteristic.value
 
 
@@ -234,6 +318,9 @@ def on_write(characteristic: BlessGATTCharacteristic, value: bytearray, **_) -> 
             _set_status("failed", err="missing ssid")
             return
         _schedule(_wifi_join_task(ssid, password))
+        return
+    if uuid == OTA_DATA_CHAR_UUID:
+        _ota_handle_write(value)
 
 
 def _init_wifi_radio() -> None:
@@ -291,6 +378,18 @@ async def main() -> None:
         SERVICE_UUID, WIFI_STATUS_CHAR_UUID,
         GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
         _json_bytes(_wifi_status),
+        GATTAttributePermissions.readable,
+    )
+    await _server.add_new_characteristic(
+        SERVICE_UUID, OTA_DATA_CHAR_UUID,
+        GATTCharacteristicProperties.write,
+        bytearray(),
+        GATTAttributePermissions.writeable,
+    )
+    await _server.add_new_characteristic(
+        SERVICE_UUID, OTA_STATUS_CHAR_UUID,
+        GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
+        _json_bytes(_ota_status),
         GATTAttributePermissions.readable,
     )
 

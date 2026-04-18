@@ -326,6 +326,7 @@
 
 <div id="robot-menu" class="menu" popover="auto">
   <button class="menu-item" id="menu-label">Show label</button>
+  <button class="menu-item" id="menu-update">Update firmware…</button>
   <button class="menu-item destructive" id="menu-forget">Forget this robot</button>
 </div>
 
@@ -347,6 +348,8 @@
   const WIFI_SCAN_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d93";
   const WIFI_JOIN_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d94";
   const WIFI_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d95";
+  const OTA_DATA_CHAR_UUID    = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d96";
+  const OTA_STATUS_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d97";
 
   const decodeJson = (dv) => {
     try {
@@ -407,6 +410,9 @@
       wifiStatus: { st: "idle" },
       wifiNetworks: null,
       wifiScanning: false,
+      otaDataChar: null,
+      otaStatusChar: null,
+      otaStatus: { st: "idle" },
     };
     attachDevice(entry, device);
     state.devices.set(device.id, entry);
@@ -423,6 +429,7 @@
           ledChar: null, ledOn: false,
           wifiScanChar: null, wifiJoinChar: null, wifiStatusChar: null,
           wifiStatus: { st: "idle" }, wifiNetworks: null, wifiScanning: false,
+          otaDataChar: null, otaStatusChar: null, otaStatus: { st: "idle" },
         });
       }
     }
@@ -523,6 +530,23 @@
       } catch {
         entry.wifiScanChar = null;  // robot has no WiFi onboarding — that's fine.
       }
+
+      // OTA: also optional on older firmwares.
+      try {
+        entry.otaDataChar   = await service.getCharacteristic(OTA_DATA_CHAR_UUID);
+        entry.otaStatusChar = await service.getCharacteristic(OTA_STATUS_CHAR_UUID);
+        entry.otaStatus = decodeJson(await entry.otaStatusChar.readValue()) || { st: "idle" };
+        await entry.otaStatusChar.startNotifications();
+        entry.otaStatusChar.addEventListener("characteristicvaluechanged", (e) => {
+          entry.otaStatus = decodeJson(e.target.value) || { st: "idle" };
+          const { st, n = 0, total = 0, err: errMsg } = entry.otaStatus;
+          const pct = total ? Math.round(100 * n / total) : 0;
+          log(`OTA ${st}${total ? ` ${pct}%` : ""}${errMsg ? ` — ${errMsg}` : ""}`);
+          render();
+        });
+      } catch {
+        entry.otaDataChar = null;
+      }
     } catch (err) {
       entry.status = "error";
       log(`Connect failed: ${err.message}`);
@@ -544,6 +568,7 @@
     entry.wifiScanChar = entry.wifiJoinChar = entry.wifiStatusChar = null;
     entry.wifiNetworks = null;
     entry.wifiScanning = false;
+    entry.otaDataChar = entry.otaStatusChar = null;
     if (state.connectedId === id) state.connectedId = null;
     log(`Disconnected from ${entry.name}`);
     render();
@@ -599,6 +624,43 @@
     } catch (err) {
       log(`WiFi join failed: ${err.message}`);
     }
+  }
+
+  async function updateFirmware(id) {
+    const entry = state.devices.get(id);
+    if (!entry || !entry.otaDataChar) {
+      log("Update not supported by this firmware");
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".py";
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      log(`OTA uploading ${file.name} (${bytes.length} B)…`);
+      try {
+        const ch = entry.otaDataChar;
+        const begin = new Uint8Array(5);
+        begin[0] = 0x01;
+        new DataView(begin.buffer).setUint32(1, bytes.length, false);
+        await ch.writeValueWithResponse(begin);
+        const CHUNK = 180;  // safe under the negotiated ATT MTU on macOS/Chrome.
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+          const frame = new Uint8Array(slice.length + 1);
+          frame[0] = 0x02;
+          frame.set(slice, 1);
+          await ch.writeValueWithResponse(frame);
+        }
+        await ch.writeValueWithResponse(new Uint8Array([0x03]));
+        log("OTA commit sent — robot restarting");
+      } catch (err) {
+        log(`OTA failed: ${err.message}`);
+      }
+    });
+    input.click();
   }
 
   async function toggleLed(id) {
@@ -776,6 +838,11 @@
       const id = menuTargetId;
       closeMenu();
       if (id) openLabel(id);
+    });
+    $("menu-update").addEventListener("click", () => {
+      const id = menuTargetId;
+      closeMenu();
+      if (id) updateFirmware(id);
     });
     $("label-close").addEventListener("click", () => $("label-modal").close());
     $("label-copy").addEventListener("click", async () => {

@@ -86,10 +86,60 @@ sudo -u "$USER_NAME" "$DEST/.venv/bin/pip" install -v --no-index --find-links="$
 PIP_RC=$?
 if [ $PIP_RC -eq 0 ]; then
     note pip_installed
+
+    # bless needs BlueZ's experimental LE advertising API. Pi OS's default
+    # bluetoothd doesn't enable it, so we enable it both ways (systemd flag
+    # and main.conf) because different BlueZ versions honor different paths.
+    mkdir -p /etc/systemd/system/bluetooth.service.d
+    cat > /etc/systemd/system/bluetooth.service.d/override.conf <<'BTEOF'
+[Service]
+ExecStart=
+ExecStart=/usr/libexec/bluetooth/bluetoothd --experimental
+BTEOF
+    if ! grep -q "^Experimental=true" /etc/bluetooth/main.conf; then
+        sed -i '/^\[General\]/a Experimental=true' /etc/bluetooth/main.conf
+    fi
+    systemctl daemon-reload
+    # Pi OS Trixie ships with bluetooth soft-blocked in rfkill; unblock before
+    # restarting bluetoothd or `bluetoothctl power on` will silently fail with
+    # "Failed to set mode: Failed (0x03)".
+    rfkill unblock bluetooth || true
+    rfkill unblock all || true
+    systemctl restart bluetooth
+    sleep 3
+    hciconfig hci0 up >/dev/null 2>&1 || true
+    bluetoothctl power on >/dev/null 2>&1 || true
+    sleep 1
+    # Diagnostic dump so we can see adapter state without SSH.
+    {
+        echo "=== hciconfig -a ==="; hciconfig -a 2>&1
+        echo "=== rfkill list ==="; rfkill list 2>&1
+        echo "=== bluetoothctl show ==="; bluetoothctl show 2>&1
+        echo "=== bluetoothd --version ==="; bluetoothd --version 2>&1
+        echo "=== main.conf [General] ==="; sed -n '/^\[General\]/,/^\[/p' /etc/bluetooth/main.conf 2>&1
+        echo "=== bluetooth service status ==="
+        systemctl status bluetooth.service --no-pager -l 2>&1
+    } > "$BOOTFS/bluetooth-diag.log" 2>&1
+    note bluetooth_experimental_enabled
+
     install -m 644 "$DEST/pi-robot.service" /etc/systemd/system/pi-robot.service
     systemctl daemon-reload
     systemctl enable pi-robot.service
     note service_enabled
+
+    # Probe the service here so we can see issues without SSH access: start it,
+    # wait, capture status + journal to the boot partition for offline reading.
+    note service_probe_start
+    systemctl start pi-robot.service
+    sleep 15
+    systemctl status pi-robot.service --no-pager -l > "$BOOTFS/pi-robot-status.log" 2>&1
+    journalctl -u pi-robot.service --no-pager -n 100 > "$BOOTFS/pi-robot-journal.log" 2>&1
+    if systemctl is-active --quiet pi-robot.service; then
+        note service_probe_ok "pi-robot.service is active"
+    else
+        note service_probe_failed "see /boot/firmware/pi-robot-journal.log"
+    fi
+
     INSTALL_OK=1
 else
     note pip_install_failed "full log in /boot/firmware/pip.log (exit $PIP_RC)"
