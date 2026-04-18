@@ -292,9 +292,10 @@ button.icon:hover { background: var(--line); color: var(--ink); }
 }
 .motor-sliders input[type="range"] { flex: 1; accent-color: var(--accent); }
 
-.empty-state { text-align: center; padding: 24px 16px 8px; }
+.empty-state { text-align: center; padding: 32px 24px; }
 .empty-state .empty-title { font-size: 15px; font-weight: 500; margin-bottom: 4px; }
 .empty-state .empty-sub { color: var(--ink-muted); font-size: 13px; margin-bottom: 20px; }
+.empty-state button { padding: 10px 20px; }  /* more breathing room for the primary CTA */
 
 .log {
   font-family: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;

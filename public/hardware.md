@@ -1,8 +1,12 @@
 # Hardware guide
 
-## Recommended: ESP32-S3 with native USB
+## Recommended: ESP32-C6 (BLE-first, no camera)
 
-For new builds, pick an **ESP32-S3 board with native USB** — ESP32-S3-CAM, Freenove ESP32-S3-WROOM dev kit, or any DevKitC-S3. The S3 exposes USB CDC directly from the chip, so Web Serial talks straight to it on macOS, Windows, and Linux with **no drivers to install**. Same Arduino core, same BLE stack, same firmware with minor board-knob changes below.
+For new builds where BLE is the primary channel and a camera isn't required, pick an **ESP32-C6** — DevKitC-1 or any WROOM-based C6 board. It has native USB CDC (no drivers), Bluetooth 5.3 LE with materially better RAM headroom than S3 when the TLS stack shares memory with BLE during OTA, and matches the "BLE is the control plane" shape of this project better than dual-radio boards. Same Arduino core, same firmware, board knobs below.
+
+## Alternative: ESP32-S3 with native USB
+
+If you need dual-core horsepower or a camera, the **ESP32-S3** remains a strong choice — ESP32-S3-CAM, Freenove ESP32-S3-WROOM dev kit, or any DevKitC-S3. Native USB CDC (no drivers), same firmware. Picks up some headroom over the C6 at the cost of a larger BLE/WiFi memory footprint.
 
 ## Legacy: ESP32-CAM-MB
 
@@ -16,8 +20,8 @@ Tested on **Pi 4 Model B**. Bluetooth radio built in. Pi OS Bookworm (Python 3.1
 
 Two variables need to match your ESP32 board:
 
-- **`FQBN`** in `Makefile` — `esp32:esp32:esp32cam:PartitionScheme=min_spiffs` for CAM-MB; for S3, something like `esp32:esp32:esp32s3:PartitionScheme=min_spiffs,USBMode=default,CDCOnBoot=cdc` (run `arduino-cli board listall` for exact identifiers on your core version).
-- **`LED_PIN`** in `firmware/esp32_robot/esp32_robot.ino` — GPIO 33 active-low on CAM-MB. S3 boards vary; many use a WS2812 neopixel on GPIO 48, which needs a different driver entirely.
+- **`FQBN`** in `Makefile` — `esp32:esp32:esp32cam:PartitionScheme=min_spiffs` for CAM-MB; for S3, something like `esp32:esp32:esp32s3:PartitionScheme=min_spiffs,USBMode=default,CDCOnBoot=cdc`; for C6, `esp32:esp32:esp32c6:PartitionScheme=min_spiffs,CDCOnBoot=cdc` (run `arduino-cli board listall` for exact identifiers on your core version).
+- **`LED_PIN`** in `firmware/esp32_robot/esp32_robot.ino` — GPIO 33 active-low on CAM-MB. S3 and C6 boards vary; many use a WS2812 neopixel (GPIO 48 on DevKitC-S3, GPIO 8 on DevKitC-C6) which needs a different driver entirely.
 
 `min_spiffs` is load-bearing across both: its dual 1.9 MB app partitions are what OTA needs to stage an update without wiping the running image.
 

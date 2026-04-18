@@ -33,27 +33,23 @@ Last updated: 2026-04-18 (per-card render, wider layout, setup collapse, scout f
 - **When it earns itself:** if the project leans into field/classroom use where flaky WiFi + many-robot demos matter. Today the dashboard works fine as a page; SW is polish, not critical path.
 - **Not blocking anything.** Decide when the use case surfaces.
 
-### 3. Colored log lines (small polish)
-- Detect `failed` / `error` / `done` / `joined` keywords in log messages; apply red/green CSS classes (same pattern prepare.html had before we started the merge).
-- Small scope. Not urgent — coalescing + per-card last-activity cover the main readability gaps.
-
-### 4. USB gadget mode validation
+### 3. USB gadget mode validation
 - `dtoverlay=dwc2` + `modules-load=dwc2,g_ether` + NM shared-mode `usb0` at `10.55.0.1/24` wired into `prepare.html` but never tested. User's current Pi was prepped before this was added.
 - **Plan:** next card re-prep, plug USB-C to Mac, try `ssh pi@10.55.0.1`. Confirms the debug channel works before we actually need it.
 - **Not a blocker.**
 
-### 5. Signal as messaging transport (deferred, not rejected)
+### 4. Signal as messaging transport (deferred, not rejected)
 - Considered using `~/Github/jonasneves/signal` (Cloudflare Workers rendezvous rooms) as the data plane instead of hardcoded URLs.
 - Doesn't solve the current TLS-memory bug (WSS = still TLS on ESP32).
 - Adds WebSocket client lib to firmware (~50KB). Adds signal as critical-path infra.
 - **Reconsider when:** streaming video, multi-robot coordination, or another feature requires browser-as-source for bulk data that doesn't fit BLE.
 
-### 6. Scout-surfaced follow-ups (folded in 2026-04-18)
+### 5. Scout-surfaced follow-ups (folded in 2026-04-18)
 - **`bluez-peripheral` 0.2.0a5 spike.** Modern BlueZ-native peripheral lib; if it works non-root and without `--experimental`, the Pi firstrun script gets materially simpler. Worth a time-boxed trial.
 - **Update `docs/hardware.md` to call out ESP32-C6** as the recommended board for new non-camera BLE-first builds. S3 is fine but C6 has native BLE 5.3 + more RAM headroom and matches the "BLE is the control plane" framing better than S3's dual-radio emphasis.
 - **Treat `getDevices()` persistence fallback as load-bearing, not transitional.** Web Bluetooth's `getDevices()` has stayed flag-gated for years with no movement. The localStorage+filter-by-name path in `loadPaired()` is the primary paired-device persistence story; don't plan to retire it.
 
-### 7. LLM-orchestrated dashboard (direction, not yet in flight)
+### 6. LLM-orchestrated dashboard (direction, not yet in flight)
 - Direction confirmed: eventually an LLM (webmcp-style) drives pairing, driving, OTA, etc. through a tool interface. Per-card render ships today specifically to set up this future — one state change mutates one card, a `get_robot_state(id)` tool returns one entry, a state-push channel notifies by entry-id rather than whole-page snapshots.
 - **Patterns worth stealing from `~/Github/organizations/hatch` when we get here:**
   1. Domain-scoped tool adapters with per-context system prompts (one adapter per "mode" — pairing, debugging, classroom demo).
