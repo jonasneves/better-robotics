@@ -34,6 +34,12 @@ Each robot advertises a single BLE GATT service. Capabilities (LED, motors, sens
 
 - **No server, no broker, no cloud in the critical path.** The browser pairs directly with the robot over BLE. WiFi, when present, is used only for content fetched from the same GitHub Pages deploy that serves the dashboard itself.
 
+### Safety on disconnect
+
+Every actuator characteristic (motor, servo, pump, relay — anything that moves, heats, or draws current) ships with a watchdog built into the firmware. Writes reset a timer; if no write lands within the window (default 500 ms), the firmware reverts to a safe default on its own and notifies the dashboard so the UI stays honest.
+
+This is the architecture's answer to "what happens when the channel drops?" — operator out of range, browser tab closes, laptop sleeps. A second comms channel doesn't help with any of those (the operator is just gone), but a watchdog does. The rule applies to any new actuator capability we add — don't layer safety above; make silence itself the trigger for the safe state.
+
 ## Scope of this repo (today)
 
 - `firmware/esp32_robot/` — ESP32 variant. Advertises BLE, handles LED control, WiFi onboarding, and OTA self-update.
