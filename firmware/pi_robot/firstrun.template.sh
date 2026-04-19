@@ -174,6 +174,10 @@ if [ $PIP_RC -eq 0 ]; then
     mkdir -p /etc/systemd/system/bluetooth.service.d
     cat > /etc/systemd/system/bluetooth.service.d/override.conf <<'BTEOF'
 [Service]
+# Pi OS Trixie boots with bluetooth rfkill-blocked; masking systemd-rfkill
+# isn't always enough (kernel driver / default state re-apply on boot).
+# Unblock right before bluetoothd starts. `-` tolerates rfkill absent.
+ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
 ExecStart=
 ExecStart=/usr/libexec/bluetooth/bluetoothd --experimental
 BTEOF
