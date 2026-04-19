@@ -361,8 +361,15 @@ function renderEntry(entry) {
 let menuTargetId = null;
 
 function openMenu(triggerBtn, id) {
-  menuTargetId = id;
   const menu = $("robot-menu");
+  const isOpen = menu.matches(":popover-open");
+  // Toggle off if clicking the same robot's trigger; otherwise switch targets.
+  if (isOpen && menuTargetId === id) {
+    closeMenu();
+    return;
+  }
+  if (isOpen) menu.hidePopover();  // switching robots — reopen at new position
+  menuTargetId = id;
   const rect = triggerBtn.getBoundingClientRect();
   // Position below-right of trigger, nudging left if it would overflow viewport.
   const menuWidth = 220;
@@ -478,7 +485,7 @@ document.addEventListener("DOMContentLoaded", () => {
     closeMenu();
     if (id) openPinoutDialog(id);
   });
-  // Recovery lives at page-header level, not the per-robot menu: gating the
+  // Recovery lives in the topbar, not the per-robot menu: gating the
   // "BLE is dead" escape hatch behind a paired robot is the exact catch-22
   // it exists to break.
   $("recovery-btn").addEventListener("click", openRecoveryDialog);
@@ -515,8 +522,102 @@ document.addEventListener("DOMContentLoaded", () => {
     settings.passiveScan = passiveCheckbox.checked;
     saveSettings();
   });
-  $("settings-btn").addEventListener("click", () => $("settings-modal").showModal());
+  // Profile — classroom-local identity (no auth, browser-only). Seeded hue from name hash.
+  const seedColor = (str) => {
+    if (!str) return null;
+    let h = 0;
+    for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) & 0xffff;
+    return `hsl(${h % 360}, 55%, 50%)`;
+  };
+  const profileInitials = (name) => {
+    if (!name) return "?";
+    const words = name.trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return "?";
+    if (words.length === 1) return words[0][0].toUpperCase();
+    return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  };
+  const renderAvatar = (name) => {
+    const initials = profileInitials(name);
+    const color = seedColor(name);
+    for (const el of [$("avatar-btn"), $("avatar-preview")]) {
+      el.textContent = initials;
+      el.style.background = color || "";
+    }
+    $("avatar-menu-name").textContent = name || "Not set — open Settings to add your name";
+  };
+  // Fun random default so first-time users get an identity without a prompt.
+  // Adjective + robot/space noun → 576 combos. User can edit/clear anytime.
+  const NAME_ADJ = ["Curious","Clever","Bold","Brave","Bright","Kind","Quick",
+    "Cheerful","Gentle","Nimble","Mighty","Witty","Playful","Keen","Eager",
+    "Daring","Friendly","Snappy","Plucky","Swift","Sunny","Lively","Cozy","Happy"];
+  const NAME_NOUN = ["Rover","Pilot","Beacon","Pixel","Bolt","Circuit","Gear",
+    "Sprocket","Widget","Cog","Comet","Orbit","Nova","Spark","Relay","Echo",
+    "Satellite","Buffer","Byte","Atom","Chip","Node","Bot","Gadget"];
+  const randomName = () => `${NAME_ADJ[Math.floor(Math.random() * NAME_ADJ.length)]} ${NAME_NOUN[Math.floor(Math.random() * NAME_NOUN.length)]}`;
+
+  const profile = JSON.parse(localStorage.getItem("br-profile") || "{}");
+  if (!profile.name) {
+    profile.name = randomName();
+    localStorage.setItem("br-profile", JSON.stringify(profile));
+  }
+  const nameInput = $("setting-name");
+  nameInput.value = profile.name;
+  renderAvatar(profile.name);
+  nameInput.addEventListener("input", () => {
+    profile.name = nameInput.value.trim();
+    localStorage.setItem("br-profile", JSON.stringify(profile));
+    renderAvatar(profile.name);
+  });
+
+  // Avatar menu — popover="manual" matches robot-menu's pattern (no native outside-click/Escape).
+  // Right-anchored: menu's right edge pins to avatar's right edge, grows leftward.
+  // Keeps it inside the viewport regardless of content width.
+  $("avatar-btn").addEventListener("click", (e) => {
+    const menu = $("avatar-menu");
+    if (menu.matches(":popover-open")) {
+      menu.hidePopover();
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    menu.style.top = `${rect.bottom + 6}px`;
+    menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    menu.style.left = "auto";
+    if (menu.showPopover) menu.showPopover();
+  });
+  $("menu-settings").addEventListener("click", () => {
+    $("avatar-menu").hidePopover();
+    $("settings-modal").showModal();
+  });
+  document.addEventListener("click", (e) => {
+    const menu = $("avatar-menu");
+    if (!menu.matches(":popover-open")) return;
+    if (e.target.closest("#avatar-menu")) return;
+    if (e.target.closest("#avatar-btn")) return;
+    menu.hidePopover();
+  });
+  document.addEventListener("keydown", (e) => {
+    const menu = $("avatar-menu");
+    if (e.key === "Escape" && menu.matches(":popover-open")) menu.hidePopover();
+  });
+
   $("settings-close").addEventListener("click", () => $("settings-modal").close());
+
+  const openSetup = () => $("setup-dialog").showModal();
+  $("add-robot-btn").addEventListener("click", openSetup);
+  $("empty-add-robot-btn").addEventListener("click", openSetup);
+  $("setup-close").addEventListener("click", () => $("setup-dialog").close());
+  wireDialogOutsideClick($("setup-dialog"));
+
+  // Assistant panel is non-modal — user can still operate robots while it's open.
+  const bubble = $("assistant-bubble");
+  $("assistant-bubble").addEventListener("click", () => {
+    $("assistant-panel").show();
+    bubble.hidden = true;
+  });
+  $("assistant-close").addEventListener("click", () => {
+    $("assistant-panel").close();
+    bubble.hidden = false;
+  });
 
   initGamepad();
   initVoice({ connectAll });
@@ -525,8 +626,6 @@ document.addEventListener("DOMContentLoaded", () => {
   initPinout();
 
   loadPaired().then(() => {
-    // Fold setup once robots exist — setup is onboarding-phase.
-    $("setup-section").open = state.devices.size === 0;
     highlightKnownRobotFromUrl();
   });
 });

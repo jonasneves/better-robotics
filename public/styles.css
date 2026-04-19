@@ -1,15 +1,44 @@
 :root {
+  color-scheme: light dark;  /* native form controls + scrollbars track the mode */
+  /* Duke brand tokens — https://brand.duke.edu/colors */
+  --duke-navy: #012169;
+  --duke-royal-blue: #00539B;
+  --duke-light-blue: #0577B1;
+  --duke-persimmon: #E89923;
+  --duke-copper: #C84E00;
+
   --bg: #f5f5f7;
   --surface: #ffffff;
   --ink: #1d1d1f;
   --ink-muted: #6e6e73;
-  --line: #d2d2d7;
-  --accent: #012169; /* Duke navy */
+  /* translucent-on-ink borders — adapt to any bg without a mode override */
+  --border-subtle:  rgba(0,0,0,0.06);
+  --border-default: rgba(0,0,0,0.10);
+  --border-strong:  rgba(0,0,0,0.15);
+  --line: var(--border-default);  /* legacy alias */
+  --accent: var(--duke-royal-blue);
+  --accent-hover: var(--duke-navy);
   --accent-ink: #ffffff;
+  --brand-heading: var(--duke-navy);  /* mode-aware heading color */
   --danger: #d70015;
   --success: #30a46c;
-  --radius: 12px;
-  --shadow: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.06);
+  --radius: 8px;  /* tighter — reads as panel, not floating card */
+  --shadow: 0 1px 2px rgba(0,0,0,0.04);  /* kept minimal; floating surfaces set their own */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Neutral near-black, not catwatcher's saturated navy — this is a tool, not a product surface */
+    --bg: #1a1d20;
+    --surface: #212529;
+    --ink: #e9ecef;
+    --ink-muted: #adb5bd;
+    --border-subtle:  rgba(255,255,255,0.06);
+    --border-default: rgba(255,255,255,0.10);
+    --border-strong:  rgba(255,255,255,0.15);
+    --brand-heading: var(--duke-light-blue);  /* navy on near-black is unreadable; lift to light-blue */
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.5);
+  }
 }
 
 * { box-sizing: border-box; }
@@ -24,10 +53,79 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* App shell — full-viewport chrome + flex-grow content region.
+   Foundation for future detached panels, trays, and multi-region layouts. */
+.app { display: flex; flex-direction: column; height: 100dvh; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  height: 52px;
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.topbar-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--brand-heading);
+  margin: 0;
+}
+.topbar-spacer { flex: 1; }
+.topbar-actions { display: flex; gap: 6px; align-items: center; }
+.topbar-actions .icon { font-size: 18px; }
+
+/* Avatar button — classroom-local identity. Initials over seeded-hue bg (hsl-from-hash).
+   When name is unset, falls back to default bg + "?" glyph. */
+.avatar-btn {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--ink-muted);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.1s ease-out, box-shadow 0.1s ease-out;
+}
+.avatar-btn:hover { transform: scale(1.05); box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+.avatar-btn:active { transform: scale(0.95); }
+
+.menu-header {
+  padding: 6px 10px 8px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-actions .icon.listening {
+  background: var(--danger);
+  color: var(--accent-ink);
+  animation: mic-pulse 1.5s ease-in-out infinite;
+}
+@keyframes mic-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
 main {
+  flex: 1;
+  overflow-y: auto;
+  width: 100%;
   max-width: 1200px;
   margin: 0 auto;
-  padding: 64px 24px 48px;
+  padding: 32px 24px 48px;
 }
 
 h1 {
@@ -35,19 +133,13 @@ h1 {
   font-weight: 600;
   letter-spacing: -0.01em;
   margin: 0 0 8px;
+  color: var(--brand-heading);
 }
-.page-header { display: flex; align-items: center; justify-content: space-between; }
-.page-header h1 { margin: 0; }
-.page-header .icon { font-size: 20px; }
-.page-header .icon.listening { background: var(--danger); color: var(--accent-ink); }
-@keyframes mic-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
-.page-header .icon.listening { animation: mic-pulse 1.5s ease-in-out infinite; }
-p.lede { color: var(--ink-muted); margin: 0 0 32px; max-width: 640px; }
 
 .card {
   background: var(--surface);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
   padding: 24px;
   margin-bottom: 16px;
 }
@@ -153,6 +245,7 @@ button.icon:hover { background: var(--line); color: var(--ink); }
   box-shadow: 0 10px 30px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.04);
   padding: 6px;
   min-width: 200px;
+  max-width: min(280px, calc(100vw - 16px));
 }
 .menu::backdrop { background: transparent; }
 .menu-item {
@@ -190,23 +283,33 @@ button.icon:hover { background: var(--line); color: var(--ink); }
   padding: 0 4px;
   margin: 24px 0 8px;
 }
-/* Collapsible setup section — folded by default once robots exist, so the
-   page privileges the control surface over the onboarding cards. */
-#setup-section > summary {
+/* Collapsible tray — generic details pattern. Log uses this; reusable for any accordion surface.
+   Stands alone without .card: reads as bottom-strip chrome, not a data panel. */
+details.tray {
+  padding: 12px 0;
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+}
+details.tray > summary {
   cursor: pointer;
   list-style: none;
   user-select: none;
+  display: flex;
+  align-items: center;
 }
-#setup-section > summary::-webkit-details-marker { display: none; }
-#setup-section > summary .label::after {
+details.tray > summary::-webkit-details-marker { display: none; }
+details.tray > summary::after {
   content: "›";
   display: inline-block;
   color: var(--ink-muted);
-  margin-left: 8px;
+  margin-left: auto;
   font-weight: 400;
   transition: transform 0.2s;
 }
-#setup-section[open] > summary .label::after { transform: rotate(90deg); }
+details.tray[open] > summary::after { transform: rotate(90deg); }
+details.tray[open] > :not(summary) { margin-top: 12px; }
+
+.empty-state .empty-actions { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
 .gamepad-dot { font-size: 12px; margin-left: 4px; vertical-align: middle; }
 
 #robot-list {
@@ -305,7 +408,7 @@ button.icon:hover { background: var(--line); color: var(--ink); }
   margin-top: 8px;
   padding: 6px 10px;
   border-radius: 6px;
-  background: #f5f5f7;
+  background: var(--bg);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 11px;
   color: var(--ink-muted);
@@ -327,7 +430,7 @@ button.icon:hover { background: var(--line); color: var(--ink); }
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
-  background: #f5f5f7;
+  background: var(--bg);
   border-radius: 4px;
   min-height: 28px;
 }
@@ -425,7 +528,7 @@ button.icon:hover { background: var(--line); color: var(--ink); }
   white-space: pre-wrap;
   max-height: 240px;
   overflow-y: auto;
-  background: #f9f9fb;
+  background: var(--bg);
   padding: 12px;
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -453,9 +556,111 @@ button.icon:hover { background: var(--line); color: var(--ink); }
   box-shadow: 0 20px 60px rgba(0,0,0,0.2);
 }
 .label-modal::backdrop, .prepare-dialog::backdrop, .settings-modal::backdrop { background: rgba(0,0,0,0.3); }
+
+/* fade + scale on open/close. allow-discrete + @starting-style handle the display
+   transition so the native <dialog> toggle animates instead of popping. */
+dialog {
+  opacity: 0;
+  transform: scale(0.96);
+  transition:
+    opacity 0.18s ease-out,
+    transform 0.18s cubic-bezier(0.4, 0, 0.2, 1),
+    display 0.18s allow-discrete,
+    overlay 0.18s allow-discrete;
+}
+dialog[open] { opacity: 1; transform: scale(1); }
+@starting-style {
+  dialog[open] { opacity: 0; transform: scale(0.96); }
+}
+dialog::backdrop {
+  opacity: 0;
+  transition: opacity 0.18s ease-out, display 0.18s allow-discrete, overlay 0.18s allow-discrete;
+}
+dialog[open]::backdrop { opacity: 1; }
+@starting-style {
+  dialog[open]::backdrop { opacity: 0; }
+}
 .label-modal { width: min(400px, calc(100vw - 32px)); }
 .prepare-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 64px); }
 .settings-modal { width: min(440px, calc(100vw - 32px)); }
+.setup-dialog { width: min(760px, calc(100vw - 32px)); max-width: 760px; }
+
+/* Floating assistant — bubble + non-modal panel. Reusable floating-panel primitive
+   (planned: detached robot views, compare panels). */
+.assistant-bubble {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: 52px;
+  height: 52px;
+  min-height: 52px;
+  border-radius: 50%;
+  padding: 0;
+  font-size: 22px;
+  line-height: 1;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  z-index: 20;
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+.assistant-bubble:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+}
+.assistant-panel {
+  position: fixed;
+  right: 20px;
+  bottom: 84px;
+  left: auto;
+  top: auto;
+  width: min(360px, calc(100vw - 40px));
+  max-height: min(480px, calc(100vh - 120px));
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+  overflow-y: auto;
+  transform-origin: bottom right;  /* fade/scale emerges from the bubble corner */
+}
+.settings-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.avatar-preview {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 18px;
+  color: white;
+  background: var(--ink-muted);
+  flex-shrink: 0;
+}
+.settings-profile-body { flex: 1; min-width: 0; }
+.settings-profile-body input {
+  width: 100%;
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  margin-top: 4px;
+}
+.settings-profile-body .meta { margin-top: 4px; }
+
 .settings-item {
   display: grid;
   grid-template-columns: auto 1fr;

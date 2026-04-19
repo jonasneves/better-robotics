@@ -10,17 +10,17 @@
   <script type="module" src="app.js"></script>
 </head>
 <body>
-<main>
-  <div class="page-header">
-    <h1>Better Robotics</h1>
-    <div style="display: flex; gap: 4px;">
-      <button class="icon" id="voice-btn" aria-label="Voice commands" hidden>🎤</button>
-      <button class="secondary sm" id="recovery-btn" title="USB-C serial recovery console — works when BLE is dead">Recovery</button>
-      <button class="icon" id="settings-btn" aria-label="Settings">⚙</button>
-    </div>
+<div class="app">
+<header class="topbar">
+  <h1 class="topbar-title">Better Robotics</h1>
+  <div class="topbar-spacer"></div>
+  <div class="topbar-actions">
+    <button class="icon" id="voice-btn" aria-label="Voice commands" hidden>🎤</button>
+    <button class="secondary sm" id="recovery-btn" title="USB-C serial recovery console — works when BLE is dead">Recovery</button>
+    <button class="avatar-btn" id="avatar-btn" aria-label="Profile menu" aria-haspopup="menu">?</button>
   </div>
-  <p class="lede">Pair any robot in a browser tab. No network, no accounts, no servers.</p>
-
+</header>
+<main>
   <div id="unsupported" class="unsupported" hidden>
     This browser does not support Web Bluetooth. Use Chrome, Edge, or Opera on desktop or Android.
   </div>
@@ -29,32 +29,10 @@
     Bluetooth is off — turn it on to scan for robots.
   </div>
 
-  <details id="setup-section" open>
-    <summary class="robots-heading">
-      <div class="label">Set up new hardware</div>
-    </summary>
-    <div class="setup-grid">
-      <section class="card setup-item">
-        <div class="label">Flash an ESP32</div>
-        <div class="meta">Full firmware over USB — takes a blank chip to a working robot in one click.</div>
-        <button type="button" class="help-hint" popovertarget="esp32-drivers">Do I need a driver?</button>
-        <esp-web-install-button manifest="firmware/manifest.json">
-          <button slot="activate" class="secondary">Flash firmware</button>
-          <span slot="unsupported" class="meta">Web Serial required (Chrome or Edge desktop).</span>
-          <span slot="not-allowed" class="meta">HTTPS required to flash.</span>
-        </esp-web-install-button>
-      </section>
-      <section class="card setup-item">
-        <div class="label">Customize a Pi SD card</div>
-        <div class="meta">Pi OS already on the card (via Raspberry Pi Imager)? Stage firmware, wheels, SSH key on the boot partition.</div>
-        <button class="secondary" type="button" id="prepare-open-btn">Customize card</button>
-      </section>
-    </div>
-  </details>
-
   <div class="robots-heading" id="robots-heading" hidden>
     <div class="label">Your robots</div>
     <div style="display: flex; gap: 8px;">
+      <button id="add-robot-btn" class="secondary sm">+ Add robot</button>
       <button id="connect-all-btn" class="secondary sm" hidden>Connect all</button>
       <button id="scan-btn" class="secondary sm">Scan for new</button>
     </div>
@@ -66,19 +44,28 @@
 
   <section class="card empty-state" id="empty-state" hidden>
     <div class="empty-title">No robots yet</div>
-    <div class="empty-sub">Click below to scan for a robot nearby.</div>
-    <button id="empty-scan-btn">Scan for a robot</button>
+    <div class="empty-sub">Set up a new robot or scan for one nearby.</div>
+    <div class="empty-actions">
+      <button id="empty-add-robot-btn">+ Add robot</button>
+      <button id="empty-scan-btn" class="secondary">Scan</button>
+    </div>
   </section>
 
-  <section class="card">
-    <div class="label" style="margin-bottom: 8px;">Log</div>
+  <details class="tray">
+    <summary class="label">Log</summary>
     <div class="log" id="log"></div>
-  </section>
+  </details>
 </main>
+</div><!-- .app -->
 
 <div id="esp32-drivers" class="help-popover" popover>
   <strong>ESP32-S3:</strong> no driver — native USB.<br>
   <strong>CAM-MB with CP2102:</strong> install the <a href="https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers">Silicon Labs driver</a> once, then allow it in System Settings → Privacy &amp; Security.
+</div>
+
+<div id="avatar-menu" class="menu" popover="manual">
+  <div class="menu-header" id="avatar-menu-name">Not set</div>
+  <button class="menu-item" id="menu-settings">Settings</button>
 </div>
 
 <div id="robot-menu" class="menu" popover="manual">
@@ -96,6 +83,14 @@
     <div class="label">Settings</div>
     <button class="icon" id="settings-close" aria-label="Close">×</button>
   </div>
+  <section class="settings-profile">
+    <div class="avatar-preview" id="avatar-preview">?</div>
+    <div class="settings-profile-body">
+      <label for="setting-name" class="settings-title">Your name</label>
+      <input type="text" id="setting-name" placeholder="e.g. Jonas" maxlength="40" autocomplete="off">
+      <div class="meta">Stored in this browser only. Used for robot labels and logs.</div>
+    </div>
+  </section>
   <div class="settings-item">
     <input type="checkbox" id="setting-passive-scan">
     <label for="setting-passive-scan">
@@ -207,6 +202,40 @@
     <button id="prep-go-btn" disabled>Prepare card</button>
   </div>
   <div class="progress-log" id="prep-progress" hidden style="margin-top: 16px;"></div>
+</dialog>
+
+<dialog id="setup-dialog" class="prepare-dialog setup-dialog">
+  <div class="modal-header">
+    <div class="label">Add a robot</div>
+    <button class="icon" id="setup-close" aria-label="Close">×</button>
+  </div>
+  <p class="meta" style="margin: 0 0 16px;">Pick your platform.</p>
+  <div class="setup-grid">
+    <section class="card setup-item">
+      <div class="label">Flash an ESP32</div>
+      <div class="meta">Full firmware over USB — takes a blank chip to a working robot in one click.</div>
+      <button type="button" class="help-hint" popovertarget="esp32-drivers">Do I need a driver?</button>
+      <esp-web-install-button manifest="firmware/manifest.json">
+        <button slot="activate" class="secondary">Flash firmware</button>
+        <span slot="unsupported" class="meta">Web Serial required (Chrome or Edge desktop).</span>
+        <span slot="not-allowed" class="meta">HTTPS required to flash.</span>
+      </esp-web-install-button>
+    </section>
+    <section class="card setup-item">
+      <div class="label">Customize a Pi SD card</div>
+      <div class="meta">Pi OS already on the card (via Raspberry Pi Imager)? Stage firmware, wheels, SSH key on the boot partition.</div>
+      <button class="secondary" type="button" id="prepare-open-btn">Customize card</button>
+    </section>
+  </div>
+</dialog>
+
+<button id="assistant-bubble" class="assistant-bubble" aria-label="Open assistant">🤖</button>
+<dialog id="assistant-panel" class="assistant-panel">
+  <div class="modal-header">
+    <div class="label">Assistant</div>
+    <button class="icon" id="assistant-close" aria-label="Close">×</button>
+  </div>
+  <p class="meta" style="margin: 0;">Hi 👋 I'm here to help you build and prototype robots. (Content coming soon.)</p>
 </dialog>
 </body>
 </html>
