@@ -13,7 +13,7 @@ import {
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
 import { RUNTIMES } from "./capabilities/runtime/index.js";
 import { updateFirmware, updateFromFile } from "./capabilities/ota.js";
-import { restartService, rebootRobot } from "./capabilities/ops.js";
+import { restartService, rebootRobot } from "./capabilities/runtime/command.js";
 import { initRecovery, openRecoveryDialog } from "./recovery.js";
 import { initPinout, openPinoutDialog } from "./pinout.js";
 import { initGamepad } from "./gamepad.js";
