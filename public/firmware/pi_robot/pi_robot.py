@@ -361,7 +361,19 @@ def _set_ota_status(st: str, n: int = 0, total: int = 0, err: str | None = None)
 # Destinations a bundle-OTA may write to. Anything outside is rejected so
 # a malicious manifest can't overwrite /etc/passwd or similar. Computed from
 # $HOME so OTAs work for any service-user name (pi, robot, ...), not just pi.
-_OTA_HOME = os.path.expanduser("~")
+def _derive_install_home() -> str:
+    """pi-robot.service runs as root (bless needs it), so `~` would expand to
+    /root — wrong for OTA, which must target the actual install location.
+    Derive the home from __file__ instead: convention is
+    <HOME>/better-robotics/firmware/pi_robot/pi_robot.py."""
+    parts = os.path.abspath(__file__).split(os.sep)
+    try:
+        idx = parts.index("better-robotics")
+        return os.sep.join(parts[:idx]) or "/"
+    except ValueError:
+        return os.path.expanduser("~")
+
+_OTA_HOME = _derive_install_home()
 _OTA_USER = os.path.basename(_OTA_HOME) or "root"
 _OTA_ALLOWED_DEST_PREFIXES = (
     f"{_OTA_HOME}/better-robotics/firmware/",
