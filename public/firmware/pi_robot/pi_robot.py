@@ -28,7 +28,7 @@ from bless import (
     GATTCharacteristicProperties,
     GATTAttributePermissions,
 )
-from gpiozero import LED
+from gpiozero import LED, Motor
 
 # UUIDs — must match firmware/esp32_robot/esp32_robot.ino exactly.
 SERVICE_UUID          = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d91"
@@ -136,7 +136,15 @@ _config = _load_config()
 LED_ENABLED    = bool(_config.get("led_enabled", True))
 LED_PIN        = int(_config.get("led_pin", 17))
 MOTORS_ENABLED = bool(_config.get("motors_enabled", True))
-MOTORS_PINS    = _config.get("motors_pins", {"left": 18, "right": 19})
+# motors_pins shape is H-bridge-agnostic: {left: {in1, in2}, right: {in1, in2}}.
+# Direction = sign of commanded value; magnitude = PWM duty on whichever pin
+# is driven. Works with L298N, DRV8833, TB6612, and similar 2-pin-per-motor
+# direction-controlled drivers. Defaults map to a common L298N wiring used
+# by the reference build.
+MOTORS_PINS    = _config.get("motors_pins", {
+    "left":  {"in1": 17, "in2": 27},
+    "right": {"in1": 23, "in2": 24},
+})
 CAMERA_ENABLED = _config.get("camera_enabled", "auto")  # "auto" | True | False
 OTA_OP_ABORT = 0x00
 OTA_OP_BEGIN = 0x01
@@ -180,6 +188,22 @@ logging.basicConfig(format="%(asctime)s %(message)s", level=logging.INFO)
 log = logging.getLogger("pi_robot")
 
 led = LED(LED_PIN) if LED_ENABLED else None
+
+# gpiozero's Motor(forward, backward) handles 2-pin-direction H-bridges
+# (L298N, DRV8833, TB6612 in in/in mode). motor.forward(0..1) / backward(0..1)
+# drive one pin HIGH (via PWM for magnitude) and the other LOW. motor.stop()
+# drives both LOW (coast) — matches the watchdog's safe default.
+_motor_left_drv: Motor | None = None
+_motor_right_drv: Motor | None = None
+if MOTORS_ENABLED:
+    try:
+        _motor_left_drv  = Motor(forward=MOTORS_PINS["left"]["in1"],
+                                 backward=MOTORS_PINS["left"]["in2"])
+        _motor_right_drv = Motor(forward=MOTORS_PINS["right"]["in1"],
+                                 backward=MOTORS_PINS["right"]["in2"])
+    except Exception as e:
+        log.warning("motor init failed: %s", e)
+        _motor_left_drv = _motor_right_drv = None
 _led_state = 0
 _server: BlessServer | None = None
 _loop: asyncio.AbstractEventLoop | None = None
@@ -436,11 +460,26 @@ def _ota_handle_write(data: bytearray) -> None:
         _set_ota_status("failed", err=f"unknown op 0x{op:02x}")
 
 
+def _drive(motor: Motor | None, value: int) -> None:
+    """Map signed [-100, 100] → gpiozero Motor. Sign selects direction;
+    magnitude is PWM duty. Zero = stop (both pins low = coast). Gpiozero
+    handles the PWM on whichever in-pin corresponds to the direction."""
+    if motor is None:
+        return
+    speed = max(-100, min(100, value)) / 100.0
+    if speed > 0:
+        motor.forward(speed)
+    elif speed < 0:
+        motor.backward(-speed)
+    else:
+        motor.stop()
+
+
 def _apply_motors(left: int, right: int) -> None:
-    """Stub motor driver. Wire to your H-bridge/PWM here (gpiozero.Motor,
-    RPi.GPIO.PWM, etc). Current behavior: update state + notify dashboard."""
     global _motor_left, _motor_right
     _motor_left, _motor_right = left, right
+    _drive(_motor_left_drv, left)
+    _drive(_motor_right_drv, right)
     _publish(MOTOR_CHAR_UUID, bytearray([left & 0xff, right & 0xff]))
     log.info("motors → (%+d, %+d)", left, right)
 

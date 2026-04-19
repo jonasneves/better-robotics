@@ -39,6 +39,19 @@ const GPIO_TO_PHYS = new Map(
       .map(([phys, lbl]) => [parseInt(lbl.slice(4), 10), phys]),
 );
 
+// Flatten a pins-dict of any depth to [["a b c", gpio], …]. Supports both
+// flat {role: gpio} and nested {left: {in1: 17, in2: 27}, …} shapes so the
+// map renders regardless of how a capability organizes its pin vocabulary.
+function flattenPins(obj, prefix = "") {
+  const out = [];
+  for (const [k, v] of Object.entries(obj || {})) {
+    const label = prefix ? `${prefix} ${k}` : k;
+    if (typeof v === "number") out.push([label, v]);
+    else if (v && typeof v === "object") out.push(...flattenPins(v, label));
+  }
+  return out;
+}
+
 // Walk entry.capSchema and return { phys: {cap, role} } for claimed pins.
 function claimsFromEntry(entry) {
   const claims = {};
@@ -47,11 +60,9 @@ function claimsFromEntry(entry) {
       const phys = GPIO_TO_PHYS.get(cap.pin);
       if (phys) claims[phys] = { cap: cap.name, role: cap.pin_mode || cap.type };
     }
-    if (cap.pins) {
-      for (const [role, gpio] of Object.entries(cap.pins)) {
-        const phys = GPIO_TO_PHYS.get(gpio);
-        if (phys) claims[phys] = { cap: cap.name, role };
-      }
+    for (const [role, gpio] of flattenPins(cap.pins)) {
+      const phys = GPIO_TO_PHYS.get(gpio);
+      if (phys) claims[phys] = { cap: cap.name, role };
     }
   }
   return claims;
