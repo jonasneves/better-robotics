@@ -156,9 +156,9 @@ export async function initAuthUI() {
   });
 
   $("key-download").addEventListener("click", async () => {
-    // Private — OpenSSH format, mode 600 expected when placed in ~/.ssh/.
+    // OpenSSH format; place in ~/.ssh/id_better_robotics with mode 600.
+    // Public key is available via the Copy-public button next to it, so we
+    // skip downloading the .pub — avoids Chrome's multi-file-download prompt.
     downloadBlob("id_better_robotics", await exportOpenSshPrivateKey());
-    // Public — companion, safe to share. Same comment so ssh-add pairs them.
-    downloadBlob("id_better_robotics.pub", pub + "\n");
   });
 }
