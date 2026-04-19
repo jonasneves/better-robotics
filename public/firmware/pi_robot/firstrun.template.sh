@@ -44,7 +44,12 @@ note hostname_set "$HOSTNAME"
 if ! id -u "$USER_NAME" >/dev/null 2>&1; then
     adduser --disabled-password --gecos "" "$USER_NAME"
 fi
-echo "${USER_NAME}:${USER_PASS}" | chpasswd
+# Empty password → stays disabled (SSH-key-only login, no sudo without a
+# password set later via `passwd`). chpasswd on an empty string would leave
+# the account with a blank password, which is worse than no password at all.
+if [ -n "$USER_PASS" ]; then
+    echo "${USER_NAME}:${USER_PASS}" | chpasswd
+fi
 # Pi OS imager's pre-built firstboot can leave the user with /usr/sbin/nologin
 # as shell — login then prints the banner and "This account is currently not
 # available." Force /bin/bash explicitly so the recovery console is usable.
@@ -54,8 +59,8 @@ for g in sudo adm dialout cdrom audio video plugdev games users input render net
 done
 note user_created "$USER_NAME"
 
-# When SSH_KEY is empty, the Pi has no external shell-recovery path —
-# anything beyond BLE's reach means re-imaging the card.
+# SSH_KEY is the textarea content, which the dashboard pre-fills with the
+# dashboard's own pubkey. Empty = no SSH authorization = BLE-only recovery.
 if [ -n "$SSH_KEY" ]; then
   install -d -m 700 -o "$USER_NAME" -g "$USER_NAME" "/home/$USER_NAME/.ssh"
   printf '%s\n' "$SSH_KEY" > "/home/$USER_NAME/.ssh/authorized_keys"
@@ -66,6 +71,14 @@ if [ -n "$SSH_KEY" ]; then
   note ssh_enabled
 else
   note ssh_skipped
+fi
+
+# Dashboard.pub is independent of authorized_keys — staged for the Phase 3
+# BLE-auth consumer (pi-robot reads this dir to accept signed challenges).
+if [ -f "$BOOTFS/dashboard.pub" ]; then
+  install -d -m 755 "$BOOTFS/pi-robot-auth"
+  install -m 644 "$BOOTFS/dashboard.pub" "$BOOTFS/pi-robot-auth/dashboard.pub"
+  note dashboard_key_staged
 fi
 
 # USB composite gadget (ECM ethernet + ACM serial). Independent of
@@ -165,7 +178,8 @@ BTEOF
     } > "$BOOTFS/bluetooth-diag.log" 2>&1
     note bluetooth_experimental_enabled
 
-    install -m 644 "$DEST/pi-robot.service" /etc/systemd/system/pi-robot.service
+    sed "s|__HOME__|/home/$USER_NAME|g" "$DEST/pi-robot.service" > /etc/systemd/system/pi-robot.service
+    chmod 644 /etc/systemd/system/pi-robot.service
     systemctl daemon-reload
     systemctl enable pi-robot.service
     note service_enabled

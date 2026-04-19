@@ -7,8 +7,8 @@ Requires=bluetooth.service
 Type=simple
 # Root is required to register BLE advertisements via BlueZ on Pi OS.
 User=root
-WorkingDirectory=/home/pi/better-robotics/firmware/pi_robot
-ExecStart=/home/pi/better-robotics/firmware/pi_robot/.venv/bin/python pi_robot.py
+WorkingDirectory=__HOME__/better-robotics/firmware/pi_robot
+ExecStart=__HOME__/better-robotics/firmware/pi_robot/.venv/bin/python pi_robot.py
 Restart=always
 RestartSec=3
 

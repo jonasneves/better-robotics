@@ -302,17 +302,25 @@ def _set_ota_status(st: str, n: int = 0, total: int = 0, err: str | None = None)
 
 
 # Destinations a bundle-OTA may write to. Anything outside is rejected so
-# a malicious manifest can't overwrite /etc/passwd or similar.
+# a malicious manifest can't overwrite /etc/passwd or similar. Computed from
+# $HOME so OTAs work for any service-user name (pi, robot, ...), not just pi.
+_OTA_HOME = os.path.expanduser("~")
 _OTA_ALLOWED_DEST_PREFIXES = (
-    "/home/pi/better-robotics/firmware/",
+    f"{_OTA_HOME}/better-robotics/firmware/",
     "/etc/systemd/system/",
     "/usr/local/bin/",
     "/boot/firmware/",
 )
 
+# Manifest authors write `$HOME/...` and `__HOME__` in paths / file contents;
+# both expand to the service user's home at apply time. Keeps the manifest
+# and shipped files (e.g. pi-robot.service) user-name-agnostic.
+def _ota_expand(s: str) -> str:
+    return s.replace("$HOME", _OTA_HOME).replace("__HOME__", _OTA_HOME)
+
 
 def _ota_dest_allowed(dest: str) -> bool:
-    norm = os.path.realpath(dest)
+    norm = os.path.realpath(_ota_expand(dest))
     return any(norm.startswith(p) for p in _OTA_ALLOWED_DEST_PREFIXES)
 
 
@@ -333,7 +341,7 @@ async def _apply_bundle(bundle: dict) -> None:
     staged: list[tuple[str, str, int]] = []  # (dest, tmp, mode)
     for spec in files:
         src  = spec.get("src")
-        dest = spec.get("dest")
+        dest = _ota_expand(spec.get("dest") or "")
         mode = int(spec.get("mode", "644"), 8)
         if not src or not dest:
             _set_ota_status("failed", err=f"bad file spec: {spec}")
@@ -350,6 +358,10 @@ async def _apply_bundle(bundle: dict) -> None:
         except Exception as e:
             _set_ota_status("failed", err=f"bad b64 for {src}: {e}"[:120])
             return
+        # __HOME__ placeholder in text files (e.g. pi-robot.service) — same
+        # substitution firstrun.template.sh does, so the same unit file works
+        # for any service-user name without a repo-side template step.
+        content = content.replace(b"__HOME__", _OTA_HOME.encode())
         if dest.endswith(".py"):
             try:
                 ast.parse(content)

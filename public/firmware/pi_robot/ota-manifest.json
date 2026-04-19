@@ -1,7 +1,7 @@
 {
   "version": "1",
   "files": [
-    { "src": "pi_robot.py", "dest": "/home/pi/better-robotics/firmware/pi_robot/pi_robot.py", "mode": "644" },
+    { "src": "pi_robot.py", "dest": "$HOME/better-robotics/firmware/pi_robot/pi_robot.py", "mode": "644" },
     { "src": "pi-robot.service", "dest": "/etc/systemd/system/pi-robot.service", "mode": "644" },
     { "src": "usb-gadget-setup.sh", "dest": "/usr/local/bin/usb-gadget-setup.sh", "mode": "755" },
     { "src": "usb-gadget.service", "dest": "/etc/systemd/system/usb-gadget.service", "mode": "644" }
