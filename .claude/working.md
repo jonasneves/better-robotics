@@ -58,7 +58,14 @@ Other invariants:
 - **Update `docs/hardware.md` to call out ESP32-C6** as the recommended board for new non-camera BLE-first builds. S3 is fine but C6 has native BLE 5.3 + more RAM headroom and matches the "BLE is the control plane" framing better than S3's dual-radio emphasis.
 - **Treat `getDevices()` persistence fallback as load-bearing, not transitional.** Web Bluetooth's `getDevices()` has stayed flag-gated for years with no movement. The localStorage+filter-by-name path in `loadPaired()` is the primary paired-device persistence story; don't plan to retire it.
 
-### 6. LLM-orchestrated dashboard (direction, not yet in flight)
+### 6. In-browser SD-card flasher (backlog, ~2 days when it earns a slot)
+- Kill the last "install something" step in the user journey: Raspberry Pi Imager. Replace with a browser flow that claims the USB SD-card reader via WebUSB, issues SCSI WRITE(10) commands to stream Pi OS onto the card, verifies with SHA-256 readback, then hands off to the existing Customize-card flow.
+- **Precedent, not standardized:** `balena-sdcard-web` and a couple of educational-kit vendors ship this. Official `rpi-imager` has no web version.
+- **Friction caveat on macOS:** OS auto-mounts the card; user has to `diskutil unmountDisk /dev/diskN` before the browser can claim the USB interface. Doable but needs explicit guidance in the UI. ChromeOS handles this cleaner.
+- **Scope:** ~1.5–2 days. Stage 1: WebUSB device claim + single-partition raw write + verify. Stage 2: progress UI + resume-on-disconnect + SHA-256 readback.
+- **Worth it when:** 3+ people are setting up Pis from scratch. Until then, `open -a "Raspberry Pi Imager"` is one shell command.
+
+### 7. LLM-orchestrated dashboard (direction, not yet in flight)
 - Direction confirmed: eventually an LLM (webmcp-style) drives pairing, driving, OTA, etc. through a tool interface. Per-card render ships today specifically to set up this future — one state change mutates one card, a `get_robot_state(id)` tool returns one entry, a state-push channel notifies by entry-id rather than whole-page snapshots.
 - **Patterns worth stealing from `~/Github/organizations/hatch` when we get here:**
   1. Domain-scoped tool adapters with per-context system prompts (one adapter per "mode" — pairing, debugging, classroom demo).
