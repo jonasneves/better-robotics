@@ -6,11 +6,8 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
 #include <Preferences.h>
 #include <Update.h>
-#include <mbedtls/sha256.h>
 #include "esp_camera.h"
 
 // AI-Thinker ESP32-CAM pin map. Matches the OV2640/OV3660/OV5640 socket on
@@ -54,11 +51,11 @@ const unsigned long MOTOR_WATCHDOG_MS = 500;
 //       0x01 [size:u32 BE]   begin-stream — reset, expect `size` bytes over BLE
 //       0x02 [payload]       chunk — append to flash
 //       0x03                 commit — finalize OTA + restart
-//       0x04 [json]          fetch-url — payload is {"url":...,"size":N,"sha256":...}.
-//                            ESP32 downloads the binary over WiFi (our own data
-//                            plane once onboarded), verifies size + sha256, and
-//                            commits. 20-60x faster than BLE streaming; dashboard
-//                            prefers this path when wifi-status is joined.
+//       0x04 [json]          fetch-url — accepted wire-wise, replies "failed"
+//                            in this build. HTTPClient + NetworkClientSecure
+//                            + mbedTLS were cut to fit IRAM once camera libs
+//                            landed; dashboard's grace-window logic then falls
+//                            back to BLE-stream OTA (slower, same result).
 //   ota-status (read+notify) — UTF-8 JSON: {"st":...,"n":...,"total":...,"err":...}
 //   fw-info    (read)     — UTF-8 JSON: {"type":"esp32","url":"firmware/bins/esp32_robot.bin"}
 // The dashboard reads fw-info to know where to fetch the update binary from.
@@ -328,152 +325,6 @@ static void publishOta(const char* st, size_t n = 0, size_t total = 0, const cha
   Serial.printf("ota-status → %s\n", payload.c_str());
 }
 
-static bool parseHex32(const char* hex, size_t len, uint8_t out[32]) {
-  if (len != 64) return false;
-  for (int i = 0; i < 32; i++) {
-    int hi = hex[2*i], lo = hex[2*i + 1];
-    auto nib = [](int c) -> int {
-      if (c >= '0' && c <= '9') return c - '0';
-      if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-      if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-      return -1;
-    };
-    int h = nib(hi), l = nib(lo);
-    if (h < 0 || l < 0) return false;
-    out[i] = (h << 4) | l;
-  }
-  return true;
-}
-
-static String extractJsonString(const String& doc, const char* key) {
-  String needle = "\""; needle += key; needle += "\"";
-  int k = doc.indexOf(needle);
-  if (k < 0) return "";
-  int colon = doc.indexOf(':', k);
-  if (colon < 0) return "";
-  int q1 = doc.indexOf('"', colon);
-  if (q1 < 0) return "";
-  int q2 = doc.indexOf('"', q1 + 1);
-  while (q2 > 0 && doc[q2 - 1] == '\\') q2 = doc.indexOf('"', q2 + 1);
-  if (q2 < 0) return "";
-  return doc.substring(q1 + 1, q2);
-}
-
-static long extractJsonNumber(const String& doc, const char* key) {
-  String needle = "\""; needle += key; needle += "\"";
-  int k = doc.indexOf(needle);
-  if (k < 0) return -1;
-  int colon = doc.indexOf(':', k);
-  if (colon < 0) return -1;
-  int p = colon + 1;
-  while (p < (int)doc.length() && (doc[p] == ' ' || doc[p] == '\t')) p++;
-  long n = 0;
-  bool any = false;
-  while (p < (int)doc.length() && doc[p] >= '0' && doc[p] <= '9') {
-    n = n * 10 + (doc[p] - '0');
-    p++;
-    any = true;
-  }
-  return any ? n : -1;
-}
-
-static void otaFetchUrl(const String& url, size_t expectedSize, const uint8_t expectedHash[32]) {
-  if (WiFi.status() != WL_CONNECTED) {
-    publishOta("failed", 0, expectedSize, "wifi not connected");
-    return;
-  }
-  size_t heapBefore = ESP.getFreeHeap();
-  Serial.printf("OTA fetch: free heap = %u\n", heapBefore);
-  NetworkClientSecure client;
-  client.setInsecure();  // integrity is guaranteed by the sha256 check below
-  HTTPClient http;
-  http.setTimeout(20000);
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if (!http.begin(client, url)) {
-    publishOta("failed", 0, expectedSize, "http.begin failed");
-    return;
-  }
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    http.end();
-    String err = "http ";
-    err += code;
-    err += " heap=";
-    err += (int)heapBefore;
-    err += "/";
-    err += (int)ESP.getFreeHeap();
-    publishOta("failed", 0, expectedSize, err.c_str());
-    return;
-  }
-  if (!Update.begin(expectedSize)) {
-    http.end();
-    publishOta("failed", 0, expectedSize, "Update.begin failed");
-    return;
-  }
-
-  mbedtls_sha256_context sha;
-  mbedtls_sha256_init(&sha);
-  mbedtls_sha256_starts(&sha, 0);
-
-  WiFiClient* stream = http.getStreamPtr();
-  uint8_t buf[2048];
-  size_t total = 0;
-  size_t lastReported = 0;
-  unsigned long lastProgress = millis();
-  unsigned long idleStart = millis();
-  while (total < expectedSize) {
-    size_t toRead = sizeof(buf);
-    if (expectedSize - total < toRead) toRead = expectedSize - total;
-    int got = stream->readBytes(buf, toRead);
-    if (got == 0) {
-      if (millis() - idleStart > 15000) {
-        Update.abort();
-        mbedtls_sha256_free(&sha);
-        http.end();
-        publishOta("failed", total, expectedSize, "stream stalled");
-        return;
-      }
-      delay(10);
-      continue;
-    }
-    idleStart = millis();
-    size_t written = Update.write(buf, got);
-    if (written != (size_t)got) {
-      Update.abort();
-      mbedtls_sha256_free(&sha);
-      http.end();
-      publishOta("failed", total, expectedSize, "Update.write short");
-      return;
-    }
-    mbedtls_sha256_update(&sha, buf, got);
-    total += got;
-    // Rate-limit status notifies — the BLE link chokes under one-per-chunk.
-    if (total - lastReported > 32768 || millis() - lastProgress > 250) {
-      publishOta("receiving", total, expectedSize);
-      lastReported = total;
-      lastProgress = millis();
-    }
-  }
-  http.end();
-
-  uint8_t actualHash[32];
-  mbedtls_sha256_finish(&sha, actualHash);
-  mbedtls_sha256_free(&sha);
-  if (memcmp(actualHash, expectedHash, 32) != 0) {
-    Update.abort();
-    publishOta("failed", total, expectedSize, "sha256 mismatch");
-    return;
-  }
-
-  publishOta("committing", total, expectedSize);
-  if (!Update.end(true)) {
-    publishOta("failed", total, expectedSize, "Update.end failed");
-    return;
-  }
-  publishOta("done", total, expectedSize);
-  otaRestartPending = true;  // loop() restarts after the current callback returns
-}
-
 class OtaDataCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* ch) override {
     String v = ch->getValue();
@@ -523,17 +374,11 @@ class OtaDataCallbacks : public BLECharacteristicCallbacks {
       publishOta("done", otaReceived, otaExpected);
       otaRestartPending = true;  // loop() restarts after onWrite returns
     } else if (op == 0x04) {
-      String payload = v.substring(1);
-      String url = extractJsonString(payload, "url");
-      long size = extractJsonNumber(payload, "size");
-      String hashHex = extractJsonString(payload, "sha256");
-      uint8_t expectedHash[32];
-      if (url.length() == 0 || size <= 0 || !parseHex32(hashHex.c_str(), hashHex.length(), expectedHash)) {
-        publishOta("failed", 0, 0, "bad fetch payload");
-        return;
-      }
-      publishOta("fetching", 0, (size_t)size);
-      otaFetchUrl(url, (size_t)size, expectedHash);
+      // URL-trigger isn't in this build — HTTPClient + NetworkClientSecure +
+      // mbedTLS were the cheapest IRAM cuts once camera libs joined, and BLE-
+      // stream is the correct fallback. Replying "failed" tells the dashboard
+      // to fall back automatically (see ota.js grace-window logic).
+      publishOta("failed", 0, 0, "url-trigger unavailable in camera build");
     }
   }
 };
