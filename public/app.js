@@ -186,6 +186,10 @@ async function connect(id) {
     }
 
     entry.runtimeCaps = [];
+    const schemaLog = (entry.capSchema || []).map(c =>
+      RUNTIMES[c.type] ? c.name : `${c.name}(no runtime for ${c.type})`
+    ).join(", ");
+    logFor(entry, `caps: ${schemaLog || "none declared"}`);
     for (const capSchema of entry.capSchema || []) {
       const make = RUNTIMES[capSchema.type];
       if (!make) continue;
