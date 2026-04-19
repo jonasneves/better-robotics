@@ -14,6 +14,7 @@ Run:
 import ast
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -76,9 +77,9 @@ def _build_caps() -> list:
     return caps
 
 
-# FW_INFO is constructed further down, after pi-robot.conf has loaded —
-# _build_caps() reads LED_ENABLED/MOTORS_ENABLED/CAMERA_ENABLED which come
-# from the config. Don't move this back up above config loading.
+# fw-info is computed per-read via _fw_info_snapshot() (defined below the
+# config block). Not a module-level constant because `authorized` mutates
+# when the enroll-key op adds a new dashboard pubkey.
 
 # Motor watchdog: every write resets the timer; silence reverts to (0, 0).
 # Safe default on disconnect — no redundant channel required.
@@ -133,11 +134,51 @@ MOTORS_PINS    = _config.get("motors_pins", {
 })
 CAMERA_ENABLED = _config.get("camera_enabled", "auto")  # "auto" | True | False
 
-FW_INFO = {
-    "type": "pi",
-    "bundle_url": "firmware/pi_robot/ota-manifest.json",
-    "caps": _build_caps(),
-}
+# Dashboards the robot trusts. Each .pub is one line:
+#     ssh-ed25519 <base64> [comment]
+# Written by firstrun from /boot/firmware/dashboard.pub, and appended by the
+# enroll-key ops verb. Fingerprint format matches auth.js (SHA256:<b64>).
+AUTH_DIR = "/boot/firmware/pi-robot-auth"
+
+def _ssh_fingerprint(pub_line: str) -> str:
+    parts = pub_line.strip().split()
+    if len(parts) < 2 or parts[0] != "ssh-ed25519":
+        raise ValueError("bad pubkey line")
+    wire = base64.b64decode(parts[1])
+    h = hashlib.sha256(wire).digest()
+    return "SHA256:" + base64.b64encode(h).rstrip(b"=").decode("ascii")
+
+def _load_authorized_pubs() -> list[dict]:
+    out = []
+    try:
+        names = sorted(os.listdir(AUTH_DIR))
+    except FileNotFoundError:
+        return out
+    for name in names:
+        if not name.endswith(".pub"):
+            continue
+        path = os.path.join(AUTH_DIR, name)
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    out.append({"line": line, "fingerprint": _ssh_fingerprint(line), "path": path})
+        except Exception as e:
+            log.warning("auth: skipping %s: %s", path, e)
+    return out
+
+# Populated in main() after the logger is configured.
+_authorized_pubs: list[dict] = []
+
+def _fw_info_snapshot() -> dict:
+    return {
+        "type": "pi",
+        "bundle_url": "firmware/pi_robot/ota-manifest.json",
+        "caps": _build_caps(),
+        "authorized": [p["fingerprint"] for p in _authorized_pubs],
+    }
 
 OTA_OP_ABORT = 0x00
 OTA_OP_BEGIN = 0x01
@@ -646,13 +687,41 @@ async def _delayed_system_action(kind: str) -> None:
         subprocess.Popen(["systemctl", "restart", "pi-robot.service"])
 
 
+def _enroll_key(pubkey_line: str) -> tuple[bool, str]:
+    """Add a dashboard pubkey to the trusted list. Idempotent — already-known
+    fingerprints return success without a rewrite. File name encodes the
+    fingerprint so it's findable by hand if needed."""
+    global _authorized_pubs
+    try:
+        fp = _ssh_fingerprint(pubkey_line)
+    except ValueError as e:
+        return False, str(e)
+    if any(p["fingerprint"] == fp for p in _authorized_pubs):
+        return True, f"already enrolled ({fp})"
+    # Fingerprint → filename: b64 has '+' '/' '='; translate to filesystem-safe.
+    slug = fp.replace("SHA256:", "").replace("/", "_").replace("+", "-").rstrip("=")
+    os.makedirs(AUTH_DIR, exist_ok=True)
+    path = os.path.join(AUTH_DIR, f"{slug}.pub")
+    with open(path, "w") as f:
+        f.write(pubkey_line.strip() + "\n")
+    os.chmod(path, 0o644)
+    _authorized_pubs.append({"line": pubkey_line.strip(), "fingerprint": fp, "path": path})
+    # Re-publish fw-info char value so a subsequent dashboard re-read reflects
+    # the new authorized list without needing a reconnect.
+    _publish(FW_INFO_CHAR_UUID, _json_bytes(_fw_info_snapshot()))
+    return True, fp
+
+
 def _ops_handle_write(data: bytearray) -> None:
     """Single-write JSON command channel. Message: {"op": "...", "args":{}}.
     Ops:
       restart-service — systemctl restart pi-robot.service (BLE drops).
       reboot          — systemctl reboot (BLE drops for ~30-60 s).
       install-pkg     — args.name: "camera" → run _cam_install; progress
-                        streams via camera-status."""
+                        streams via camera-status.
+      enroll-key      — args.pubkey: "ssh-ed25519 BASE64 [comment]" → added
+                        to the trusted list, written to /boot/firmware/pi-
+                        robot-auth/<fp-slug>.pub."""
     try:
         msg = json.loads(bytes(data).decode("utf-8"))
     except Exception as e:
@@ -674,6 +743,15 @@ def _ops_handle_write(data: bytearray) -> None:
             _schedule(_cam_install())
         else:
             log.warning("ops: unknown package %r", name)
+    elif op == "enroll-key":
+        pubkey = args.get("pubkey") or ""
+        ok, detail = _enroll_key(pubkey)
+        if ok:
+            log.info("ops: enrolled %s", detail)
+            _set_robot_status("ready", f"enrolled {detail}")
+        else:
+            log.warning("ops: enroll-key failed: %s", detail)
+            _set_robot_status("ready", f"enroll failed: {detail}")
     else:
         log.warning("ops: unknown op %r", op)
 
@@ -845,7 +923,7 @@ def on_read(characteristic: BlessGATTCharacteristic, **_) -> bytearray:
     if uuid == OTA_STATUS_CHAR_UUID:
         return _json_bytes(_ota_status)
     if uuid == FW_INFO_CHAR_UUID:
-        return _json_bytes(FW_INFO)
+        return _json_bytes(_fw_info_snapshot())
     if uuid == ROBOT_STATUS_CHAR_UUID:
         return _json_bytes(_robot_status)
     if uuid == MOTOR_CHAR_UUID:
@@ -912,9 +990,12 @@ def _init_wifi_radio() -> None:
 
 
 async def main() -> None:
-    global _server, _loop
+    global _server, _loop, _authorized_pubs
     _loop = asyncio.get_running_loop()
     _init_wifi_radio()
+    _authorized_pubs = _load_authorized_pubs()
+    log.info("auth: %d authorized dashboard(s): %s",
+             len(_authorized_pubs), [p["fingerprint"] for p in _authorized_pubs])
     name = device_name()
     log.info("Starting %s", name)
 
@@ -965,7 +1046,7 @@ async def main() -> None:
     await _server.add_new_characteristic(
         SERVICE_UUID, FW_INFO_CHAR_UUID,
         GATTCharacteristicProperties.read,
-        _json_bytes(FW_INFO),
+        _json_bytes(_fw_info_snapshot()),
         GATTAttributePermissions.readable,
     )
     if MOTORS_ENABLED:
