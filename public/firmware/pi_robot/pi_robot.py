@@ -22,6 +22,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import time
 
 # version.py is stamped by Makefile / CI (publish-pi-firmware) with the short
 # SHA of the commit that built this firmware. Missing on hand-edited dev
@@ -254,6 +255,8 @@ _wifi_scan: list[dict] = []
 _ota_status: dict = {"st": "idle", "n": 0}
 _ota_buffer: bytearray = bytearray()
 _ota_size: int = 0
+_ota_last_reported_n: int = 0
+_ota_last_reported_at: float = 0.0
 _motor_left: int = 0
 _motor_right: int = 0
 _motor_last_write_at: float = 0.0
@@ -528,7 +531,7 @@ async def _ota_commit() -> None:
 
 
 def _ota_handle_write(data: bytearray) -> None:
-    global _ota_buffer, _ota_size
+    global _ota_buffer, _ota_size, _ota_last_reported_n, _ota_last_reported_at
     if not data:
         return
     op = data[0]
@@ -543,10 +546,21 @@ def _ota_handle_write(data: bytearray) -> None:
             return
         _ota_size = int.from_bytes(bytes(data[1:5]), "big")
         _ota_buffer = bytearray()
+        # Reset rate-limit window so first chunk notifies immediately.
+        _ota_last_reported_n = 0
+        _ota_last_reported_at = 0.0
         _set_ota_status("receiving", n=0, total=_ota_size)
     elif op == OTA_OP_CHUNK:
         _ota_buffer.extend(data[1:])
-        _set_ota_status("receiving", n=len(_ota_buffer), total=_ota_size)
+        # Rate-limit progress notifies: ~9000 chunks/bundle would saturate BLE.
+        # Publish only every 32 KB or 250 ms, whichever comes first.
+        now = time.monotonic()
+        n = len(_ota_buffer)
+        if (n - _ota_last_reported_n >= 32768
+                or now - _ota_last_reported_at >= 0.25):
+            _ota_last_reported_n = n
+            _ota_last_reported_at = now
+            _set_ota_status("receiving", n=n, total=_ota_size)
     elif op == OTA_OP_COMMIT:
         _set_ota_status("committing", n=len(_ota_buffer), total=_ota_size)
         _schedule(_ota_commit())
