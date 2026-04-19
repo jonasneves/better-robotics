@@ -94,6 +94,22 @@ if [ -f "$STAGED/usb-gadget.service" ]; then
 fi
 systemctl enable serial-getty@ttyGS0.service
 
+# Auto-login on the USB serial console as $USER_NAME — physical USB access
+# is already a full-trust boundary (same person could reseat the SD card),
+# and with password-optional provisioning the classic login prompt often
+# has no password to accept. Matches Raspberry Pi OS's own pattern for
+# serial consoles on older images.
+mkdir -p /etc/systemd/system/serial-getty@ttyGS0.service.d
+# Unquoted heredoc so $USER_NAME expands to the created user, but $TERM
+# stays literal for systemd to expand later. \u (agetty's username escape)
+# is left bare — bash only processes \\, \$, \` in unquoted heredocs.
+cat > /etc/systemd/system/serial-getty@ttyGS0.service.d/override.conf <<SGEOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -a $USER_NAME -o '-p -- \u' --keep-baud 115200,38400,9600 %I \$TERM
+SGEOF
+systemctl daemon-reload
+
 install -d -m 700 /etc/NetworkManager/system-connections
 cat > /etc/NetworkManager/system-connections/usb-gadget.nmconnection <<'NMEOF'
 [connection]
