@@ -1,5 +1,6 @@
 import { $ } from "./dom.js";
 import { pubkeySsh } from "./auth.js";
+import { ensurePassword } from "./passwords.js";
 
 const FIRMWARE_URL    = "firmware/pi_robot";
 const FIRMWARE_FILES  = [
@@ -80,8 +81,13 @@ async function runPrepare() {
 
   const hostname = $("prep-hostname").value.trim() || "betterpi";
   const username = $("prep-username").value.trim() || "robot";
-  const password = $("prep-password").value;
+  let password   = $("prep-password").value;
   const sshKey   = $("prep-sshkey").value.trim();
+  let passwordGenerated = false;
+  if (!password) {
+    password = await ensurePassword(hostname);
+    passwordGenerated = true;
+  }
 
   // Password optional: firstrun skips chpasswd when empty (SSH-key-only login).
 
@@ -146,6 +152,9 @@ async function runPrepare() {
     await writeFile(dirHandle, "config.txt", patchConfig(oldCfg));
 
     try { localStorage.setItem(SSH_KEY_STORE, sshKey); } catch {}
+    if (passwordGenerated) {
+      prepLog(`Generated a random sudo password — see Settings → Robot passwords.`, "ok");
+    }
     // Browsers can't eject a volume — File System Access API is file-only and
     // mass-storage WebUSB is blocked. Best we can do: confirm writes are
     // flushed (every writable closed above) and tell the user how to eject.

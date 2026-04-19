@@ -16,6 +16,7 @@ import { initGamepad } from "./gamepad.js";
 import { initVoice } from "./voice.js";
 import { initPrepare } from "./prepare.js";
 import { initAuthUI, fingerprint as dashFingerprint, pubkeySsh, onKeyChange } from "./auth.js";
+import { initPasswordsUI } from "./passwords.js";
 
 setLogRenderer((entry) => renderEntry(entry));
 setDisconnectHandler((id) => onDisconnected(id));
@@ -726,6 +727,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initRecovery();
   initPinout();
   initAuthUI();
+  initPasswordsUI();
 
   loadPaired().then(() => {
     highlightKnownRobotFromUrl();

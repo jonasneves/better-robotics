@@ -768,6 +768,19 @@ dialog[open]::backdrop { opacity: 1; }
    fingerprint so prose lines wrap normally. */
 .settings-item.key-row { grid-template-columns: 1fr; gap: 6px; }
 .settings-item.key-row .key-fingerprint { word-break: break-all; }
+.settings-item.passwords-row { grid-template-columns: 1fr; gap: 6px; }
+.pwd-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.pwd-entry:first-child { border-top: none; }
+.pwd-info { flex: 1; min-width: 0; }
+.pwd-host { font-weight: 500; }
+.pwd-value { word-break: break-all; }
+.pwd-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .key-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 
 .caps-list { display: flex; flex-direction: column; gap: 8px; }
