@@ -882,7 +882,7 @@ dialog[open]::backdrop { opacity: 1; }
   bottom: 72px;  /* sits above mascot: 20 + 44 + 8 gap */
   left: auto;
   top: auto;
-  width: min(300px, calc(100vw - 40px));
+  width: min(320px, calc(100vw - 40px));
   margin: 0;
   padding: 12px 14px;
   border: 1px solid var(--border-default);
@@ -892,6 +892,36 @@ dialog[open]::backdrop { opacity: 1; }
   box-shadow: 0 10px 30px rgba(0,0,0,0.15);
   transform-origin: bottom right;
 }
+/* Echo of the user's last turn — muted so Pip's current reply stays the focus. */
+.assistant-echo {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--ink-muted);
+  margin: 6px 0 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border-default);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.assistant-message { margin: 0; }
+.assistant-form { margin: 10px 0 0; }
+.assistant-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+.assistant-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.assistant-input:disabled { opacity: 0.6; cursor: progress; }
 /* Speech-bubble tail — rotated 14px square; top half hidden by panel, bottom corner sticks out. */
 .assistant-panel::after {
   content: "";

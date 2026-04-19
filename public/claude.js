@@ -1,34 +1,57 @@
-// Thin wrapper around the local ai-proxies service at 127.0.0.1:7337. The proxy
-// holds the OAuth token in Keychain so the browser never sees credentials.
-// If it isn't running (other users, closed laptop, etc.) ask() returns null and
-// callers should fall through to their canned message.
-const PROXY_URL = "http://127.0.0.1:7337/v1/messages";
+// Talks to Claude through the AI Bridge Chrome extension. The extension injects
+// a content script into `*.github.io/*` that proxies to `proxy.neevs.io/anthropic`
+// with credentials pulled from Keychain via native messaging — so the browser
+// never sees the OAuth token, and pages don't need an extension ID.
+//
+// Wire protocol (from ai-bridge/bridge-content.js):
+//   page → document.dispatchEvent(new CustomEvent('ai-bridge-request', { detail: {...} }))
+//   page ← document.addEventListener('ai-bridge-response', e => e.detail)
+//
+// If the extension isn't installed, nothing answers and the timeout fires —
+// ask() returns null and callers fall through to their canned message.
+
 const MODEL = "claude-sonnet-4-6";
-const TIMEOUT_MS = 6000;
+const TIMEOUT_MS = 8000;
+
+function bridgeRequest(detail) {
+  return new Promise((resolve) => {
+    const id = crypto.randomUUID();
+    const cleanup = () => {
+      document.removeEventListener("ai-bridge-response", onResponse);
+      clearTimeout(timer);
+    };
+    const onResponse = (e) => {
+      if (e.detail?._id !== id) return;
+      cleanup();
+      resolve(e.detail);
+    };
+    document.addEventListener("ai-bridge-response", onResponse);
+    const timer = setTimeout(() => { cleanup(); resolve(null); }, TIMEOUT_MS);
+    document.dispatchEvent(new CustomEvent("ai-bridge-request", { detail: { _id: id, ...detail } }));
+  });
+}
 
 export async function ask(userText, { system, maxTokens = 200 } = {}) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const res = await bridgeRequest({
+    type: "proxy",
+    provider: "claude",
+    path: "/v1/messages",
+    method: "POST",
+    body: {
+      model: MODEL,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: userText }],
+      stream: false,
+    },
+  });
+  if (!res || res.error) return null;
+  if (res.status < 200 || res.status >= 300) return null;
   try {
-    const res = await fetch(PROXY_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: "user", content: userText }],
-        stream: false,
-      }),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const text = json?.content?.[0]?.text?.trim();
-    return text || null;
+    const json = JSON.parse(res.body);
+    // "" is distinct from null — empty means Pip chose silence; null means the call failed.
+    return json?.content?.[0]?.text?.trim() ?? null;
   } catch {
-    return null;  // proxy unreachable, timeout, aborted, or malformed response
-  } finally {
-    clearTimeout(timer);
+    return null;
   }
 }

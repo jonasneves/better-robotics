@@ -294,7 +294,13 @@
     <div class="label">Pip</div>
     <button class="icon" id="assistant-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
-  <p id="assistant-message" class="meta" style="margin: 0;">Hi — I'm Pip. I'll pipe up when there's something worth knowing.</p>
+  <!-- Last user turn echoed above Pip's reply so there's continuity without a scrollback. -->
+  <div id="assistant-echo" class="assistant-echo" hidden></div>
+  <p id="assistant-message" class="meta assistant-message">Hi — I'm Pip. I'll pipe up when there's something worth knowing.</p>
+  <form id="assistant-form" class="assistant-form">
+    <input id="assistant-input" class="assistant-input" type="text" autocomplete="off"
+           placeholder="Ask Pip…" maxlength="300" aria-label="Ask Pip">
+  </form>
 </dialog>
 </body>
 </html>
