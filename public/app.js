@@ -95,10 +95,16 @@ async function refreshMyFingerprint() {
 }
 onKeyChange(refreshMyFingerprint);
 
+// Skip auto-reconnect for robots untouched past this window — stale entries
+// shouldn't blast the BT stack with timeout attempts on every page load.
+const AUTO_RECONNECT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
 async function loadPaired() {
   // Restore remembered robots first — works even when getDevices() is missing.
-  for (const { id, name, fwType } of loadKnown()) {
-    if (!state.devices.has(id)) state.devices.set(id, makeEntry(id, name, fwType));
+  for (const { id, name, fwType, autoReconnect, lastConnectedAt } of loadKnown()) {
+    if (!state.devices.has(id)) {
+      state.devices.set(id, makeEntry(id, name, fwType, { autoReconnect, lastConnectedAt }));
+    }
   }
   if (navigator.bluetooth.getDevices) {
     try {
@@ -109,6 +115,21 @@ async function loadPaired() {
     }
   }
   render();
+  autoReconnectKnown();
+}
+
+// Fire off reconnect attempts for robots whose last intent was to be connected.
+// Guard: only attempt if a paired BluetoothDevice is already attached (from
+// getDevices) — otherwise connect() would prompt with a chooser, which is
+// hostile on page load.
+function autoReconnectKnown() {
+  const cutoff = Date.now() - AUTO_RECONNECT_MAX_AGE_MS;
+  for (const entry of state.devices.values()) {
+    if (!entry.device) continue;
+    if (!entry.autoReconnect) continue;
+    if ((entry.lastConnectedAt || 0) < cutoff) continue;
+    connect(entry.id).catch(() => { /* timeouts are expected; status-row shows it */ });
+  }
 }
 
 async function scanForNew() {
@@ -249,6 +270,11 @@ async function connect(id) {
     // A robot advertising only the service (no chars) is still "connected".
     // Every capability is optional.
     entry.status = "connected";
+    // Record the intent signal: this session's last explicit wish is "connected".
+    // Unexpected GATT drops won't flip it — only an explicit Disconnect click will.
+    entry.autoReconnect = true;
+    entry.lastConnectedAt = Date.now();
+    persist();
 
     // Read fw-info before cap probes — it carries the capability schema.
     try {
@@ -354,7 +380,12 @@ async function connect(id) {
 
 async function disconnect(id) {
   const entry = state.devices.get(id);
-  if (entry && entry.device && entry.device.gatt.connected) entry.device.gatt.disconnect();
+  if (!entry) return;
+  // Explicit user intent: "I'm done with this robot." Won't auto-reconnect on
+  // next load. Unexpected drops go through onDisconnected without touching this.
+  entry.autoReconnect = false;
+  persist();
+  if (entry.device && entry.device.gatt.connected) entry.device.gatt.disconnect();
   onDisconnected(id);
 }
 
