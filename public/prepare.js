@@ -146,7 +146,12 @@ async function runPrepare() {
     await writeFile(dirHandle, "config.txt", patchConfig(oldCfg));
 
     try { localStorage.setItem(SSH_KEY_STORE, sshKey); } catch {}
-    prepLog("Done. Eject the card and boot the Pi.", "ok");
+    // Browsers can't eject a volume — File System Access API is file-only and
+    // mass-storage WebUSB is blocked. Best we can do: confirm writes are
+    // flushed (every writable closed above) and tell the user how to eject.
+    const isMac = /Mac/i.test(navigator.platform || navigator.userAgent);
+    const tip = isMac ? "⌘E in Finder" : "right-click the card → Eject";
+    prepLog(`Safe to eject now (${tip}). Then boot the Pi.`, "ok");
   } catch (err) {
     prepLog(`Error: ${err.message}`, "err");
   } finally {
