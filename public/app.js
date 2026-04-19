@@ -1,4 +1,5 @@
-import { SERVICE_UUID, FW_INFO_CHAR_UUID, ROBOT_STATUS_CHAR_UUID, decodeJson } from "./ble.js";
+import { SERVICE_UUID, FW_INFO_CHAR_UUID, ROBOT_STATUS_CHAR_UUID,
+  OPS_RESPONSE_CHAR_UUID, TELEMETRY_CHAR_UUID, decodeJson } from "./ble.js";
 import { $, escapeHtml } from "./dom.js";
 import { log, logFor, setLogRenderer } from "./log.js";
 import { settings, saveSettings } from "./settings.js";
@@ -9,7 +10,7 @@ import {
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
 import { RUNTIMES } from "./capabilities/runtime/index.js";
 import { updateFirmware, updateFromFile } from "./capabilities/ota.js";
-import { restartService, rebootRobot, enrollKey } from "./capabilities/runtime/command.js";
+import { restartService, rebootRobot, enrollKey, getLog, getConfig } from "./capabilities/runtime/command.js";
 import { initRecovery, openRecoveryDialog } from "./recovery.js";
 import { initPinout, openPinoutDialog } from "./pinout.js";
 import { initGamepad } from "./gamepad.js";
@@ -21,6 +22,33 @@ import { initPasswordsUI } from "./passwords.js";
 setLogRenderer((entry) => renderEntry(entry));
 setDisconnectHandler((id) => onDisconnected(id));
 setCapabilityRenderer((entry) => renderEntry(entry));
+
+// Compact telemetry line below the robot-state. Only shows when the robot
+// actually publishes (Pi from fw_version onward; ESP32 skips).
+function telemetryHtml(entry) {
+  const t = entry.telemetry;
+  if (!t) return "";
+  const parts = [];
+  if (typeof t.uptime_s === "number") {
+    const s = t.uptime_s;
+    parts.push(s < 60 ? `up ${s}s`
+      : s < 3600 ? `up ${Math.floor(s/60)}m`
+      : `up ${Math.floor(s/3600)}h${Math.floor((s%3600)/60)}m`);
+  }
+  if (typeof t.mem_free_mb === "number") parts.push(`${t.mem_free_mb} MB free`);
+  if (typeof t.temp_c === "number") parts.push(`${t.temp_c.toFixed(1)}°C`);
+  return parts.length ? `<div class="telemetry">${escapeHtml(parts.join(" · "))}</div>` : "";
+}
+
+// Registry for ops-response dispatch. Modules that send an ops verb expecting
+// a response register a handler keyed by msg.op; the chunked decoder in
+// connect() calls the matching handler when a response arrives.
+const opsResponseHandlers = {};
+export function onOpsResponse(op, fn) { opsResponseHandlers[op] = fn; }
+function handleOpsResponse(entry, msg) {
+  const fn = opsResponseHandlers[msg.op];
+  if (fn) fn(entry, msg);
+}
 
 // Dashboard's own fingerprint. Cached sync so renderEntry can compare
 // against fw-info.authorized without awaiting. Refreshed whenever the
@@ -224,6 +252,46 @@ async function connect(id) {
     // Fresh connection clears any sticky disconnect status.
     if (entry.stickyStatusTimer) { clearTimeout(entry.stickyStatusTimer); entry.stickyStatusTimer = null; }
     entry.stickyStatus = null;
+
+    // Telemetry (read + notify) — optional; ESP32 / older Pi don't expose it.
+    try {
+      const telChar = await service.getCharacteristic(TELEMETRY_CHAR_UUID);
+      entry.telemetry = decodeJson(await telChar.readValue()) || null;
+      await telChar.startNotifications();
+      telChar.addEventListener("characteristicvaluechanged", (e) => {
+        entry.telemetry = decodeJson(e.target.value) || null;
+        renderEntry(entry);
+      });
+    } catch {
+      entry.telemetry = null;
+    }
+
+    // ops-response (notify, chunked) — dispatches request/response ops like
+    // get-log / get-config to the right handler. Same opcode protocol as OTA
+    // and camera: 0x01 begin+u32 len, 0x02 chunk, 0x03 commit.
+    try {
+      const respChar = await service.getCharacteristic(OPS_RESPONSE_CHAR_UUID);
+      entry.opsRespBuf = null;
+      await respChar.startNotifications();
+      respChar.addEventListener("characteristicvaluechanged", (e) => {
+        const data = new Uint8Array(e.target.value.buffer);
+        if (data.length === 0) return;
+        const op = data[0];
+        if (op === 0x01) entry.opsRespBuf = [];
+        else if (op === 0x02 && entry.opsRespBuf) entry.opsRespBuf.push(data.subarray(1));
+        else if (op === 0x03 && entry.opsRespBuf) {
+          const total = entry.opsRespBuf.reduce((n, c) => n + c.length, 0);
+          const merged = new Uint8Array(total);
+          let o = 0;
+          for (const c of entry.opsRespBuf) { merged.set(c, o); o += c.length; }
+          entry.opsRespBuf = null;
+          let msg;
+          try { msg = JSON.parse(new TextDecoder().decode(merged)); }
+          catch { return; }
+          handleOpsResponse(entry, msg);
+        }
+      });
+    } catch { /* ops-response char absent on older firmware — optional */ }
 
     entry.runtimeCaps = [];
     const schemaLog = (entry.capSchema || []).map(c =>
@@ -432,6 +500,7 @@ function renderEntry(entry) {
       </div>
     </div>
     ${stateHtml}
+    ${telemetryHtml(entry)}
     ${enrollHtml}
     ${sections}
     ${entry.lastEvent ? `<div class="last-event">${escapeHtml(entry.lastEvent)}</div>` : ""}
@@ -594,6 +663,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const id = menuTargetId;
     closeMenu();
     if (id) rebootRobot(id);
+  });
+  $("menu-log").addEventListener("click", () => {
+    const id = menuTargetId;
+    closeMenu();
+    if (!id) return;
+    const entry = state.devices.get(id);
+    $("log-dialog-title").textContent = `Log · ${entry?.name || "robot"}`;
+    $("log-dialog-body").textContent = "Loading…";
+    $("log-dialog").showModal();
+    getLog(id);
+  });
+  $("log-dialog-close").addEventListener("click", () => $("log-dialog").close());
+  onOpsResponse("get-log", (entry, msg) => {
+    if (!$("log-dialog").open) return;
+    $("log-dialog-body").textContent = msg.text || "(empty)";
   });
   $("menu-pinout").addEventListener("click", () => {
     const id = menuTargetId;

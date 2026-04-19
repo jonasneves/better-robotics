@@ -61,6 +61,11 @@ OPS_CHAR_UUID           = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9c"
 # Robot-status: top-level "what is this robot doing right now" channel,
 # complementing per-capability statuses. JSON {st, msg?}. Notify + read.
 ROBOT_STATUS_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9d"
+# ops-response: chunked JSON responses to ops requests that need a payload
+# back (get-log, get-config…). Same chunked protocol as OTA/camera.
+OPS_RESPONSE_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9e"
+# Telemetry: periodic robot vitals — uptime/mem/temp. Small JSON, notify.
+TELEMETRY_CHAR_UUID     = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9f"
 
 # Capability schema — built at startup from config. Types name a UI/data
 # shape (toggle, signed-pair, wifi-scan, bundle-ota, webrtc-installable,
@@ -307,6 +312,22 @@ def _set_robot_status(st: str, msg: str | None = None) -> None:
     log.info("robot-status → %s", _robot_status)
 
 
+def _wlan_ip() -> str | None:
+    """Current IPv4 on wlan0, without CIDR suffix. None on failure."""
+    try:
+        proc = subprocess.run(
+            ["nmcli", "-g", "IP4.ADDRESS", "dev", "show", "wlan0"],
+            capture_output=True, timeout=3,
+        )
+        for line in proc.stdout.decode(errors="replace").splitlines():
+            line = line.strip()
+            if line:
+                return line.split("/")[0]
+    except Exception:
+        pass
+    return None
+
+
 def _set_status(st: str, ssid: str | None = None, err: str | None = None) -> None:
     global _wifi_status
     _wifi_status = {"st": st}
@@ -314,6 +335,10 @@ def _set_status(st: str, ssid: str | None = None, err: str | None = None) -> Non
         _wifi_status["ssid"] = ssid
     if err:
         _wifi_status["err"] = err
+    if st == "joined":
+        ip = _wlan_ip()
+        if ip:
+            _wifi_status["ip"] = ip
     _publish(WIFI_STATUS_CHAR_UUID, _json_bytes(_wifi_status))
     log.info("wifi-status → %s", _wifi_status)
 
@@ -374,10 +399,9 @@ def _set_ota_status(st: str, n: int = 0, total: int = 0, err: str | None = None)
 # a malicious manifest can't overwrite /etc/passwd or similar. Computed from
 # $HOME so OTAs work for any service-user name (pi, robot, ...), not just pi.
 def _derive_install_home() -> str:
-    """pi-robot.service runs as root (bless needs it), so `~` would expand to
-    /root — wrong for OTA, which must target the actual install location.
-    Derive the home from __file__ instead: convention is
-    <HOME>/better-robotics/firmware/pi_robot/pi_robot.py."""
+    """pi-robot.service runs as root (bless needs it), so ~ would expand to
+    /root — wrong. Derive the actual install home from __file__ instead:
+    convention is <HOME>/better-robotics/firmware/pi_robot/pi_robot.py."""
     parts = os.path.abspath(__file__).split(os.sep)
     try:
         idx = parts.index("better-robotics")
@@ -702,6 +726,82 @@ async def _cam_install() -> None:
         _cam_installing = False
 
 
+def _ops_respond(payload: dict) -> None:
+    """Chunked notify on ops-response — same opcode protocol as OTA (0x01 begin
+    + u32 length, 0x02 chunk, 0x03 commit). Used for request/response ops like
+    get-log where a plain write-ack isn't enough."""
+    if _server is None:
+        return
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    begin = bytearray(5)
+    begin[0] = 0x01
+    begin[1:5] = len(data).to_bytes(4, "big")
+    _publish(OPS_RESPONSE_CHAR_UUID, begin)
+    for i in range(0, len(data), 180):
+        _publish(OPS_RESPONSE_CHAR_UUID, bytearray([0x02]) + data[i:i + 180])
+    _publish(OPS_RESPONSE_CHAR_UUID, bytearray([0x03]))
+
+
+async def _get_log(lines: int, unit: str) -> None:
+    lines = max(1, min(lines, 500))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "journalctl", "-u", f"{unit}.service", "-n", str(lines), "--no-pager",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await proc.communicate()
+        # Cap text at 16 KB so a runaway log doesn't saturate BLE notifies.
+        text = out.decode(errors="replace")[-16000:]
+    except Exception as e:
+        text = f"journalctl failed: {e}"
+    _ops_respond({"op": "get-log", "unit": unit, "text": text})
+
+
+def _read_uptime_s() -> int:
+    try:
+        with open("/proc/uptime") as f:
+            return int(float(f.read().split()[0]))
+    except Exception:
+        return 0
+
+
+def _read_mem_free_mb() -> int:
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024  # kB → MB
+    except Exception:
+        pass
+    return 0
+
+
+def _read_soc_temp_c() -> float | None:
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return int(f.read()) / 1000.0
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
+async def _telemetry_task() -> None:
+    """Periodic vitals notify. 6s cadence — catches spikes without saturating
+    the BLE link. Payload stays under ~60 B so it fits comfortably in one ATT."""
+    while True:
+        try:
+            t: dict = {
+                "uptime_s": _read_uptime_s(),
+                "mem_free_mb": _read_mem_free_mb(),
+            }
+            temp = _read_soc_temp_c()
+            if temp is not None:
+                t["temp_c"] = round(temp, 1)
+            _publish(TELEMETRY_CHAR_UUID, _json_bytes(t))
+        except Exception as e:
+            log.warning("telemetry: %s", e)
+        await asyncio.sleep(6)
+
+
 async def _delayed_system_action(kind: str) -> None:
     """Announce the upcoming disconnect on robot-status before firing the
     action, so the dashboard can show 'was rebooting' instead of a blank drop.
@@ -781,6 +881,21 @@ def _ops_handle_write(data: bytearray) -> None:
         else:
             log.warning("ops: enroll-key failed: %s", detail)
             _set_robot_status("ready", f"enroll failed: {detail}")
+    elif op == "get-log":
+        lines = int(args.get("lines", 50))
+        unit = str(args.get("unit") or "pi-robot")
+        _schedule(_get_log(lines, unit))
+    elif op == "get-config":
+        # Returns /boot/firmware/pi-robot.conf bytes so the dashboard can
+        # render the current pin setup and write back an edited version.
+        try:
+            with open(CONFIG_PATH) as f:
+                text = f.read()
+            _ops_respond({"op": "get-config", "text": text})
+        except FileNotFoundError:
+            _ops_respond({"op": "get-config", "text": "{}"})
+        except Exception as e:
+            _ops_respond({"op": "get-config", "err": str(e)[:120]})
     else:
         log.warning("ops: unknown op %r", op)
 
@@ -955,6 +1070,12 @@ def on_read(characteristic: BlessGATTCharacteristic, **_) -> bytearray:
         return _json_bytes(_fw_info_snapshot())
     if uuid == ROBOT_STATUS_CHAR_UUID:
         return _json_bytes(_robot_status)
+    if uuid == TELEMETRY_CHAR_UUID:
+        t: dict = {"uptime_s": _read_uptime_s(), "mem_free_mb": _read_mem_free_mb()}
+        temp = _read_soc_temp_c()
+        if temp is not None:
+            t["temp_c"] = round(temp, 1)
+        return _json_bytes(t)
     if uuid == MOTOR_CHAR_UUID:
         return bytearray([_motor_left & 0xff, _motor_right & 0xff])
     if uuid == CAMERA_STATUS_CHAR_UUID:
@@ -1122,11 +1243,24 @@ async def main() -> None:
         _json_bytes(_robot_status),
         GATTAttributePermissions.readable,
     )
+    await _server.add_new_characteristic(
+        SERVICE_UUID, OPS_RESPONSE_CHAR_UUID,
+        GATTCharacteristicProperties.notify,
+        bytearray(),
+        GATTAttributePermissions.readable,
+    )
+    await _server.add_new_characteristic(
+        SERVICE_UUID, TELEMETRY_CHAR_UUID,
+        GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
+        _json_bytes({"uptime_s": 0, "mem_free_mb": 0}),
+        GATTAttributePermissions.readable,
+    )
 
     await _server.start()
     log.info("Advertising on service %s", SERVICE_UUID)
     log.info("Ctrl+C to stop.")
     asyncio.create_task(_check_current_wifi())
+    asyncio.create_task(_telemetry_task())
     if MOTORS_ENABLED:
         asyncio.create_task(_motor_watchdog_task())
     log.info("capabilities: led=%s motors=%s camera=%s", LED_ENABLED, MOTORS_ENABLED, _camera_available)

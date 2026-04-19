@@ -47,6 +47,10 @@ export function makeEntry(id, name, fwType = null) {
     robotStatus: null,
     stickyStatus: null,
     stickyStatusTimer: null,
+    // Periodic vitals from the telemetry char. null = robot doesn't publish.
+    telemetry: null,
+    // Chunked decoder state for ops-response; populated during connect.
+    opsRespBuf: null,
     node: null,
   };
 }

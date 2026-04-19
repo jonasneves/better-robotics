@@ -388,6 +388,30 @@ details.tray[open] > :not(summary) { margin-top: 12px; }
 .robot-state.sticky::before { animation: none; background: var(--ink-muted); }
 @keyframes robot-state-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
+/* Telemetry — ambient vitals line (uptime · mem · temp). Muted monospace. */
+.telemetry {
+  margin-top: 4px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.log-dialog { width: min(820px, calc(100vw - 32px)); max-width: 820px; }
+.log-dialog-body {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
 /* Enroll prompt — appears on a connected robot whose authorized list
    doesn't contain this dashboard's fingerprint. Empty list = TOFU invite. */
 .enroll-prompt {

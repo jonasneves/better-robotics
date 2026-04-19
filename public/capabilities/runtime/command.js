@@ -71,6 +71,18 @@ export async function enrollKey(id, pubkeyLine) {
   return false;
 }
 
+export async function getLog(id, lines = 80, unit = "pi-robot") {
+  const entry = state.devices.get(id);
+  if (!entry?.opsChar) return false;
+  return sendCommand(entry, "ops", { op: "get-log", args: { lines, unit } });
+}
+
+export async function getConfig(id) {
+  const entry = state.devices.get(id);
+  if (!entry?.opsChar) return false;
+  return sendCommand(entry, "ops", { op: "get-config" });
+}
+
 export function makeCommandCap(schema) {
   const { name } = schema;
   const char = schema.char || UUIDS_BY_CAP[name];

@@ -85,9 +85,18 @@
   <button class="menu-item" id="menu-update-file">Update from file…</button>
   <button class="menu-item" id="menu-restart">Restart service</button>
   <button class="menu-item" id="menu-reboot">Reboot robot</button>
+  <button class="menu-item" id="menu-log">View log</button>
   <button class="menu-item" id="menu-pinout">Pinout (GPIO)</button>
   <button class="menu-item destructive" id="menu-forget">Forget this robot</button>
 </div>
+
+<dialog id="log-dialog" class="prepare-dialog log-dialog">
+  <div class="modal-header">
+    <div class="label" id="log-dialog-title">Log</div>
+    <button class="icon" id="log-dialog-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
+  </div>
+  <pre id="log-dialog-body" class="log-dialog-body">Loading…</pre>
+</dialog>
 
 <dialog id="settings-modal" class="settings-modal">
   <div class="modal-header">

@@ -12,6 +12,8 @@ export const CAMERA_SIGNAL_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9a";
 export const CAMERA_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9b";
 export const OPS_CHAR_UUID            = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9c";
 export const ROBOT_STATUS_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9d";
+export const OPS_RESPONSE_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9e";
+export const TELEMETRY_CHAR_UUID      = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9f";
 
 // Chunked-frame protocol shared by OTA and camera signaling: begin carries a
 // u32 big-endian length, chunks append, commit parses + acts, stop tears down.
