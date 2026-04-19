@@ -712,10 +712,12 @@ dialog[open]::backdrop { opacity: 1; }
 .settings-item label { cursor: pointer; }
 .settings-title { font-weight: 500; margin-bottom: 2px; }
 
-/* Key row needs [info][actions] layout, not the default [ctrl][label] pattern. */
-.settings-item.key-row { grid-template-columns: 1fr auto; align-items: center; }
-.settings-item.key-row .meta { word-break: break-all; }
-.key-actions { display: flex; gap: 6px; flex-shrink: 0; }
+/* Stacked layout — avoids narrow-viewport wrapping when the buttons' auto
+   column steals width from the fingerprint. word-break targets only the
+   fingerprint so prose lines wrap normally. */
+.settings-item.key-row { grid-template-columns: 1fr; gap: 6px; }
+.settings-item.key-row .key-fingerprint { word-break: break-all; }
+.key-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 
 .caps-list { display: flex; flex-direction: column; gap: 8px; }
 .caps-list .cap-row {
