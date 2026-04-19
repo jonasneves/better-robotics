@@ -12,11 +12,10 @@
 <body>
 <div class="app">
 <header class="topbar">
-  <h1 class="topbar-title">Better Robotics</h1>
+  <h1 class="topbar-title"><span class="logo-accent">Better</span><span class="logo-base">Robotics</span></h1>
   <div class="topbar-spacer"></div>
   <div class="topbar-actions">
     <button class="icon" id="voice-btn" aria-label="Voice commands" hidden><svg class="icon-svg"><use href="icons.svg#icon-mic"/></svg></button>
-    <button class="secondary sm" id="recovery-btn" title="USB-C serial recovery console — works when BLE is dead">Recovery</button>
     <button class="avatar-btn" id="avatar-btn" aria-label="Profile menu" aria-haspopup="menu">?</button>
   </div>
 </header>
@@ -66,6 +65,7 @@
 <div id="avatar-menu" class="menu" popover="manual">
   <div class="menu-header" id="avatar-menu-name">Not set</div>
   <button class="menu-item" id="menu-settings">Settings</button>
+  <button class="menu-item" id="menu-recovery" title="USB-C serial recovery console — works when BLE is dead">Recovery console</button>
 </div>
 
 <div id="robot-menu" class="menu" popover="manual">

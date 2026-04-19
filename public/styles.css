@@ -73,12 +73,14 @@ html, body {
   border-bottom: 1px solid var(--line);
 }
 .topbar-title {
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--brand-heading);
+  font-size: 17px;
+  letter-spacing: -0.01em;  /* tighter tracking reads as wordmark */
   margin: 0;
 }
+/* Wordmark: "Better" (bold Duke navy/light-blue) + "Robotics" (regular ink).
+   Hue shift (blue vs base text) + weight gives clear separation without color noise. */
+.topbar-title .logo-accent { font-weight: 700; color: var(--brand-heading); }
+.topbar-title .logo-base { font-weight: 400; color: color-mix(in srgb, var(--ink) 75%, transparent); }
 .topbar-spacer { flex: 1; }
 .topbar-actions { display: flex; gap: 6px; align-items: center; }
 .topbar-actions .icon { font-size: 18px; }
@@ -529,7 +531,8 @@ details.tray[open] > :not(summary) { margin-top: 12px; }
   align-items: baseline;
 }
 .log > div.sys .log-msg { grid-column: 2 / -1; }  /* no name → message absorbs the slot */
-.log .log-time { opacity: 0.55; font-variant-numeric: tabular-nums; }
+/* Tertiary text — express as one step (40% of primary) instead of opacity on already-muted. */
+.log .log-time { color: color-mix(in srgb, var(--ink) 40%, transparent); font-variant-numeric: tabular-nums; }
 .log .log-name {
   color: var(--ink);
   font-weight: 500;

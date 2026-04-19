@@ -483,10 +483,13 @@ document.addEventListener("DOMContentLoaded", () => {
     closeMenu();
     if (id) openPinoutDialog(id);
   });
-  // Recovery lives in the topbar, not the per-robot menu: gating the
+  // Recovery lives in the avatar menu, not the per-robot menu: gating the
   // "BLE is dead" escape hatch behind a paired robot is the exact catch-22
-  // it exists to break.
-  $("recovery-btn").addEventListener("click", openRecoveryDialog);
+  // it exists to break. The avatar menu has zero BLE dependency.
+  $("menu-recovery").addEventListener("click", () => {
+    $("avatar-menu").hidePopover();
+    openRecoveryDialog();
+  });
   $("label-close").addEventListener("click", () => $("label-modal").close());
   $("label-copy").addEventListener("click", async () => {
     try {
