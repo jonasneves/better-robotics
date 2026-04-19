@@ -277,10 +277,25 @@ function connectAll() {
 
 // Per-entry node ownership: a notify for robot A never touches robot B's DOM,
 // so slider drags on one card survive sibling state changes.
+// QR hint: ?robot=X on the URL means a scan landed us here. Surface a
+// one-click Pair CTA when that robot isn't paired yet. Chrome gates
+// requestDevice on user activation, so the button click is the activation.
+function updateQrHint() {
+  const hinted = new URLSearchParams(location.search).get("robot");
+  const hint = $("qr-hint");
+  if (!hint) return;
+  const known = hinted && [...state.devices.values()].some(e => e.name === hinted);
+  const show = !!hinted && !known && !!navigator.bluetooth;
+  hint.hidden = !show;
+  if (show) $("qr-hint-name").textContent = hinted;
+}
+
 function render() {
   const list = $("robot-list");
   const empty = $("empty-state");
   const header = $("robots-heading");
+
+  updateQrHint();
 
   if (state.devices.size === 0) {
     empty.hidden = false;
@@ -437,6 +452,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   $("scan-btn").addEventListener("click", scanForNew);
   $("empty-scan-btn").addEventListener("click", scanForNew);
+  $("qr-hint-pair").addEventListener("click", scanForNew);
   $("connect-all-btn").addEventListener("click", connectAll);
 
 
