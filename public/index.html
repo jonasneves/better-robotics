@@ -15,7 +15,7 @@
   <h1 class="topbar-title">Better Robotics</h1>
   <div class="topbar-spacer"></div>
   <div class="topbar-actions">
-    <button class="icon" id="voice-btn" aria-label="Voice commands" hidden>🎤</button>
+    <button class="icon" id="voice-btn" aria-label="Voice commands" hidden><svg class="icon-svg"><use href="icons.svg#icon-mic"/></svg></button>
     <button class="secondary sm" id="recovery-btn" title="USB-C serial recovery console — works when BLE is dead">Recovery</button>
     <button class="avatar-btn" id="avatar-btn" aria-label="Profile menu" aria-haspopup="menu">?</button>
   </div>
@@ -81,7 +81,7 @@
 <dialog id="settings-modal" class="settings-modal">
   <div class="modal-header">
     <div class="label">Settings</div>
-    <button class="icon" id="settings-close" aria-label="Close">×</button>
+    <button class="icon" id="settings-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
   <section class="settings-profile">
     <div class="avatar-preview" id="avatar-preview">?</div>
@@ -110,7 +110,7 @@
 <dialog id="pinout-modal" class="prepare-dialog">
   <div class="modal-header">
     <div class="label" id="pinout-title">Pinout</div>
-    <button class="icon" id="pinout-close" aria-label="Close">×</button>
+    <button class="icon" id="pinout-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
   <div id="pinout-body"></div>
 </dialog>
@@ -118,7 +118,7 @@
 <dialog id="recovery-modal" class="prepare-dialog">
   <div class="modal-header">
     <div class="label">Recovery console</div>
-    <button class="icon" id="recovery-close" aria-label="Close">×</button>
+    <button class="icon" id="recovery-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
   <p class="meta" style="margin: 0 0 12px;">
     USB-C serial console to a Pi running Better Robotics. Works even when BLE is dead or the firmware is crashing — the USB gadget runs independently of pi-robot.service. Plug the Pi into this Mac, click Connect, pick the "BetterPi" serial port.
@@ -133,7 +133,7 @@
 <dialog id="label-modal" class="label-modal">
   <div class="modal-header">
     <div class="label" id="label-title">Robot label</div>
-    <button class="icon" id="label-close" aria-label="Close">×</button>
+    <button class="icon" id="label-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
   <div class="qr-box" id="qr-box"></div>
   <div class="label-url" id="label-url"></div>
@@ -146,7 +146,7 @@
 <dialog id="prepare-dialog" class="prepare-dialog">
   <div class="modal-header">
     <div class="label">Customize a Pi SD card</div>
-    <button class="icon" id="prepare-close" aria-label="Close">×</button>
+    <button class="icon" id="prepare-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
   <p class="meta" style="margin: 0 0 16px;">
     After imaging the card with Raspberry Pi OS (via Raspberry Pi Imager), fill these in and pick the mounted boot partition. The browser writes firmware, wheels, and firstrun.sh onto it.
@@ -207,7 +207,7 @@
 <dialog id="setup-dialog" class="prepare-dialog setup-dialog">
   <div class="modal-header">
     <div class="label">Add a robot</div>
-    <button class="icon" id="setup-close" aria-label="Close">×</button>
+    <button class="icon" id="setup-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
   <p class="meta" style="margin: 0 0 16px;">Pick your platform.</p>
   <div class="setup-grid">
@@ -229,13 +229,13 @@
   </div>
 </dialog>
 
-<button id="assistant-bubble" class="assistant-bubble" aria-label="Open assistant">🤖</button>
+<button id="assistant-bubble" class="assistant-bubble" aria-label="Open assistant"><svg class="icon-svg"><use href="icons.svg#icon-bot"/></svg></button>
 <dialog id="assistant-panel" class="assistant-panel">
   <div class="modal-header">
     <div class="label">Assistant</div>
-    <button class="icon" id="assistant-close" aria-label="Close">×</button>
+    <button class="icon" id="assistant-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
-  <p class="meta" style="margin: 0;">Hi 👋 I'm here to help you build and prototype robots. (Content coming soon.)</p>
+  <p class="meta" style="margin: 0;">Hi! I can help you set up, build, and control your robots. (Content coming soon.)</p>
 </dialog>
 </body>
 </html>

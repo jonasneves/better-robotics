@@ -337,7 +337,7 @@ function renderEntry(entry) {
           : `<button class="sm" data-action="connect" ${connecting ? "disabled" : ""}>${
               connecting ? "…" : (entry.device ? "Connect" : "Pair")
             }</button>`}
-        <button class="icon" data-action="menu" aria-label="More actions">⋯</button>
+        <button class="icon" data-action="menu" aria-label="More actions"><svg class="icon-svg"><use href="icons.svg#icon-more"/></svg></button>
       </div>
     </div>
     ${sections}
@@ -608,16 +608,12 @@ document.addEventListener("DOMContentLoaded", () => {
   $("setup-close").addEventListener("click", () => $("setup-dialog").close());
   wireDialogOutsideClick($("setup-dialog"));
 
-  // Assistant panel is non-modal — user can still operate robots while it's open.
-  const bubble = $("assistant-bubble");
+  // Assistant mascot stays visible at all times; clicking it toggles the speech-bubble panel.
   $("assistant-bubble").addEventListener("click", () => {
-    $("assistant-panel").show();
-    bubble.hidden = true;
+    const panel = $("assistant-panel");
+    if (panel.open) panel.close(); else panel.show();
   });
-  $("assistant-close").addEventListener("click", () => {
-    $("assistant-panel").close();
-    bubble.hidden = false;
-  });
+  $("assistant-close").addEventListener("click", () => $("assistant-panel").close());
 
   initGamepad();
   initVoice({ connectAll });

@@ -42,6 +42,9 @@
 }
 
 * { box-sizing: border-box; }
+/* Make HTML `hidden` attribute win over our own `display` rules. Without this,
+   e.g. `button.icon { display: inline-flex }` shows a button marked hidden. */
+[hidden] { display: none !important; }
 
 html, body {
   margin: 0;
@@ -172,10 +175,19 @@ button {
 }
 button:active { transform: scale(0.98); }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Apple HIG-style hover/press. Hover brightens 8%, press darkens 6% —
+   `filter` works relative to the element's own color so it's correct in
+   light and dark modes. Secondary adds a subtle bg tint on top. */
+button:not(:disabled):hover { filter: brightness(1.08); }
+button:not(:disabled):active { filter: brightness(0.94); }
 button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+button.secondary:not(:disabled):hover { background: var(--border-subtle); }
 button.sm { min-height: 36px; padding: 6px 12px; font-size: 14px; }
 button.danger { background: var(--danger); }
 button.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   color: var(--ink-muted);
   border: 1px solid transparent;
@@ -183,10 +195,12 @@ button.icon {
   min-width: 36px;
   padding: 0 10px;
   font-size: 18px;
-  letter-spacing: -1px;
   line-height: 1;
 }
 button.icon:hover { background: var(--line); color: var(--ink); }
+
+/* SVG icons inherit size from font-size (1em) and color from currentColor. */
+.icon-svg { width: 1em; height: 1em; display: inline-block; vertical-align: middle; }
 
 /* form fields (prepare dialog) */
 .field { margin-bottom: 12px; }
@@ -585,55 +599,68 @@ dialog[open]::backdrop { opacity: 1; }
 .settings-modal { width: min(440px, calc(100vw - 32px)); }
 .setup-dialog { width: min(760px, calc(100vw - 32px)); max-width: 760px; }
 
-/* Floating assistant — bubble + non-modal panel. Reusable floating-panel primitive
-   (planned: detached robot views, compare panels). */
+/* Floating assistant — transparent mascot + speech-bubble panel.
+   Mascot stays visible; panel appears above with a tail pointing down. */
 .assistant-bubble {
   position: fixed;
   right: 20px;
   bottom: 20px;
-  width: 52px;
-  height: 52px;
-  min-height: 52px;
-  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  min-width: 44px;
   padding: 0;
-  font-size: 22px;
-  line-height: 1;
-  background: var(--surface);
+  border: none;
+  background: transparent;
   color: var(--ink);
-  border: 1px solid var(--border-default);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  font-size: 36px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
   z-index: 20;
-  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+  transition: transform 0.15s ease-out;
 }
-.assistant-bubble:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
-}
+.assistant-bubble:hover { transform: translateY(-3px); }
+.assistant-bubble:active { transform: translateY(0); }
+
 .assistant-panel {
   position: fixed;
   right: 20px;
-  bottom: 84px;
+  bottom: 72px;  /* sits above mascot: 20 + 44 + 8 gap */
   left: auto;
   top: auto;
-  width: min(360px, calc(100vw - 40px));
-  max-height: min(480px, calc(100vh - 120px));
+  width: min(300px, calc(100vw - 40px));
   margin: 0;
-  padding: 16px;
+  padding: 12px 14px;
   border: 1px solid var(--border-default);
-  border-radius: var(--radius);
+  border-radius: 14px;
   background: var(--surface);
   color: var(--ink);
-  box-shadow: 0 12px 40px rgba(0,0,0,0.18);
-  overflow-y: auto;
-  transform-origin: bottom right;  /* fade/scale emerges from the bubble corner */
+  box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  transform-origin: bottom right;
+}
+/* Speech-bubble tail — rotated 14px square; top half hidden by panel, bottom corner sticks out. */
+.assistant-panel::after {
+  content: "";
+  position: absolute;
+  bottom: -7px;
+  right: 16px;  /* aligns with mascot's horizontal center */
+  width: 14px;
+  height: 14px;
+  background: var(--surface);
+  border-right: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
+  transform: rotate(45deg);
 }
 .settings-profile {
   display: flex;
   align-items: center;
   gap: 12px;
   padding-bottom: 16px;
-  border-bottom: 1px solid var(--line);
   margin-bottom: 4px;
+  /* No border-bottom — the next .settings-item's border-top is the divider. */
 }
 .avatar-preview {
   width: 48px;
