@@ -60,7 +60,65 @@ summarization from commit messages.
 when the project has contributors outside the core, or when we promise
 backward-compatibility guarantees that require accurate docs.
 
-## 3. ESP32 build-as-a-service (bold, later)
+## 3. Transparent-data-plane OTA (partially in flight)
+
+**Claim.** Every robot should have three OTA lanes with a clear fallback
+order. The dashboard picks the fastest available without user
+intervention. Iteration-loop speed is the core dev experience; "how fast
+does code get onto the robot" sets the tone for everything else.
+
+**The three lanes, decreasing friction:**
+
+1. **BLE-stream** — always works, no WiFi needed, no LAN co-location
+   required. Baseline for every robot on every network.
+   Today: `writeValueWithResponse` + ATT ack per 180-byte frame →
+   3-10 min for a 1.6 MB bin. Switching to
+   `writeValueWithoutResponse` + software flow control over
+   `ota-status` gets it to ~30 sec. **Not yet implemented.**
+
+2. **PNA direct to target robot** — dashboard fetches
+   `http://<robot-ip>/ota` straight from the browser. Chrome/Edge's
+   Private Network Access (shipped 2022) gates the first request on a
+   one-time user consent per origin. No TLS on the robot, no cert
+   ceremony, no crypto IRAM pressure. ~1 sec for a 1.6 MB bin over
+   LAN. Works whenever the dashboard and robot share a network.
+   **Not yet implemented on ESP32** (Pi doesn't need this lane — BLE
+   bundle OTA is already fast enough for Pi-sized updates).
+
+3. **Pi-as-gateway** — for multi-robot orchestration and offline-first
+   classroom deployments. Pi runs an `aioquic` WebTransport server
+   with a self-signed cert; dashboard uses `serverCertificateHashes`
+   pinning (cert sha256 published in Pi's fw-info) to connect
+   without PKI ceremony. Pi proxies raw TCP to the target ESP32 on
+   the LAN. Same ~1 sec speed as PNA direct, with bonus orchestration
+   surface (mesh multiple ESP32s, serve dashboard offline).
+   **Not yet implemented.** Earns its slot when multi-robot coord or
+   offline-first use cases land, not purely for OTA speed.
+
+**Why the three-lane shape is right:**
+- Lane 1 works on BLE only. No WiFi assumption.
+- Lane 2 works when browser and robot share a LAN. Most common case.
+- Lane 3 works when the fleet has a Pi (most Better Robotics fleets do).
+
+Dashboard tries fastest available, falls back automatically. User never
+picks a lane — it just updates as fast as the topology allows.
+
+**What's baked in vs what's not:**
+- BLE-stream as a baseline works today (for Pi bundle OTA; for ESP32
+  single-binary OTA, the WithResponse variant is live and slow).
+- ESP32 already runs a raw `WiFiServer` (for MJPEG) — adding a `/ota`
+  endpoint on the same task is near-zero new code on the firmware side.
+- Pi-as-gateway is purely additive to `pi_robot.py` — every Pi ships
+  with it, no opt-in, just one more capability.
+- Dashboard-side lane selection: not yet written. Attempts lanes in
+  order, falls back on timeout/error.
+
+**Sequencing:**
+1. BLE-WithoutResponse first (universal, smallest change).
+2. PNA + ESP32 `/ota` endpoint second (big bang for effort).
+3. Pi-as-gateway when its orchestration/offline story earns it.
+
+## 4. ESP32 build-as-a-service (bold, later)
 
 **Claim.** ESP32 firmware is purely deterministic from `{board, caps}`.
 Users currently install `arduino-cli` + core + toolchain to compile.

@@ -1,14 +1,29 @@
 # Current working model — better-robotics
 
-Last updated: 2026-04-19 (typed-ops verbs replace shell-over-BLE; identity + Pinout-edit-over-BLE + telemetry + ESP32 camera all landed)
+Last updated: 2026-04-19 (three-lane OTA architecture named; typed-ops verbs replace shell-over-BLE; identity + Pinout-edit-over-BLE + telemetry + ESP32 camera all landed)
 
 ## Project shape (stable — don't re-question unless new evidence)
 
 The architecture is **three independent planes**:
 
-- **Control plane — BLE.** Always on. Commands, telemetry, state, ops (install, restart, inspect). The browser's pairing UI is the gatekeeper; no credentials cross the air.
+- **Control plane — BLE.** Always on. Commands, telemetry, state, ops (install, restart, inspect, enroll, get-log, get-config). The browser's pairing UI is the gatekeeper; no credentials cross the air.
 - **Data plane — WiFi.** Optional, onboarded over BLE. Large OTA payloads, video streams, cloud calls. Robots work fully without it.
 - **Recovery plane — USB.** Last-resort. Composite gadget (ECM ethernet + ACM serial) runs under `usb-gadget.service`, independent of pi-robot firmware. Dashboard exposes a real xterm.js terminal over the ACM endpoint — works even when BLE and WiFi are dead.
+
+OTA within the data plane uses **three lanes, fastest-available**
+(see `direction.md` item #3 for the full shape):
+
+1. **BLE-stream** — baseline, works for any robot on any network. ~30 sec
+   per 1.6 MB once WithoutResponse lands (currently 3-10 min WithResponse).
+2. **PNA direct** — dashboard → robot's plain HTTP via Chrome Private
+   Network Access. ~1 sec when LAN-shared. ESP32 serves via its existing
+   raw WiFiServer; no TLS.
+3. **Pi-as-gateway** — Pi on the LAN runs WebTransport with pinned
+   self-signed cert; proxies to target ESP32. Same ~1 sec speed plus
+   orchestration surface. Every Pi ships with the role by default.
+
+Dashboard picks highest-available lane automatically, falls back on
+error. User never picks a lane.
 
 Other invariants:
 - Each robot advertises a single BLE GATT service. Capabilities (LED, motors, WiFi, OTA, camera, admin) are characteristics inside it. `fw-info` reports `{type, url, caps, bundle_url}` so the dashboard picks the right data plane per-robot and picks between legacy single-file OTA vs bundle OTA automatically.
@@ -21,7 +36,53 @@ Other invariants:
 
 ## Pending, roughly ranked
 
-### 1. ESP32 URL-trigger OTA still fails with http -1 on CAM-MB (partial fix shipped, awaiting validation)
+### NOT YET IMPLEMENTED — next work, in order
+
+**A. BLE-WithoutResponse OTA (~30 lines, no new infra).** Switch
+`writeValueWithResponse` → `writeValueWithoutResponse` + ESP32 signals
+buffer headroom via `ota-status` every N KB; dashboard pauses when low.
+Brings 1.6 MB OTA from 3-10 min to ~30 sec on every ESP32, every network.
+This is the baseline speed lane from direction.md item #3. Universal
+unblock for the current slow-OTA pain.
+
+**B. PNA + plain HTTP `/ota` on ESP32 (~2-3 hours).** Dashboard
+`fetch('http://<robot-ip>/ota', { body: binBytes })` with a one-time
+Chrome PNA consent. Requires ESP32 to (1) respond correctly to the
+`Access-Control-Request-Private-Network` preflight, (2) accept
+`POST /ota` on its existing raw `WiFiServer` (same task that serves
+MJPEG), (3) stream bytes into `Update.write()`. ~1 sec OTAs for any
+ESP32 on the same LAN as the dashboard. No TLS, no IRAM cost, no new
+library. Direction.md item #3 lane 2.
+
+**C. Pi-as-gateway via WebTransport (~1.5 days).** Every Pi ships with
+an `aioquic` WebTransport server; self-signed cert fingerprint published
+in fw-info; dashboard pins it via `serverCertificateHashes`; Pi proxies
+raw TCP to target ESP32 on LAN. Direction.md item #3 lane 3. Cheap to
+enable on every Pi once built; unlocks orchestration / offline-first
+futures too. Earns its slot when (B) isn't enough, or when multi-robot
+coord lands.
+
+**D. ESP32 pin configuration parity with Pi.** Requires ESP32 firmware
+to read a config (from SPIFFS or Preferences), fw-info to declare
+editable caps with pin schemas, dashboard to render an ESP32 board
+layout (different from Pi's 40-pin header). Do when the first real
+user-configurable ESP32 capability lands; until then LED_PIN + motor
+pin stubs are compiled in.
+
+**E. Fallback lane selector in ota.js.** Dashboard picks A, B, or C
+based on availability. Currently picks one path; needs to try fastest
+available and fall back on error. Part of landing (B) and (C) cleanly.
+
+### Background-rank items (known, not urgent)
+
+### 1. ESP32 URL-trigger OTA still fails with http -1 on CAM-MB (superseded by lane work)
+**Status: SHELVED.** URL-trigger required TLS on ESP32 (HTTPClient +
+NetworkClientSecure + mbedTLS), which doesn't fit IRAM alongside the
+camera. The above lane-A (BLE-WithoutResponse) and lane-B (PNA direct)
+give the same speedup without the IRAM cost, on the same binary.
+Keeping the notes below for historical context; not the path forward.
+
+Original analysis:
 - Firmware confirmed new on-device (fw-info read returns esp32/url JSON). HTTPS GET fails before data flows.
 - `HTTPClient.GET()` returns -1 = `HTTPC_ERROR_CONNECTION_FAILED`. Root cause most likely **TLS handshake under memory pressure** — BLE stack + mbedTLS co-resident on ESP32-CAM.
 - **Shipped mitigations:** setFollowRedirects, 20s timeout, free-heap logging in the failure message so we can confirm memory pressure next attempt.
