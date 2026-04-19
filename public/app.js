@@ -490,10 +490,11 @@ document.addEventListener("DOMContentLoaded", () => {
     closeMenu();
     if (id) openPinoutDialog(id);
   });
-  $("menu-recovery").addEventListener("click", () => {
-    closeMenu();
-    openRecoveryDialog();
-  });
+  // Recovery console lives at page-header level, not in the per-robot menu.
+  // It's the escape hatch for "BLE is dead" — gating it behind a paired
+  // robot (which requires BLE to work) was the exact catch-22 it exists
+  // to break.
+  $("recovery-btn").addEventListener("click", openRecoveryDialog);
   $("label-close").addEventListener("click", () => $("label-modal").close());
   $("label-copy").addEventListener("click", async () => {
     try {
