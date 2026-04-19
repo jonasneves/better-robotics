@@ -396,6 +396,31 @@ details.tray[open] > :not(summary) { margin-top: 12px; }
   color: var(--ink-muted);
 }
 
+/* Pinout edit mode — pin inputs + preset controls under the board view. */
+.pinout-edit { margin-top: 16px; }
+.pinout-edit-section {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.pinout-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 14px;
+  cursor: pointer;
+}
+.pinout-edit-label { color: var(--ink-muted); font-size: 13px; min-width: 72px; }
+.pinout-edit-input { width: 70px; padding: 4px 8px; }
+.pinout-warn {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fff4e0;
+  color: #7a4a00;
+  font-size: 13px;
+}
+
 .log-dialog { width: min(820px, calc(100vw - 32px)); max-width: 820px; }
 .log-dialog-body {
   margin: 0;

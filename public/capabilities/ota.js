@@ -8,6 +8,37 @@ import {
 import { logFor, log } from "../log.js";
 import { state } from "../state.js";
 
+// Stream a single-file OTA bundle to the Pi. The dashboard constructs a
+// minimal bundle on the fly (no reboot; optional service restart) and reuses
+// the existing ota-data char. Dest path still goes through the firmware's
+// allowed-prefix whitelist — no new security surface.
+export async function uploadFile(id, filename, destPath, contentBytes, { restart, mode = "644" } = {}) {
+  const entry = state.devices.get(id);
+  if (!entry?.otaDataChar) {
+    log("file upload not supported by this firmware");
+    return false;
+  }
+  let bin = "";
+  for (let i = 0; i < contentBytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, contentBytes.subarray(i, i + 0x8000));
+  }
+  const manifest = { files: [{ src: filename, dest: destPath, mode }] };
+  if (restart) manifest.restart = restart;
+  const bundle = { manifest, files: { [filename]: btoa(bin) } };
+  const payload = new TextEncoder().encode(JSON.stringify(bundle));
+  await acquireWakeLock();
+  try {
+    logFor(entry, `uploading ${filename} → ${destPath} (${contentBytes.length} B)`);
+    await streamOtaBytes(entry, payload);
+    return true;
+  } catch (err) {
+    logFor(entry, `upload failed: ${err.message}`);
+    return false;
+  } finally {
+    await releaseWakeLock();
+  }
+}
+
 let renderEntry = () => {};
 export function setRender(fn) { renderEntry = fn; }
 
