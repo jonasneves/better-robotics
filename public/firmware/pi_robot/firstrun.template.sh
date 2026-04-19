@@ -138,11 +138,17 @@ BTEOF
         sed -i '/^\[General\]/a Experimental=true' /etc/bluetooth/main.conf
     fi
     systemctl daemon-reload
-    # Pi OS Trixie ships with bluetooth soft-blocked in rfkill; unblock before
-    # restarting bluetoothd or `bluetoothctl power on` will silently fail with
-    # "Failed to set mode: Failed (0x03)".
+    # Pi OS Trixie ships with bluetooth + WiFi soft-blocked in rfkill; unblock
+    # before restarting bluetoothd or `bluetoothctl power on` will silently
+    # fail with "Failed to set mode: Failed (0x03)".
     rfkill unblock bluetooth || true
     rfkill unblock all || true
+    # systemd-rfkill.service persists block state across reboots and would
+    # re-apply a block on next boot. Mask it + wipe its saved state so WiFi
+    # stays unblocked after reboot (otherwise Pi comes back with no internet
+    # and DNS fails for curl / apt / pip).
+    systemctl mask systemd-rfkill.socket systemd-rfkill.service || true
+    rm -rf /var/lib/systemd/rfkill || true
     systemctl restart bluetooth
     sleep 3
     hciconfig hci0 up >/dev/null 2>&1 || true
