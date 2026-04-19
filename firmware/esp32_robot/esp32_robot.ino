@@ -653,7 +653,10 @@ void setup() {
 
   otaDataChar = service->createCharacteristic(
     OTA_DATA_CHAR_UUID,
-    BLECharacteristic::PROPERTY_WRITE
+    // WRITE | WRITE_NR — without-response lets the dashboard stream chunks
+    // without per-frame ATT acks once we reintroduce the WithoutResponse
+    // client-side. Advertising both keeps WithResponse as a fallback.
+    BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
   );
   otaDataChar->setCallbacks(new OtaDataCallbacks());
 

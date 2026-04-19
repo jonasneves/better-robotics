@@ -1209,7 +1209,11 @@ async def main() -> None:
     )
     await _server.add_new_characteristic(
         SERVICE_UUID, OTA_DATA_CHAR_UUID,
-        GATTCharacteristicProperties.write,
+        # write | write-without-response — without-response lets the dashboard
+        # stream chunks without per-frame ATT acks; spec rejects WithoutResponse
+        # if the char doesn't advertise the property, and Chrome's fallback
+        # behavior is inconsistent. Advertise both so the dashboard can pick.
+        GATTCharacteristicProperties.write | GATTCharacteristicProperties.write_without_response,
         bytearray(),
         GATTAttributePermissions.writeable,
     )

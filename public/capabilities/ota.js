@@ -57,33 +57,23 @@ async function releaseWakeLock() {
 
 async function streamOtaBytes(entry, bytes) {
   const ch = entry.otaDataChar;
-  // Lifecycle frames (abort/begin/commit) use WithResponse for ATT-acked
-  // reliability. Chunk frames use WithoutResponse for throughput, paced by
-  // software flow control against the firmware's `otaStatus.n` ack counter.
+  // All frames WithResponse. The WithoutResponse speedup needs the OTA
+  // characteristic to advertise WRITE_WITHOUT_RESPONSE property, which
+  // neither Pi nor ESP32 firmware declares today — Chrome then either
+  // silently drops writes or mis-falls-back, and OTA stalls. Reverting
+  // pending a follow-up firmware change that adds the property.
   try { await ch.writeValueWithResponse(new Uint8Array([0x00])); } catch {}
   const begin = new Uint8Array(5);
   begin[0] = 0x01;
   new DataView(begin.buffer).setUint32(1, bytes.length, false);
   await ch.writeValueWithResponse(begin);
   const CHUNK = 180;  // safe under negotiated ATT MTU on macOS/Chrome.
-  const MAX_IN_FLIGHT = 64 * 1024;
-  const STALL_TIMEOUT_MS = 30000;
-  let sent = 0;
   for (let i = 0; i < bytes.length; i += CHUNK) {
     const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
     const frame = new Uint8Array(slice.length + 1);
     frame[0] = 0x02;
     frame.set(slice, 1);
-    await ch.writeValueWithoutResponse(frame);
-    sent += slice.length;
-    // Firmware notifies `ota-status` at most every 32 KB / 250 ms, so `acked`
-    // advances in jumps; 64 KB in-flight cap keeps a few notify-intervals of
-    // headroom without letting the link-layer buffer grow unbounded.
-    const stallStart = Date.now();
-    while (sent - (entry.otaStatus?.n ?? 0) > MAX_IN_FLIGHT) {
-      if (Date.now() - stallStart > STALL_TIMEOUT_MS) throw new Error("OTA stalled");
-      await new Promise(r => setTimeout(r, 10));
-    }
+    await ch.writeValueWithResponse(frame);
   }
   await ch.writeValueWithResponse(new Uint8Array([0x03]));
 }
