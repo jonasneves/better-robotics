@@ -93,6 +93,15 @@ if [ -f "$STAGED/usb-gadget.service" ]; then
   systemctl enable usb-gadget.service
 fi
 systemctl enable serial-getty@ttyGS0.service
+# Autologin on the USB-ACM serial. Physical cable possession is already the
+# auth boundary (same as holding the SD card); skipping the password prompt
+# lets Recovery drop straight into a shell.
+install -d -m 755 /etc/systemd/system/serial-getty@ttyGS0.service.d
+cat > /etc/systemd/system/serial-getty@ttyGS0.service.d/autologin.conf <<AUTOLOGIN_EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin $USER_NAME --noclear %I \$TERM
+AUTOLOGIN_EOF
 
 # Auto-login on the USB serial console as $USER_NAME — physical USB access
 # is already a full-trust boundary (same person could reseat the SD card),

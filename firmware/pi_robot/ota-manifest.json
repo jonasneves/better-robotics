@@ -4,7 +4,8 @@
     { "src": "pi_robot.py", "dest": "$HOME/better-robotics/firmware/pi_robot/pi_robot.py", "mode": "644" },
     { "src": "pi-robot.service", "dest": "/etc/systemd/system/pi-robot.service", "mode": "644" },
     { "src": "usb-gadget-setup.sh", "dest": "/usr/local/bin/usb-gadget-setup.sh", "mode": "755" },
-    { "src": "usb-gadget.service", "dest": "/etc/systemd/system/usb-gadget.service", "mode": "644" }
+    { "src": "usb-gadget.service", "dest": "/etc/systemd/system/usb-gadget.service", "mode": "644" },
+    { "src": "serial-getty-autologin.conf", "dest": "/etc/systemd/system/serial-getty@ttyGS0.service.d/autologin.conf", "mode": "644" }
   ],
   "post_install": [
     "systemctl daemon-reload",
