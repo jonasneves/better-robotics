@@ -83,7 +83,9 @@ async function buildBundle(entry, manifestUrl) {
   const files = {};
   for (const spec of manifest.files || []) {
     const src = spec.src;
-    const url = `firmware/pi_robot/${src}`;
+    // Cache-bust alongside the manifest fetch above — CDN can still serve
+    // stale individual files even after a fresh manifest.
+    const url = `firmware/pi_robot/${src}?v=${Date.now()}`;
     const buf = await (await fetch(url, { cache: "no-cache" })).arrayBuffer();
     // Chunked to avoid stack overflow from spreading into String.fromCharCode.
     const bytes = new Uint8Array(buf);
@@ -141,10 +143,16 @@ export async function updateFirmware(id) {
     logFor(entry, "no firmware source (fw-info missing url / bundle_url)");
     return;
   }
+  // Cache-bust both the dashboard fetch AND the URL handed to the ESP32 for
+  // URL-trigger. GH Pages CDN was serving stale bins even with cache:no-cache
+  // (which triggers revalidation, not a forced refetch). Unique query string
+  // is the only reliable bypass. Same pattern as prepare.js and the Pi
+  // manifest fetch inside buildBundle above.
+  const bustedUrl = `${fetchUrl}${fetchUrl.includes("?") ? "&" : "?"}v=${Date.now()}`;
   logFor(entry, `fetching ${fetchUrl}…`);
   let bytes;
   try {
-    const resp = await fetch(fetchUrl, { cache: "no-cache" });
+    const resp = await fetch(bustedUrl, { cache: "no-cache" });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     bytes = new Uint8Array(await resp.arrayBuffer());
   } catch (err) {
@@ -161,7 +169,7 @@ export async function updateFirmware(id) {
       const hashBuf = await crypto.subtle.digest("SHA-256", bytes);
       const sha256 = [...new Uint8Array(hashBuf)]
         .map(b => b.toString(16).padStart(2, "0")).join("");
-      const absoluteUrl = new URL(fetchUrl, location.href).toString();
+      const absoluteUrl = new URL(bustedUrl, location.href).toString();
       const payload = JSON.stringify({ url: absoluteUrl, size: bytes.length, sha256 });
       const frame = new Uint8Array(1 + payload.length);
       frame[0] = 0x04;
