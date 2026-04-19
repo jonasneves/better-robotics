@@ -57,11 +57,13 @@ async function releaseWakeLock() {
 
 async function streamOtaBytes(entry, bytes) {
   const ch = entry.otaDataChar;
-  // Lifecycle frames (abort/begin/commit) use WithResponse for ATT-acked
-  // reliability. Chunk frames use WithoutResponse for throughput, paced by
-  // software flow control against the firmware's `otaStatus.n` ack counter.
-  // Both firmwares advertise WRITE_WITHOUT_RESPONSE on the OTA data char
-  // since c5d0d76; Chrome honors the property and writes actually land.
+  // bless (Pi BLE library) advertises WRITE_WITHOUT_RESPONSE if we ask, but
+  // its on_write handler doesn't fire for ATT Write Commands — chunks land
+  // on the wire but never reach _ota_handle_write, so _ota_buffer stays
+  // empty and the stream stalls. Arduino-BLE (ESP32) handles them fine.
+  // Gate the speedup on type until bless is fixed; Pi bundles are tiny
+  // (~70 KB) so WithResponse is fast enough there anyway.
+  const useWithoutResponse = entry.fwInfo?.type === "esp32";
   try { await ch.writeValueWithResponse(new Uint8Array([0x00])); } catch {}
   const begin = new Uint8Array(5);
   begin[0] = 0x01;
@@ -76,15 +78,20 @@ async function streamOtaBytes(entry, bytes) {
     const frame = new Uint8Array(slice.length + 1);
     frame[0] = 0x02;
     frame.set(slice, 1);
-    await ch.writeValueWithoutResponse(frame);
-    sent += slice.length;
-    // Firmware notifies `ota-status` at most every 32 KB / 250 ms, so `acked`
-    // advances in jumps; 64 KB in-flight cap keeps a few notify-intervals of
-    // headroom without letting the link-layer buffer grow unbounded.
-    const stallStart = Date.now();
-    while (sent - (entry.otaStatus?.n ?? 0) > MAX_IN_FLIGHT) {
-      if (Date.now() - stallStart > STALL_TIMEOUT_MS) throw new Error("OTA stalled");
-      await new Promise(r => setTimeout(r, 10));
+    if (useWithoutResponse) {
+      await ch.writeValueWithoutResponse(frame);
+      sent += slice.length;
+      // Firmware notifies `ota-status` at most every 32 KB / 250 ms, so
+      // `acked` advances in jumps; 64 KB in-flight cap keeps a few
+      // notify-intervals of headroom without letting the link-layer
+      // buffer grow unbounded.
+      const stallStart = Date.now();
+      while (sent - (entry.otaStatus?.n ?? 0) > MAX_IN_FLIGHT) {
+        if (Date.now() - stallStart > STALL_TIMEOUT_MS) throw new Error("OTA stalled");
+        await new Promise(r => setTimeout(r, 10));
+      }
+    } else {
+      await ch.writeValueWithResponse(frame);
     }
   }
   await ch.writeValueWithResponse(new Uint8Array([0x03]));
