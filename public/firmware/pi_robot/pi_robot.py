@@ -23,6 +23,15 @@ import socket
 import subprocess
 import sys
 
+# version.py is stamped by Makefile / CI (publish-pi-firmware) with the short
+# SHA of the commit that built this firmware. Missing on hand-edited dev
+# builds; surfaced as fw-info.version so the dashboard can show "running
+# abc1234" alongside the manifest's "flashing def5678".
+try:
+    from version import SHA as _VERSION_SHA  # type: ignore
+except Exception:
+    _VERSION_SHA = None
+
 from bless import (
     BlessServer,
     BlessGATTCharacteristic,
@@ -173,12 +182,15 @@ def _load_authorized_pubs() -> list[dict]:
 _authorized_pubs: list[dict] = []
 
 def _fw_info_snapshot() -> dict:
-    return {
+    info: dict = {
         "type": "pi",
         "bundle_url": "firmware/pi_robot/ota-manifest.json",
         "caps": _build_caps(),
         "authorized": [p["fingerprint"] for p in _authorized_pubs],
     }
+    if _VERSION_SHA:
+        info["version"] = _VERSION_SHA
+    return info
 
 OTA_OP_ABORT = 0x00
 OTA_OP_BEGIN = 0x01
