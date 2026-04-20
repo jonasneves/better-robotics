@@ -450,15 +450,12 @@ details.tray > summary {
   align-items: center;
 }
 details.tray > summary::-webkit-details-marker { display: none; }
-details.tray > summary::after {
-  content: "›";
-  display: inline-block;
-  color: var(--ink-muted);
-  margin-left: auto;
-  font-weight: 400;
-  transition: transform 0.2s;
-}
-details.tray[open] > summary::after { transform: rotate(90deg); }
+details.tray > summary::marker { content: ""; }
+/* Chevron SVG lives inside the summary at the leading edge — matches the
+   robot card's disclosure pattern for visual consistency. The shared
+   .disclosure-chevron style already rotates on demand; we just need the
+   [open] selector for details. */
+details.tray[open] > summary .disclosure-chevron { transform: rotate(0); }
 details.tray[open] > :not(summary) { margin-top: 12px; }
 
 .empty-state .empty-actions { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
