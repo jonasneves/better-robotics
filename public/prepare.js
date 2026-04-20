@@ -215,7 +215,9 @@ export function initPrepare() {
   $("prep-pick-btn").addEventListener("click", async () => {
     try {
       dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
-      $("prep-pick-meta").textContent = dirHandle.name;
+      const pickMeta = $("prep-pick-meta");
+      pickMeta.textContent = dirHandle.name;
+      pickMeta.className = "meta";
       $("prep-go-btn").disabled = false;
     } catch { /* user cancelled */ }
   });

@@ -196,7 +196,7 @@
     <div class="label">Set up a Pi robot</div>
     <button class="icon" id="prepare-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
-  <p class="meta" style="margin: 0 0 16px;">
+  <p class="hint" style="margin: 0 0 16px;">
     After imaging the card with Raspberry Pi OS (via Raspberry Pi Imager), fill these in and pick the mounted boot partition. The browser writes firmware, wheels, and firstrun.sh onto it.
   </p>
   <div id="prep-unsupported" class="unsupported" hidden>
@@ -213,7 +213,7 @@
   <div class="field">
     <label for="prep-password">Sudo password (optional)</label>
     <input id="prep-password" type="password" autocomplete="new-password">
-    <div class="meta" style="margin-top: 4px;">Leave blank for SSH-key-only login. You can set a password later with <code>passwd</code>.</div>
+    <div class="hint" style="margin-top: 4px;">Leave blank for SSH-key-only login. You can set a password later with <code>passwd</code>.</div>
   </div>
   <div class="field">
     <label for="prep-sshkey">SSH public keys</label>
@@ -221,7 +221,7 @@
       <textarea id="prep-sshkey" rows="3" placeholder="ssh-ed25519 AAAA..." autocomplete="off"></textarea>
       <button type="button" class="overlay-action" id="prep-sshkey-load">Upload</button>
     </div>
-    <div class="meta" style="margin-top: 4px;">Pre-filled with your dashboard key. Add more lines to authorize other keys, or edit to replace.</div>
+    <div class="hint" style="margin-top: 4px;">Pre-filled with your dashboard key. Add more lines to authorize other keys, or edit to replace.</div>
   </div>
   <div class="field">
     <label>Capabilities</label>
@@ -241,11 +241,11 @@
         <label for="prep-cap-camera">Camera (auto-detect, needs picamera2 + aiortc)</label>
       </div>
     </div>
-    <div class="meta" style="margin-top: 4px;">Only checked capabilities will appear on the robot's dashboard card.</div>
+    <div class="hint" style="margin-top: 4px;">Only checked capabilities will appear on the robot's dashboard card.</div>
   </div>
   <div class="row" style="margin-top: 12px;">
     <button id="prep-pick-btn" class="secondary sm">Pick SD card directory</button>
-    <span class="meta" id="prep-pick-meta">not picked</span>
+    <span class="hint" id="prep-pick-meta">No card selected</span>
   </div>
   <div class="modal-footer">
     <button class="secondary sm" id="prep-cancel-btn">Cancel</button>
