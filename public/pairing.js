@@ -35,9 +35,20 @@ class Peer {
     };
     const dispatchTransport = () => this._onTransportChange(this.transport);
 
+    // Forward-compat targeting: room-aware consumers (future N-peer rooms)
+    // include an optional `to: "<peer-role-or-id>"` on outbound frames. If
+    // set, receivers not matching their own role drop the frame silently.
+    // Today's 1:1 flow never sets `to` — broadcasts reach the single peer —
+    // so this is a no-op in production but lets future multi-peer code
+    // filter without rework. Mirrors signal.neevs.io's own peer-routing key.
+    const accept = (msg) => {
+      if (msg && typeof msg === "object" && msg.to && msg.to !== this._myRole) return;
+      this._onMessage(msg);
+    };
+
     // P2P data channel: inbound JSON frames delivered straight to onMessage.
     channel.addEventListener("message", (e) => {
-      try { this._onMessage(JSON.parse(e.data)); } catch {}
+      try { accept(JSON.parse(e.data)); } catch {}
     });
     channel.addEventListener("close", () => {
       dispatchTransport();
@@ -51,7 +62,7 @@ class Peer {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
       if (msg.type !== "signal" || msg.peer === myRole) return;
-      if (msg.data?.relay !== undefined) this._onMessage(msg.data.relay);
+      if (msg.data?.relay !== undefined) accept(msg.data.relay);
     });
     ws.addEventListener("close", () => {
       dispatchTransport();
