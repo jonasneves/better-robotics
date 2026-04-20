@@ -141,11 +141,14 @@ _config = _load_config()
 LED_ENABLED    = bool(_config.get("led_enabled", True))
 LED_PIN        = int(_config.get("led_pin", 17))
 MOTORS_ENABLED = bool(_config.get("motors_enabled", True))
-# H-bridge-agnostic: works with L298N, DRV8833, TB6612, etc. Defaults map to
-# a common L298N wiring used by the reference build.
+# H-bridge-agnostic: works with L298N, DRV8833, TB6612, etc. Defaults
+# intentionally avoid GPIO 17 (LED default) — a shared pin makes the
+# gpiozero Motor() init raise GPIOPinInUse and BOTH motor drivers end up
+# None in the try/except, which silently breaks control while leaving
+# the L298N's floating inputs to run a wheel.
 MOTORS_PINS    = _config.get("motors_pins", {
-    "left":  {"in1": 17, "in2": 27},
-    "right": {"in1": 23, "in2": 24},
+    "left":  {"in1": 5,  "in2": 6},
+    "right": {"in1": 13, "in2": 26},
 })
 CAMERA_ENABLED = _config.get("camera_enabled", "auto")  # "auto" | True | False
 
@@ -231,6 +234,31 @@ if CAMERA_ENABLED is not False:
 
 logging.basicConfig(format="%(asctime)s %(message)s", level=logging.INFO)
 log = logging.getLogger("pi_robot")
+
+def _pin_conflicts() -> list[tuple[int, list[str]]]:
+    """Reports GPIOs claimed by more than one capability. Catches the
+    classic pi-robot.conf trap — e.g. LED and motors.left.in1 both on
+    GPIO 17 causes gpiozero to raise GPIOPinInUse, the Motor try/except
+    silently drops both drivers, and the L298N's floating inputs spin
+    a wheel."""
+    claimed: dict[int, list[str]] = {}
+    if LED_ENABLED:
+        claimed.setdefault(LED_PIN, []).append("led")
+    if MOTORS_ENABLED:
+        for side, pins in MOTORS_PINS.items():
+            for role, pin in pins.items():
+                claimed.setdefault(int(pin), []).append(f"motors.{side}.{role}")
+    return [(pin, tags) for pin, tags in claimed.items() if len(tags) > 1]
+
+_conflicts = _pin_conflicts()
+for _pin, _tags in _conflicts:
+    log.error("GPIO %d claimed by multiple caps: %s — edit pi-robot.conf or the Pinout dialog to resolve",
+              _pin, " + ".join(_tags))
+if _conflicts:
+    # Refuse to initialize motors rather than leave them in undefined state.
+    # LED still goes through (it's usually the one the user meant to keep).
+    log.error("motors disabled due to pin conflict(s)")
+    MOTORS_ENABLED = False
 
 led = LED(LED_PIN) if LED_ENABLED else None
 
