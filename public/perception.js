@@ -305,11 +305,16 @@ export function renderPerceptionPromptField(entry, { editAction }) {
   if (!isSupported()) return "";
   const current = entry.vlmPrompt ?? "";
   return `
-    <details class="camera-prompt">
-      <summary class="meta">What to look for</summary>
-      <textarea class="camera-prompt-input" rows="2" placeholder="${escapeHtml(DEFAULT_PROMPT)}" data-action="${escapeHtml(editAction)}">${escapeHtml(current)}</textarea>
-      <div class="meta camera-prompt-hint">Directives work (“Describe…”) better than questions (“Is there…”). Empty uses the default.</div>
-    </details>
+    <div class="camera-prompt">
+      <label class="camera-prompt-label" for="cp-${escapeHtml(entry.id)}">Prompt</label>
+      <textarea
+        id="cp-${escapeHtml(entry.id)}"
+        class="camera-prompt-input"
+        rows="2"
+        placeholder="Describe the scene in one short sentence."
+        data-action="${escapeHtml(editAction)}">${escapeHtml(current)}</textarea>
+      <div class="camera-prompt-hint">Tell Pip what to focus on. Directives work better than questions. Empty uses the default.</div>
+    </div>
   `;
 }
 

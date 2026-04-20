@@ -578,34 +578,51 @@ details.tray[open] > :not(summary) { margin-top: 12px; }
 .camera-watch-load { margin-top: 6px; padding-left: 26px; }
 .camera-watch-load .camera-scene { padding-left: 0; margin-bottom: 4px; }
 
-/* Editable perception prompt — collapsible so it doesn't dominate the card
-   unless the user wants to change it. Matches the Log tray's details pattern. */
-.camera-prompt { margin-top: 10px; font-size: 12px; }
-.camera-prompt > summary {
-  cursor: pointer;
+/* Editable perception prompt — always visible under the camera. Flat form
+   shape (label / field / hint) matches standard form patterns; explicit
+   sans-serif so the label + hint don't inherit the monospace from the
+   surrounding robot card styles. */
+.camera-prompt { margin-top: 12px; }
+.camera-prompt-label {
+  display: block;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--ink-muted);
-  user-select: none;
+  margin-bottom: 4px;
 }
-.camera-prompt > summary:hover { color: var(--ink); }
 .camera-prompt-input {
   width: 100%;
   box-sizing: border-box;
-  margin-top: 6px;
   padding: 8px 10px;
   border: 1px solid var(--border-default);
   border-radius: 8px;
   background: var(--bg);
   color: var(--ink);
-  font: inherit;
+  font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
+  line-height: 1.4;
   resize: vertical;
+  min-height: 58px;
+}
+.camera-prompt-input::placeholder {
+  color: var(--ink-muted);
+  opacity: 0.7;
 }
 .camera-prompt-input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
 }
-.camera-prompt-hint { margin-top: 6px; }
+.camera-prompt-hint {
+  margin-top: 6px;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
 
 /* OTA progress bar — thin inline indicator styled to match the dashboard
    rather than the browser's chunky native bar. */
