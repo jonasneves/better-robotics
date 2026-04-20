@@ -11,7 +11,11 @@
 // ask() returns null and callers fall through to their canned message.
 
 const MODEL = "claude-sonnet-4-6";
-const TIMEOUT_MS = 8000;
+// Per-Claude-call ceiling. Tool-using conversations make several bridgeRequests
+// in series (one per tool round); 8s was fine for the no-tools notify path but
+// tight for tool loops and cold-start proxy latency. 20s covers typical
+// Anthropic response time with headroom for slow networks / first request.
+const TIMEOUT_MS = 20000;
 
 function bridgeRequest(detail) {
   return new Promise((resolve) => {

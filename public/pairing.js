@@ -23,10 +23,15 @@ class Peer {
       try { this._onMessage(JSON.parse(e.data)); }
       catch { /* drop malformed frames */ }
     });
-    const dispatchClose = () => this._onClose();
+    let closedOnce = false;
+    const dispatchClose = () => { if (closedOnce) return; closedOnce = true; this._onClose(); };
     channel.addEventListener("close", dispatchClose);
+    // Only terminal PC states count as close. "disconnected" is transient
+    // (momentary packet loss / brief ICE renegotiation) and recovers on its
+    // own — treating it as a close makes the card vanish on the first hiccup
+    // while the data channel is actually still fine.
     pc.addEventListener("connectionstatechange", () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
         dispatchClose();
       }
     });
