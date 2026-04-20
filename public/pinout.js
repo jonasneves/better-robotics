@@ -112,17 +112,6 @@ function claimsFromConfig(cfg) {
   return claims;
 }
 
-function pinInput(label, value, onchange) {
-  // Bare input; caller wires oninput to keep editConfig in sync.
-  return `
-    <label class="pinout-edit-row">
-      <span class="pinout-edit-label">${escapeHtml(label)}</span>
-      <input type="number" min="0" max="27" class="pinout-edit-input"
-             data-role="${escapeHtml(onchange)}" value="${value ?? ""}">
-    </label>
-  `;
-}
-
 function renderView(entry) {
   const claims = claimsFromEntry(entry);
   const legend = Object.entries(claims).length
@@ -141,9 +130,9 @@ function renderView(entry) {
 
 function renderEdit(entry) {
   // Preserve focus across the innerHTML rebuild so typing into a pin input
-  // doesn't blur after every keystroke. For type="number" inputs Chrome
-  // returns null for selectionStart/End so we restore focus only — cursor
-  // lands at the end of the value, which is fine for 2-char pin numbers.
+  // doesn't blur after every keystroke. Pin inputs are type="text" with
+  // inputmode="numeric" so selection API works — we snap the cursor back to
+  // end-of-value after refocusing below, or the next keystroke gets prepended.
   const active = document.activeElement;
   const savedPath = active?.dataset?.path || null;
   const savedToggle = active?.dataset?.toggle || null;
@@ -209,7 +198,7 @@ function renderEdit(entry) {
           <span class="pinout-edit-label">GPIO</span>
           <!-- Default 16: 17 is the classic Left-IN1 pick, 26 collides with
                the Safe-defaults preset's right.in2 — 16 dodges both. -->
-          <input type="number" min="0" max="27" class="pinout-edit-input"
+          <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input"
                  data-path="led_pin" value="${c.led_pin ?? 16}">
         </label>
       </div>
@@ -221,22 +210,22 @@ function renderEdit(entry) {
         <div style="padding-left: 24px;">
           <label class="pinout-edit-row">
             <span class="pinout-edit-label">Left IN1</span>
-            <input type="number" min="0" max="27" class="pinout-edit-input"
+            <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input"
                    data-path="motors_pins.left.in1" value="${ml.in1 ?? 17}">
           </label>
           <label class="pinout-edit-row">
             <span class="pinout-edit-label">Left IN2</span>
-            <input type="number" min="0" max="27" class="pinout-edit-input"
+            <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input"
                    data-path="motors_pins.left.in2" value="${ml.in2 ?? 27}">
           </label>
           <label class="pinout-edit-row">
             <span class="pinout-edit-label">Right IN1</span>
-            <input type="number" min="0" max="27" class="pinout-edit-input"
+            <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input"
                    data-path="motors_pins.right.in1" value="${mr.in1 ?? 23}">
           </label>
           <label class="pinout-edit-row">
             <span class="pinout-edit-label">Right IN2</span>
-            <input type="number" min="0" max="27" class="pinout-edit-input"
+            <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input"
                    data-path="motors_pins.right.in2" value="${mr.in2 ?? 24}">
           </label>
         </div>
@@ -297,9 +286,15 @@ function renderEdit(entry) {
   });
 
   // Restore focus to whatever input was active before the re-render so the
-  // user can keep typing without re-clicking after every keystroke.
-  if (savedPath) $("pinout-body").querySelector(`input[data-path="${savedPath}"]`)?.focus();
-  else if (savedToggle) $("pinout-body").querySelector(`input[data-toggle="${savedToggle}"]`)?.focus();
+  // user can keep typing without re-clicking after every keystroke. Put the
+  // cursor at end-of-value (otherwise Chrome lands it at position 0 on text
+  // inputs and the user's next keystroke is prepended).
+  if (savedPath) {
+    const el = $("pinout-body").querySelector(`input[data-path="${savedPath}"]`);
+    if (el) { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch {} }
+  } else if (savedToggle) {
+    $("pinout-body").querySelector(`input[data-toggle="${savedToggle}"]`)?.focus();
+  }
 }
 
 function beginEdit(id) {
@@ -329,11 +324,16 @@ function beginEdit(id) {
 }
 
 async function saveEdit(entry) {
-  // Reject out-of-range pin values before shipping the config. reportValidity
-  // fires the browser's native "Please enter a number between 0 and 27"
-  // message on the offending input, so the user sees what to fix.
-  const badInput = [...$("pinout-body").querySelectorAll("input[data-path]")]
-    .find(el => !el.checkValidity());
+  // Reject out-of-range pin values before shipping the config. Text inputs
+  // don't carry HTML5 numeric bounds, so set a custom validity message on the
+  // offender and let the browser's native popover point at the bad field.
+  let badInput = null;
+  for (const el of $("pinout-body").querySelectorAll("input[data-path]")) {
+    const v = parseInt(el.value, 10);
+    const bad = el.value.trim() === "" || Number.isNaN(v) || v < 0 || v > 27;
+    el.setCustomValidity(bad ? "Enter a GPIO number between 0 and 27." : "");
+    if (bad && !badInput) badInput = el;
+  }
   if (badInput) { badInput.reportValidity(); badInput.focus(); return; }
   const json = JSON.stringify(editConfig, null, 2) + "\n";
   $("pinout-body").innerHTML = `<div class="meta">Uploading config + restarting service…</div>`;
