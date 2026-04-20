@@ -41,25 +41,11 @@ function telemetryHtml(entry) {
   return parts.length ? `<div class="telemetry">${escapeHtml(parts.join(" · "))}</div>` : "";
 }
 
-// Registry for ops-response dispatch. Modules that send an ops verb expecting
-// a response register a handler keyed by msg.op; the chunked decoder in
-// connect() calls every matching handler when a response arrives. Multiple
-// listeners per op so persistent subscribers (pinout) coexist with one-shot
-// waiters (pip-tools). onOpsResponse returns an unregister fn.
-const opsResponseHandlers = {};  // op → Array<fn>
-export function onOpsResponse(op, fn) {
-  (opsResponseHandlers[op] ||= []).push(fn);
-  return () => {
-    const arr = opsResponseHandlers[op] || [];
-    const idx = arr.indexOf(fn);
-    if (idx >= 0) arr.splice(idx, 1);
-  };
-}
-function handleOpsResponse(entry, msg) {
-  for (const fn of opsResponseHandlers[msg.op] || []) {
-    try { fn(entry, msg); } catch {}
-  }
-}
+// Ops-response dispatch registry lives in ops-response.js so pip-tools.js
+// (a registrar) doesn't need to import app.js (a caller) and create a cycle.
+// Re-exported here for back-compat with anything else that imported it from app.
+export { onOpsResponse } from "./ops-response.js";
+import { dispatchOpsResponse } from "./ops-response.js";
 
 // Per-robot expand/collapse preference. Persisted so a user's choice sticks
 // across sessions. Absence of a key = fall back to smart default (see
@@ -359,7 +345,7 @@ async function connect(id) {
           let msg;
           try { msg = JSON.parse(new TextDecoder().decode(merged)); }
           catch { return; }
-          handleOpsResponse(entry, msg);
+          dispatchOpsResponse(entry, msg);
         }
       });
     } catch { /* ops-response char absent on older firmware — optional */ }

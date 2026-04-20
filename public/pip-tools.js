@@ -1,5 +1,5 @@
 import { state } from "./state.js";
-import { onOpsResponse } from "./app.js";
+import { onOpsResponse } from "./ops-response.js";
 import { getLog, getConfig, restartService } from "./capabilities/runtime/command.js";
 
 // One-shot ops-response wait — register, wait for the response that targets

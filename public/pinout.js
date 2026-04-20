@@ -1,7 +1,7 @@
 import { $, escapeHtml } from "./dom.js";
 import { state } from "./state.js";
 import { getConfig } from "./capabilities/runtime/command.js";
-import { onOpsResponse } from "./app.js";
+import { onOpsResponse } from "./ops-response.js";
 import { uploadFile } from "./capabilities/ota.js";
 
 // BCM GPIO numbers are what capability config and firmware use; the physical
