@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1a1d20">
+  <title>Pip · BetterRobotics</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="phone-app.js"></script>
+</head>
+<body class="phone">
+<main class="phone-main">
+  <header class="phone-header">
+    <div class="phone-brand">Pip</div>
+    <span class="phone-status" id="phone-status">
+      <span class="dot" id="phone-status-dot"></span>
+      <span id="phone-status-text">Pairing…</span>
+    </span>
+  </header>
+  <section class="phone-chat">
+    <div id="phone-echo" class="phone-echo" hidden></div>
+    <p id="phone-message" class="phone-message">Connecting to your desktop…</p>
+  </section>
+  <form id="phone-form" class="phone-form">
+    <input id="phone-input" class="phone-input" type="text" autocomplete="off"
+           placeholder="Ask Pip…" maxlength="300" aria-label="Ask Pip" disabled>
+  </form>
+</main>
+</body>
+</html>

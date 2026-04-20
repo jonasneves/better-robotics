@@ -1,6 +1,7 @@
 import { state } from "./state.js";
 import { onOpsResponse } from "./ops-response.js";
 import { getLog, getConfig, restartService } from "./capabilities/runtime/command.js";
+import { listPhones, sendToPhone } from "./phones.js";
 
 // One-shot ops-response wait — register, wait for the response that targets
 // our robot, unregister. Times out so a dropped response doesn't stall Pip.
@@ -60,6 +61,28 @@ export const TOOLS = [
       properties: { id: { type: "string", description: "Robot id" } },
       required: ["id"],
     },
+  },
+  // Phone-awareness tools (webmcp-style). Listing is read-only and idempotent;
+  // sending a notice is open-world (there's no "unsend"), so annotated as
+  // non-destructive but not idempotent.
+  {
+    name: "list_phones",
+    description: "Returns phones currently paired with this desktop dashboard (WebRTC). Empty list means nobody's on mobile right now. Pip can check this to know if the user can receive a push notice.",
+    input_schema: { type: "object", properties: {}, required: [] },
+    annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "send_to_phone",
+    description: "Push a short text notice to a paired phone — shows up in place of the last reply on the phone screen. Use sparingly; it interrupts whatever the phone user was reading.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Phone id from list_phones" },
+        text: { type: "string", description: "One short sentence, under 200 chars." },
+      },
+      required: ["id", "text"],
+    },
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: true },
   },
 ];
 
@@ -127,6 +150,14 @@ export async function executor(name, input) {
       // LLM hallucination can't restart a robot without explicit user assent.
       await restartService(id);
       return { ok: true, note: "restart requested (subject to user confirm)" };
+    }
+    case "list_phones": {
+      return listPhones();
+    }
+    case "send_to_phone": {
+      const text = String(input.text || "").slice(0, 300);
+      const ok = sendToPhone(input.id, text);
+      return ok ? { ok: true } : { error: `no phone with id ${input.id}` };
     }
     default:
       return { error: `unknown tool: ${name}` };

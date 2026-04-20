@@ -44,19 +44,26 @@
       <button id="add-robot-btn" class="secondary sm">+ Add robot</button>
       <button id="connect-all-btn" class="secondary sm" hidden>Connect all</button>
       <button id="scan-btn" class="secondary sm">Scan for new</button>
+      <button id="pair-phone-btn" class="secondary sm">+ Pair phone</button>
     </div>
   </div>
 
   <div id="robot-list"></div>
 
+  <div class="robots-heading" id="phones-heading" hidden>
+    <div class="label">Your phones</div>
+  </div>
+  <div id="phones-list"></div>
+
   <section class="card" id="discovered" hidden></section>
 
   <section class="card empty-state" id="empty-state" hidden>
     <div class="empty-title">No robots yet</div>
-    <div class="empty-sub">Set up a new robot or scan for one nearby.</div>
+    <div class="empty-sub">Set up a new robot, scan for one nearby, or pair a phone.</div>
     <div class="empty-actions">
       <button id="empty-add-robot-btn">+ Add robot</button>
       <button id="empty-scan-btn" class="secondary">Scan</button>
+      <button id="empty-pair-phone-btn" class="secondary">Pair phone</button>
     </div>
   </section>
 
@@ -264,6 +271,23 @@
       <div class="meta">Pi OS already on the card (via Raspberry Pi Imager)? Stages firmware, wheels, dashboard key, and the Better Robotics runtime onto the boot partition.</div>
       <button class="secondary" type="button" id="prepare-open-btn">Set up</button>
     </section>
+  </div>
+</dialog>
+
+<dialog id="pair-dialog" class="pair-dialog">
+  <div class="modal-header">
+    <div class="label">Pair a phone</div>
+    <button class="icon" id="pair-dialog-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
+  </div>
+  <p class="meta">Scan the QR with your phone's camera, or open the URL below on the phone. The phone talks to Pip through this desktop — no separate setup on the phone side.</p>
+  <div id="pair-qr" class="pair-qr"></div>
+  <div class="pair-meta">
+    <div class="meta" id="pair-status">Generating room…</div>
+    <div class="meta mono" id="pair-url"></div>
+    <div class="meta mono" id="pair-code"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="secondary sm" id="pair-cancel-btn">Cancel</button>
   </div>
 </dialog>
 

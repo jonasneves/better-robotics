@@ -167,6 +167,35 @@ async function handleSubmit(e) {
   _resumeTimer = setTimeout(scheduleAutoDismiss, IDLE_RESUME_MS);
 }
 
+// Remote-chat entry point: runs the same askWithTools loop used by the on-
+// desktop chat input but without touching any local UI. Returns the final
+// text Pip wants to show (or a graceful fallback on transport failure).
+// Wired from phones.js so paired phones can chat through Pip. Tool side
+// effects still run locally on the desktop (where BLE + ai-bridge live);
+// any window.confirm() prompts surface on the desktop operator's screen,
+// which is intentional for physically-risky actions like restart_service.
+export async function handleRemoteChat(text, { source = "phone" } = {}) {
+  const t = text?.trim();
+  if (!t) return "(empty message)";
+  // Keep remote messages in the shared history so desktop context carries
+  // through; tag the source so Pip knows the sender isn't local.
+  _history.push({ role: "user", content: `[${source}] ${t}` });
+  const messages = _history.slice(-HISTORY_LIMIT)
+    .map(m => ({ role: m.role, content: m.content }));
+  const reply = await askWithTools(messages, {
+    system: PIP_SYSTEM,
+    tools: TOOLS,
+    executor,
+    maxTokens: 1024,
+  });
+  const finalReply = reply === null
+    ? "I can't reach my brain right now — try again in a sec?"
+    : reply || "I don't have a good answer for that — tell me more?";
+  _history.push({ role: "assistant", content: finalReply });
+  if (_history.length > HISTORY_LIMIT) _history.splice(0, _history.length - HISTORY_LIMIT);
+  return finalReply;
+}
+
 // Fire notify() when a dialog's `open` attribute is added. Cheap, and lets other
 // modules open dialogs however they want without knowing Pip exists.
 function watchDialogs() {

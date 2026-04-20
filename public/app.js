@@ -19,7 +19,8 @@ import { initVoice } from "./voice.js";
 import { initPrepare } from "./prepare.js";
 import { initAuthUI, fingerprint as dashFingerprint, pubkeySsh, onKeyChange } from "./auth.js";
 import { initPasswordsUI } from "./passwords.js";
-import { initAssistant } from "./assistant.js";
+import { initAssistant, handleRemoteChat } from "./assistant.js";
+import { initPhones, setPhoneChatHandler } from "./phones.js";
 
 setLogRenderer((entry) => renderEntry(entry));
 setDisconnectHandler((id) => onDisconnected(id));
@@ -986,6 +987,12 @@ document.addEventListener("DOMContentLoaded", () => {
   initAuthUI();
   initPasswordsUI();
   initAssistant();
+  initPhones();
+  setPhoneChatHandler(text => handleRemoteChat(text, { source: "phone" }));
+  // Empty-state duplicate trigger so fresh dashboards without robots can still
+  // pair a phone. Same handler as the one in robots-heading.
+  const emptyPairBtn = $("empty-pair-phone-btn");
+  if (emptyPairBtn) emptyPairBtn.addEventListener("click", () => $("pair-phone-btn")?.click());
 
   loadPaired().then(() => {
     highlightKnownRobotFromUrl();
