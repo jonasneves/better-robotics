@@ -170,12 +170,30 @@ function renderEdit(entry) {
   const hard = dup.filter(([, v]) => v.every(x => x.enabled));
   const soft = dup.filter(([, v]) => !v.every(x => x.enabled));
   const fmt = (list) => list.map(x => x.enabled ? x.role : `${x.role} (off)`).join(" + ");
+  // Reserved-function pins: the kernel interface grabs these exclusively when
+  // enabled in raspi-config (usually SPI and I2C are on by default). gpiozero
+  // then can't claim them and Motor() fails silently — motors won't respond
+  // to slider commands even though the config looks clean.
+  const RESERVED = {
+    2:  "I2C1 SDA",  3:  "I2C1 SCL",
+    7:  "SPI0 CE1",  8:  "SPI0 CE0",  9:  "SPI0 MISO",  10: "SPI0 MOSI",  11: "SPI0 SCLK",
+    14: "UART TXD", 15: "UART RXD",
+  };
+  const reservedHits = [];
+  const checkReserved = (pin, role, enabled) => {
+    if (enabled && RESERVED[pin]) reservedHits.push({ pin, role, fn: RESERVED[pin] });
+  };
+  if (c.led_pin != null) checkReserved(c.led_pin, "LED", !!c.led_enabled);
+  for (const [role, g] of flattenPins(motors)) checkReserved(g, `motors.${role}`, !!c.motors_enabled);
   const warn = [
     hard.length
       ? `<div class="pinout-warn">Conflict: ${hard.map(([g, v]) => `GPIO ${g} claimed by ${fmt(v)}`).join("; ")}</div>`
       : "",
     soft.length
       ? `<div class="pinout-warn soft">Latent conflict: ${soft.map(([g, v]) => `GPIO ${g} claimed by ${fmt(v)}`).join("; ")} — fine while one side is off, will break if re-enabled.</div>`
+      : "",
+    reservedHits.length
+      ? `<div class="pinout-warn soft">Reserved hardware pin${reservedHits.length > 1 ? "s" : ""}: ${reservedHits.map(h => `GPIO ${h.pin} is ${h.fn} (used here for ${h.role})`).join("; ")}. Works only if the matching kernel interface is disabled in raspi-config — otherwise gpiozero can't claim it and motors silently fail.</div>`
       : "",
   ].join("");
   const conflicts = hard;  // only hard blocks Save
@@ -189,10 +207,10 @@ function renderEdit(entry) {
         </label>
         <label class="pinout-edit-row" style="padding-left: 24px;">
           <span class="pinout-edit-label">GPIO</span>
-          <!-- Default 26 not 17: 17 is the most common Left-IN1 pick, and
-               prefilling 17 here would trap the user into a collision. -->
+          <!-- Default 16: 17 is the classic Left-IN1 pick, 26 collides with
+               the Safe-defaults preset's right.in2 — 16 dodges both. -->
           <input type="number" min="0" max="27" class="pinout-edit-input"
-                 data-path="led_pin" value="${c.led_pin ?? 26}">
+                 data-path="led_pin" value="${c.led_pin ?? 16}">
         </label>
       </div>
       <div class="pinout-edit-section">
@@ -233,6 +251,9 @@ function renderEdit(entry) {
       ${warn}
       <div class="modal-footer">
         <button class="secondary sm" id="pinout-cancel-btn">Cancel</button>
+        <!-- One-click preset for beginners: all pins set to safe, non-reserved,
+             conflict-free values that work on any Pi 4 with stock raspi-config. -->
+        <button class="secondary sm" id="pinout-safe-defaults-btn" title="Set LED + motor pins to a known-good preset (no hardware-reserved pins, no conflicts)">Use safe defaults</button>
         <button class="sm" id="pinout-save-btn" ${conflicts.length ? "disabled" : ""}>Save &amp; restart</button>
       </div>
     </div>
@@ -267,6 +288,13 @@ function renderEdit(entry) {
     renderView(entry);
   });
   $("pinout-save-btn")?.addEventListener("click", () => saveEdit(entry));
+  // Safe-defaults preset: non-reserved pins, no overlap between LED and motors,
+  // matches a typical L298N/DRV8833/TB6612 two-motor wiring tutorial.
+  $("pinout-safe-defaults-btn")?.addEventListener("click", () => {
+    editConfig.led_pin = 16;
+    editConfig.motors_pins = { left: { in1: 5, in2: 6 }, right: { in1: 13, in2: 26 } };
+    renderEdit(entry);
+  });
 
   // Restore focus to whatever input was active before the re-render so the
   // user can keep typing without re-clicking after every keystroke.

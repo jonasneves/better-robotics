@@ -63,8 +63,10 @@ monitor:
 flash-monitor: flash monitor
 
 preview:
-	@echo "Serving dashboard at http://localhost:8080"
-	@cd public && python3 -m http.server 8080
+	@# Custom server forces HTTP/1.0 so Chrome doesn't pool keep-alive
+	@# connections and leave module fetches stuck at (pending). See
+	@# scripts/preview.py for the story.
+	@python3 scripts/preview.py 8080 public
 
 publish-firmware: compile
 	@test -n "$(BOOT_APP0)" || (echo "Could not find boot_app0.bin — run 'make setup' first" && exit 1)
