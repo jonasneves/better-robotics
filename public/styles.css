@@ -354,9 +354,11 @@ button.icon:hover { background: var(--line); color: var(--ink); }
   text-align: left;
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.12s ease;
 }
-.label-btn:hover { background: var(--border-subtle); }
+/* No hover background: when something in the card re-renders (OTA progress
+   ticks), innerHTML rebuild destroys/recreates this button and the transient
+   loss of :hover registers as a visible flicker. Clickability is still carried
+   by cursor:pointer on the row + focus-visible ring + the disclosure chevron. */
 .label-btn:focus-visible {
   outline: none;
   /* Softer focus ring than outline — closer to Apple's native feel. */

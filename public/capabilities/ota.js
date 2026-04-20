@@ -43,6 +43,21 @@ export async function uploadFile(id, filename, destPath, contentBytes, { restart
 let renderEntry = () => {};
 export function setRender(fn) { renderEntry = fn; }
 
+// Patch the existing OTA section's text/progress in place. Avoids rebuilding
+// the card's innerHTML on every progress tick (which would destroy hovered
+// elements and flicker). Falls back to a full re-render if the section isn't
+// in the DOM (collapsed card, or the section hasn't been created yet).
+function patchOtaSection(entry) {
+  const section = entry.node?.querySelector(".ota-section");
+  if (!section) { renderEntry(entry); return; }
+  const { st, n = 0, total = 0, err } = entry.otaStatus || {};
+  const pct = total ? Math.round(100 * n / total) : 0;
+  const meta = section.querySelector(".meta");
+  if (meta) meta.textContent = err ? `${st} — ${err}` : total ? `${st} · ${pct}%` : st;
+  const progress = section.querySelector(".ota-progress");
+  if (progress && total) { progress.value = n; progress.max = total; }
+}
+
 // macOS putting the display to sleep throttles the BLE write loop enough to
 // stall a 10-minute stream; hold a wake lock for the duration of the OTA.
 let wakeLock = null;
@@ -254,13 +269,20 @@ export const ota = {
       entry.otaStatus = decodeJson(await entry.otaStatusChar.readValue()) || { st: "idle" };
       await entry.otaStatusChar.startNotifications();
       entry.otaStatusChar.addEventListener("characteristicvaluechanged", (e) => {
+        const prevSt = entry.otaStatus?.st || "idle";
         entry.otaStatus = decodeJson(e.target.value) || { st: "idle" };
-        // Progress surfaces via the Firmware capability section; log only the
-        // terminal transitions (error / done) so the log pane isn't spammed.
         const { st, err: errMsg } = entry.otaStatus;
+        // Log only terminal transitions (error / done / back-to-idle) — every
+        // percent-tick would spam the log pane.
         if (errMsg) logFor(entry, `OTA ${st} — ${errMsg}`);
         else if (st === "done" || st === "idle") logFor(entry, `OTA ${st}`);
-        renderEntry(entry);
+        // Section appears/disappears on the idle↔active boundary, so a full
+        // re-render is needed there. Progress within the same active window
+        // patches the existing DOM so hovered elements don't flicker.
+        const wasActive = prevSt !== "idle";
+        const nowActive = st !== "idle";
+        if (wasActive !== nowActive) renderEntry(entry);
+        else if (nowActive) patchOtaSection(entry);
       });
     } catch {
       entry.otaDataChar = null;
@@ -284,8 +306,10 @@ export const ota = {
       ? `${escapeHtml(st)} — ${escapeHtml(err)}`
       : total ? `${escapeHtml(st)} · ${pct}%`
       : escapeHtml(st);
+    // `.ota-section` marker lets the progress handler patch this in place
+    // instead of rebuilding the whole card's innerHTML on every OTA notify.
     return `
-      <div class="robot-controls">
+      <div class="robot-controls ota-section">
         <div class="row">
           <div><div class="label">Firmware</div><div class="meta">${stateLine}</div></div>
         </div>
