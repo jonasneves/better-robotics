@@ -191,6 +191,12 @@ static void startScan() {
     Serial.printf("scan ignored — wifiPhase=%d (busy)\n", (int)wifiPhase);
     return;
   }
+  // Make sure STA mode is live. Something (camera init, join-then-failed,
+  // etc.) may have toggled it since boot; scan on the wrong mode returns 0.
+  if (WiFi.getMode() != WIFI_STA) {
+    WiFi.mode(WIFI_STA);
+    delay(20);
+  }
   WiFi.scanDelete();
   // Passive scan (listen for beacons, don't emit probe requests) with
   // 500ms per channel. On classic ESP32 with BLE active, the two radios
@@ -202,7 +208,8 @@ static void startScan() {
   int rc = WiFi.scanNetworks(true, false, true, 500);
   wifiPhase = PHASE_SCANNING;
   scanStartedAt = millis();
-  Serial.printf("wifi scan started (passive, rc=%d, free heap=%u)\n", rc, ESP.getFreeHeap());
+  Serial.printf("wifi scan started (passive, rc=%d, mode=%d, sleep=%d, free heap=%u)\n",
+                rc, (int)WiFi.getMode(), (int)WiFi.getSleep(), ESP.getFreeHeap());
 }
 
 static void startJoin(const String& ssid, const String& pass) {
@@ -625,6 +632,14 @@ void setup() {
   // STA mode without connecting — we want BLE advertising up first.
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(true, false);
+  // Disable WiFi power save so the radio stays on continuously. On classic
+  // ESP32 + BLE the default DTIM-based sleep leaves WiFi completely off
+  // during BLE windows, which is when beacons get missed and passive scans
+  // come back empty. Trades some mA of current for reliability.
+  WiFi.setSleep(false);
+  // Max TX power — doesn't affect scanning (RX) directly, but some APs
+  // reject probes / associations from weak transmitters. Harmless on STA.
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
 
   BLEDevice::init(name);
   BLEServer* server = BLEDevice::createServer();
