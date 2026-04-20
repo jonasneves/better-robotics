@@ -93,11 +93,25 @@ async function beginPairing() {
     const peer = await session.waitForPeer();
     if (_pendingSession !== session) { peer.close(); return; }  // user cancelled
     const id = session.roomId;
-    _phones.set(id, { id, label: "Phone", peer, connectedAt: Date.now() });
+    _phones.set(id, { id, label: "Phone", peer, connectedAt: Date.now(), status: "connected", statusDetail: "" });
     statusEl.textContent = "Connected";
     log("phone paired", "phone");
 
     peer.onMessage((msg) => onPhoneMessage(id, peer, msg));
+    // Status events from the pairing layer: reconnecting is transient, failed
+    // is terminal. We only drop the phone from the UI on terminal; reconnecting
+    // just re-renders the card with the new state badge so the user can see
+    // what's happening instead of the connection going silent.
+    peer.onStatus((status, detail) => {
+      const phone = _phones.get(id);
+      if (!phone) return;
+      phone.status = status;
+      phone.statusDetail = detail || "";
+      renderPhones();
+      // When we come back to connected after a drop, re-push target info
+      // so the phone's joypad picks the right robot.
+      if (status === "connected") sendTargetInfo(peer);
+    });
     peer.onClose(() => {
       // Safety stop: if this phone was driving a robot and drops offline,
       // zero the motors so the robot doesn't keep running on its last
@@ -175,20 +189,30 @@ function renderPhones() {
     return;
   }
   heading.hidden = false;
-  list.innerHTML = [..._phones.values()].map(p => `
-    <section class="card phone-tile">
-      <div class="row">
-        <div class="robot-identity">
-          <div class="label">
-            <span class="dot connected"></span>
-            ${escapeHtml(p.label)}
-            <span class="type-badge">PHONE</span>
+  list.innerHTML = [..._phones.values()].map(p => {
+    const dotClass = p.status === "connected" ? "connected"
+      : p.status === "reconnecting" ? "connecting"
+      : "error";
+    const statusLine = p.status === "connected"
+      ? `Chat + joypad · ${escapeHtml(p.id.slice(0, 8))}…`
+      : p.status === "reconnecting"
+        ? `Reconnecting… · ${escapeHtml(p.statusDetail || "")}`
+        : `Offline · ${escapeHtml(p.statusDetail || "")}`;
+    return `
+      <section class="card phone-tile">
+        <div class="row">
+          <div class="robot-identity">
+            <div class="label">
+              <span class="dot ${dotClass}"></span>
+              ${escapeHtml(p.label)}
+              <span class="type-badge">PHONE</span>
+            </div>
+            <div class="status">${statusLine}</div>
           </div>
-          <div class="status">Chat only · ${escapeHtml(p.id.slice(0, 8))}…</div>
         </div>
-      </div>
-    </section>
-  `).join("");
+      </section>
+    `;
+  }).join("");
 }
 
 function escapeHtml(s) {

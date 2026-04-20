@@ -12,11 +12,6 @@ function setStatus(state, text) {
   $("phone-status-text").textContent = text;
 }
 
-function transportLabel(transport) {
-  if (transport === "p2p") return "Connected · P2P";
-  if (transport === "relay") return "Connected · relay";
-  return "Disconnected";
-}
 function setMessage(text) { $("phone-message").textContent = text; }
 function setEcho(text) {
   const el = $("phone-echo");
@@ -106,17 +101,24 @@ async function init() {
   const roomId = match[1];
   try {
     setStatus("connecting", "Connecting…");
-    _peer = await joinPairingRoom(roomId, {
-      onStatus: (s) => { $("phone-status-text").textContent = s; },
-    });
-    setStatus("connected", transportLabel(_peer.transport));
+    _peer = await joinPairingRoom(roomId);
+    setStatus("connected", "Connected");
     setMessage("Hi — I'm Pip, running on your desktop. Ask me something.");
     _peer.onMessage(onPeerMessage);
-    _peer.onTransportChange((t) => {
-      // P2P → relay shift is usually transient; only flag as "error" when
-      // everything's actually down. Relay mode still works end-to-end, just
-      // higher latency for drive commands.
-      setStatus(t === "closed" ? "error" : "connected", transportLabel(t));
+    // Transient state: pairing.js handles ICE restart internally. We only
+    // change the visible status, keep input enabled so typed messages queue
+    // until the channel is back — the peer.send() no-ops while closed and
+    // the next data channel write will catch up.
+    _peer.onStatus((status, detail) => {
+      if (status === "connected") {
+        setStatus("connected", "Connected");
+        $("phone-input").disabled = false;
+      } else if (status === "reconnecting") {
+        setStatus("connecting", detail || "Reconnecting…");
+      } else if (status === "failed") {
+        setStatus("error", "Disconnected");
+        $("phone-input").disabled = true;
+      }
     });
     _peer.onClose(() => {
       setStatus("error", "Disconnected");
