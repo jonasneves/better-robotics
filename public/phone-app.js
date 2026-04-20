@@ -47,6 +47,18 @@ function onPeerMessage(msg) {
     // Pip-initiated message (tool: send_to_phone) — desktop pushing to us.
     setEcho("");
     setMessage(msg.text || "");
+  } else if (msg.type === "scene") {
+    // Raw VLM observation push from desktop — like catwatcher, we just show
+    // what the camera is seeing without Pip commentary on top.
+    const section = $("phone-scene");
+    const text = (msg.text || "").trim();
+    if (text) {
+      $("phone-scene-source").textContent = msg.source ? `📷 ${msg.source}` : "📷 Camera";
+      $("phone-scene-text").textContent = text;
+      section.hidden = false;
+    } else {
+      section.hidden = true;
+    }
   } else if (msg.type === "target-info") {
     // Desktop tells us which robot the joypad will drive. If null, hide the
     // drive surface so we don't look like we're controlling something.

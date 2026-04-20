@@ -4,6 +4,7 @@
 // dashboard just opens http://<ip>:<port><path> with a plain <img>. Works
 // only when the dashboard's browser and the robot share a network.
 import { escapeHtml } from "../../dom.js";
+import { settings } from "../../settings.js";
 import {
   isSupported as visionSupported,
   isWatching as visionWatching,
@@ -11,6 +12,7 @@ import {
   stopWatching as visionStop,
   getLatestScene as visionScene,
 } from "../../perception.js";
+import { broadcastSceneToPhones } from "../../phones.js";
 
 let renderEntry = () => {};
 export function setRender(fn) { renderEntry = fn; }
@@ -67,7 +69,10 @@ export function makeMjpegStreamCap(schema) {
       // checkbox so the user can see what Pip sees.
       const scene = visionScene(entry.id);
       const sceneText = scene?.text ?? "";
-      const watchRow = running && visionSupported() ? `
+      // Perception is gated behind settings.perception (Settings → Experimental)
+      // because it's WebGPU-only, multi-hundred-MB on first load, and GPU-heavy
+      // at run. Users opt in explicitly before the control even appears.
+      const watchRow = running && visionSupported() && settings.perception ? `
         <label class="camera-watch-row">
           <input type="checkbox" data-action="${actionWatch}" ${watching ? "checked" : ""}>
           <span>Watch with Pip</span>
@@ -106,7 +111,12 @@ export function makeMjpegStreamCap(schema) {
           renderEntry(entry);
           try {
             await visionStart(entry, {
-              onScene: () => renderEntry(entry),
+              onScene: (text) => {
+                renderEntry(entry);
+                // Paired phones see what Pip sees — catwatcher-style push. No
+                // Pip-in-the-loop for this stream; it's raw VLM observation.
+                broadcastSceneToPhones({ source: entry.name, text });
+              },
               onError: (err) => console.warn("perception error", err),
             });
           } catch (err) {

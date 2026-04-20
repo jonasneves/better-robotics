@@ -896,6 +896,29 @@ document.addEventListener("DOMContentLoaded", () => {
     settings.passiveScan = passiveCheckbox.checked;
     saveSettings();
   });
+
+  // Camera perception — gated on WebGPU + explicit opt-in. Toggling this
+  // only unlocks the per-camera "Watch with Pip" control; it doesn't start
+  // any inference on its own.
+  const perceptionCheckbox = $("setting-perception");
+  const perceptionStatus = $("setting-perception-status");
+  const perceptionAvailable = typeof navigator !== "undefined" && !!navigator.gpu;
+  if (perceptionCheckbox) {
+    perceptionCheckbox.checked = settings.perception && perceptionAvailable;
+    perceptionStatus.textContent = perceptionAvailable
+      ? "Run a small vision model on camera streams. ~770 MB first download; ~1 s per frame; GPU-heavy."
+      : "Unavailable — needs WebGPU (Chrome desktop, or enable chrome://flags#enable-unsafe-webgpu on older builds).";
+    if (!perceptionAvailable) perceptionCheckbox.disabled = true;
+    perceptionCheckbox.addEventListener("change", () => {
+      settings.perception = perceptionCheckbox.checked;
+      saveSettings();
+      // Re-render connected robots so their camera cards pick up or drop the
+      // "Watch with Pip" control without a page refresh.
+      for (const e of state.devices.values()) {
+        if (e.status === "connected" && e.node) renderEntry(e);
+      }
+    });
+  }
   // Profile — classroom-local identity (no auth, browser-only). Seeded hue from name hash.
   const seedColor = (str) => {
     if (!str) return null;

@@ -1435,6 +1435,26 @@ body.phone {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .phone-input:disabled { opacity: 0.55; }
+/* Scene push from desktop's VLM — shown under the chat as a live caption. */
+.phone-scene {
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+}
+.phone-scene-label {
+  font-size: 11px;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.phone-scene-text {
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 @media print {
   body > main, #robot-menu { display: none !important; }
