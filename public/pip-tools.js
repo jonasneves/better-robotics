@@ -1,11 +1,12 @@
 import { state } from "./state.js";
 import { onOpsResponse } from "./ops-response.js";
 import { getLog, getConfig, restartService } from "./capabilities/runtime/command.js";
-import { listPhones, sendToPhone } from "./phones.js";
+import { listPhones, sendToPhone, askHuman } from "./phones.js";
 import {
   getLatestScene as getRobotScene,
   isWatching as isWatchingRobot,
   observeOnce,
+  captureFrameDataUrl,
 } from "./perception.js";
 
 // One-shot ops-response wait — register, wait for the response that targets
@@ -115,6 +116,22 @@ export const TOOLS = [
     },
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: true },
   },
+  {
+    name: "ask_human_via_phone",
+    description: "Ask the paired phone user a question, blocking until they answer or the ask times out (60s default). Preferred over guessing when spatial judgment matters: 'which door should I take?', 'is this the red book you meant?', directional disambiguation during navigation. Attach the robot's current camera frame when it helps the user answer ('include_robot_camera' + 'robot_id'). Provide 'options' for tappable answers when the choice is discrete; omit options to get a free-text response. Returns {answer, timed_out}: answer is the string the user tapped/typed, null if they skipped or timed out.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Phone id from list_phones." },
+        question: { type: "string", description: "One short, specific question. Open-ended wording beats leading wording." },
+        options: { type: "array", items: { type: "string" }, description: "Up to ~4 tappable answers. Omit or leave empty for a free-text response." },
+        include_robot_camera: { type: "boolean", description: "Attach the robot's current camera frame. Default false." },
+        robot_id: { type: "string", description: "Robot whose camera to capture. Required when include_robot_camera is true." },
+      },
+      required: ["id", "question"],
+    },
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: true },
+  },
 ];
 
 export async function executor(name, input) {
@@ -216,6 +233,24 @@ export async function executor(name, input) {
       const text = String(input.text || "").slice(0, 300);
       const ok = sendToPhone(input.id, text);
       return ok ? { ok: true } : { error: `no phone with id ${input.id}` };
+    }
+    case "ask_human_via_phone": {
+      const question = String(input.question || "").trim();
+      if (!question) return { error: "question is required" };
+      const options = Array.isArray(input.options) ? input.options.map(String).slice(0, 8) : [];
+      let imageDataUrl = null;
+      if (input.include_robot_camera) {
+        if (!input.robot_id) return { error: "robot_id is required when include_robot_camera is true" };
+        const entry = state.devices.get(input.robot_id);
+        if (!entry) return { error: `no robot with id ${input.robot_id}` };
+        imageDataUrl = captureFrameDataUrl(entry);
+        if (!imageDataUrl) return { error: "couldn't capture a frame — no camera element, feed not started, or CORS-tainted" };
+      }
+      try {
+        return await askHuman(input.id, { question, options, imageDataUrl });
+      } catch (err) {
+        return { error: String(err.message || err) };
+      }
     }
     default:
       return { error: `unknown tool: ${name}` };

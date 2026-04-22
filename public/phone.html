@@ -39,6 +39,22 @@
       <div class="meta joypad-hint">Drag to drive</div>
     </div>
   </section>
+
+  <!-- Pip asks the user for help when confident enough to act but
+       needs human judgment: directional disambiguation, label confirmation,
+       "is this the thing you meant?". Modal so it preempts other UI. -->
+  <dialog id="phone-ask-dialog" class="ask-dialog">
+    <img id="phone-ask-image" class="ask-image" alt="" hidden>
+    <p id="phone-ask-question" class="ask-question"></p>
+    <div id="phone-ask-options" class="ask-options"></div>
+    <form id="phone-ask-free" class="ask-free" hidden>
+      <input id="phone-ask-free-input" type="text" placeholder="Type an answer" maxlength="200" autocomplete="off">
+      <button type="submit" class="sm">Send</button>
+    </form>
+    <div class="ask-footer">
+      <button type="button" id="phone-ask-skip" class="secondary sm">Skip</button>
+    </div>
+  </dialog>
 </main>
 </body>
 </html>

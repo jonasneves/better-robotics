@@ -76,12 +76,28 @@ function findCameraElement(entry) {
 }
 
 function captureFrame(entry, maxDim = 512) {
+  const canvas = drawFrameToCanvas(entry, maxDim);
+  if (!canvas) return null;
+  try { return canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height); }
+  catch { return null; }
+}
+
+// Separate path for "give me this frame as a data URL" — used by ask_human
+// to send the robot's view to a paired phone. Smaller default maxDim keeps
+// the JPEG under typical WebRTC data-channel message budgets (~60KB).
+export function captureFrameDataUrl(entry, maxDim = 320, quality = 0.75) {
+  const canvas = drawFrameToCanvas(entry, maxDim);
+  if (!canvas) return null;
+  try { return canvas.toDataURL("image/jpeg", quality); }
+  catch { return null; }
+}
+
+function drawFrameToCanvas(entry, maxDim) {
   const source = findCameraElement(entry);
   if (!source) return null;
   let w = source.naturalWidth || source.videoWidth;
   let h = source.naturalHeight || source.videoHeight;
   if (!w || !h) return null;
-  // VLM runs plenty fast at 512 max dim; downscale keeps GPU work modest.
   if (Math.max(w, h) > maxDim) {
     const s = maxDim / Math.max(w, h);
     w = Math.round(w * s);
@@ -89,10 +105,9 @@ function captureFrame(entry, maxDim = 512) {
   }
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext("2d");
   try {
-    ctx.drawImage(source, 0, 0, w, h);
-    return ctx.getImageData(0, 0, w, h);
+    canvas.getContext("2d").drawImage(source, 0, 0, w, h);
+    return canvas;
   } catch {
     // Tainted canvas → firmware didn't serve CORS + the <img> is missing
     // crossOrigin="anonymous". Surface null; caller logs once.

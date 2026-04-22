@@ -32,7 +32,57 @@ function handleSubmit(e) {
   _peer.send({ type: "chat", text });
 }
 
+// Pip asked a question — show the modal, wait for the user to tap an option
+// (or Skip / timeout at the other end). Only one ask at a time on screen;
+// if a second arrives while the first is open, the new one replaces it and
+// the prior ask resolves as skipped server-side when its timer fires.
+function showAsk(msg) {
+  const dialog = $("phone-ask-dialog");
+  const img = $("phone-ask-image");
+  const q = $("phone-ask-question");
+  const optsEl = $("phone-ask-options");
+  const free = $("phone-ask-free");
+  const freeInput = $("phone-ask-free-input");
+
+  if (msg.imageDataUrl) { img.src = msg.imageDataUrl; img.hidden = false; }
+  else { img.hidden = true; img.src = ""; }
+  q.textContent = msg.question || "";
+
+  const respond = (answer) => {
+    _peer?.send({ type: "ask-reply", askId: msg.askId, answer });
+    dialog.close();
+  };
+
+  optsEl.innerHTML = "";
+  if (Array.isArray(msg.options) && msg.options.length > 0) {
+    free.hidden = true;
+    for (const opt of msg.options) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ask-option sm";
+      b.textContent = String(opt);
+      b.addEventListener("click", () => respond(String(opt)), { once: true });
+      optsEl.appendChild(b);
+    }
+  } else {
+    free.hidden = false;
+    freeInput.value = "";
+    free.onsubmit = (e) => {
+      e.preventDefault();
+      const v = freeInput.value.trim();
+      if (v) respond(v);
+    };
+  }
+
+  $("phone-ask-skip").onclick = () => respond(null);
+  if (!dialog.open) dialog.showModal();
+  // Autofocus the free input when there are no tappable options, so the
+  // keyboard pops up immediately on mobile.
+  if (free.hidden === false) setTimeout(() => freeInput.focus(), 50);
+}
+
 function onPeerMessage(msg) {
+  if (msg.type === "ask") { showAsk(msg); return; }
   if (msg.type === "chat-reply") {
     setMessage(msg.text || "(no response)");
     _pending = false;

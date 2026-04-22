@@ -12,6 +12,10 @@ import { hostPairingRoom } from "./pairing.js";
 import { sendPairById, pickMotorsTarget } from "./capabilities/runtime/signed-pair.js";
 
 const _phones = new Map();  // roomId → { id, label, peer, connectedAt }
+// askId → { resolve, timeout, phoneId } — outstanding ask_human requests.
+// Keyed by askId, not phoneId, so simultaneous asks to different phones
+// (or the same one, though Pip shouldn't) don't collide.
+const _pendingAsks = new Map();
 let _chatHandler = null;
 let _pendingSession = null;
 
@@ -37,6 +41,26 @@ export function broadcastSceneToPhones({ source, text }) {
   for (const p of _phones.values()) {
     p.peer.send({ type: "scene", source, text });
   }
+}
+
+// ask_human primitive — send the phone user a question + optional image,
+// block until they answer or timeout. Resolves with { answer, timed_out }:
+// answer is a string when the user tapped an option or typed a reply,
+// null when they skipped, and the promise resolves (not rejects) on timeout
+// so Pip can keep operating instead of crashing on a distracted user.
+export function askHuman(phoneId, { question, options = [], imageDataUrl = null, timeoutMs = 60000 } = {}) {
+  const phone = _phones.get(phoneId);
+  if (!phone) return Promise.reject(new Error(`phone ${phoneId} not paired`));
+  const askId = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      if (!_pendingAsks.has(askId)) return;
+      _pendingAsks.delete(askId);
+      resolve({ answer: null, timed_out: true });
+    }, timeoutMs);
+    _pendingAsks.set(askId, { resolve, timeout, phoneId });
+    phone.peer.send({ type: "ask", askId, question, options, imageDataUrl });
+  });
 }
 
 export function initPhones() {
@@ -119,6 +143,14 @@ async function beginPairing() {
       // we can be explicit here at zero cost.
       const lastDriven = _phones.get(id)?.lastTarget;
       if (lastDriven) { try { sendPairById(lastDriven, "motors", 0, 0); } catch {} }
+      // Resolve any in-flight asks against this phone as timeouts so Pip
+      // unblocks gracefully; without this, tool calls would hang forever.
+      for (const [askId, p] of _pendingAsks) {
+        if (p.phoneId !== id) continue;
+        clearTimeout(p.timeout);
+        _pendingAsks.delete(askId);
+        p.resolve({ answer: null, timed_out: true });
+      }
       _phones.delete(id);
       log("phone disconnected", "phone");
       renderPhones();
@@ -141,6 +173,14 @@ async function beginPairing() {
 }
 
 async function onPhoneMessage(id, peer, msg) {
+  if (msg.type === "ask-reply") {
+    const pending = _pendingAsks.get(msg.askId);
+    if (!pending) return;  // late reply after timeout — drop silently
+    clearTimeout(pending.timeout);
+    _pendingAsks.delete(msg.askId);
+    pending.resolve({ answer: msg.answer ?? null, timed_out: false });
+    return;
+  }
   if (msg.type === "chat") {
     const text = (msg.text || "").trim();
     if (!text) return;
