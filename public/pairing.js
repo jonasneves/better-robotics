@@ -18,23 +18,28 @@
 // a signal sent before they arrived; we apply it only when we're not
 // already on a healthy connection.
 const SIGNAL_WS_URL = "wss://signal.neevs.io";
-const ICE_SERVERS = [
+// proxy.neevs.io mints short-lived Cloudflare Realtime TURN creds. STUN
+// servers stay in-line as a zero-roundtrip fallback so a degraded proxy
+// (offline, rate-limited, mis-deployed) still gives us STUN-only pairing
+// instead of nothing.
+const TURN_ENDPOINT = "https://proxy.neevs.io/cloudflare/turn";
+const STUN_FALLBACK = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun.cloudflare.com:3478" },
-  // OpenRelay's public TURN — covers symmetric-NAT networks (cellular,
-  // corporate/guest wifi) where STUN-only fails silently at the "checking"
-  // ICE state. Best-effort uptime, shared credentials, rate-limited;
-  // swap in a private TURN if we outgrow the quota.
-  {
-    urls: [
-      "turn:openrelay.metered.ca:80",
-      "turn:openrelay.metered.ca:443",
-      "turn:openrelay.metered.ca:443?transport=tcp",
-    ],
-    username: "openrelayproject",
-    credential: "openrelayproject",
-  },
 ];
+
+async function fetchIceServers() {
+  try {
+    const r = await fetch(TURN_ENDPOINT, { method: "POST" });
+    if (!r.ok) throw new Error(`turn: ${r.status}`);
+    const { iceServers } = await r.json();
+    dbg("turn: fetched", iceServers.length, "server(s)");
+    return [...STUN_FALLBACK, ...iceServers];
+  } catch (err) {
+    dbg("turn: fetch failed, STUN-only", err.message || err);
+    return STUN_FALLBACK;
+  }
+}
 const HEARTBEAT_MS = 20000;   // Cloudflare closes idle WebSockets ~100s; ping well below that.
 const DISCONNECT_GRACE_MS = 10000;  // Transient ICE `disconnected` can recover on its own.
 // Backpressure: DataChannel.bufferedAmount grows unbounded if we outrun the
@@ -351,12 +356,13 @@ function wireIceTrickle(pc, ws, myPeerId) {
 // onStatus fires at pre-Peer stages ("phone connected, negotiating…",
 // "establishing channel…") so the pair dialog can show distinct states
 // instead of a frozen "waiting for phone" when something's silently wedged.
-export function hostPairingRoom({ onStatus = () => {} } = {}) {
+export async function hostPairingRoom({ onStatus = () => {} } = {}) {
   const roomId = crypto.randomUUID();
   const myPeerId = makePeerId("desktop");
   const otherRolePrefix = "phone";
   dbg("desktop: opening room", roomId, "peerId=", myPeerId);
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const iceServers = await fetchIceServers();
+  const pc = new RTCPeerConnection({ iceServers });
   const ws = openSignalWs(roomId);
   wireIceTrickle(pc, ws, myPeerId);
   let resolvePeer, rejectPeer;
@@ -443,12 +449,13 @@ export function hostPairingRoom({ onStatus = () => {} } = {}) {
 // onStatus fires at each negotiation stage ("opening signal channel…",
 // "offer sent, waiting…", etc.) so phone.js can surface exactly where the
 // pair is — instead of a single "connecting…" blob that hides every stall.
-export function joinPairingRoom(roomId, { onStatus = () => {} } = {}) {
+export async function joinPairingRoom(roomId, { onStatus = () => {} } = {}) {
   const myPeerId = makePeerId("phone");
   const otherRolePrefix = "desktop";
   dbg("phone: joining room", roomId, "peerId=", myPeerId);
   try { onStatus("Opening signal channel…"); } catch {}
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const iceServers = await fetchIceServers();
+  const pc = new RTCPeerConnection({ iceServers });
   const channel = pc.createDataChannel("pip");
   const ws = openSignalWs(roomId);
   wireIceTrickle(pc, ws, myPeerId);

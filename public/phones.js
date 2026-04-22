@@ -68,7 +68,7 @@ async function beginPairing() {
   // it, a stuck negotiation looks identical to a working one (just "Waiting
   // for phone…" forever). Stage echoes go through statusEl so the user can
   // distinguish "phone never showed up" from "phone here but p2p stalled".
-  const session = hostPairingRoom({
+  const session = await hostPairingRoom({
     onStatus: (s) => { statusEl.textContent = s; },
   });
   _pendingSession = session;
