@@ -115,11 +115,24 @@ function setEcho(text) {
   else      { _echo.textContent = "";          _echo.hidden = true;  }
 }
 
+// Set the message text and tag it as AI-generated vs static. The
+// .ai-generated CSS class tints the text amber so the user can tell
+// Claude output apart from hardcoded app copy (intro line, fallback
+// replies when Claude is unreachable) — calibrates trust without adding
+// UI chrome.
+function setMessageText(text, fromAI = false) {
+  _message.textContent = text;
+  _message.classList.toggle("ai-generated", !!fromAI);
+}
+
 // Public API — any module can push a line from Pip. Auto-dismissing is the
 // default for spontaneous speech; pass { autoDismiss: false } for sticky ones.
-export function speakMessage(text, { autoDismiss = true, echo = null } = {}) {
+// Pass { fromAI: true } when the text came from a Claude call; defaults to
+// static so ad-hoc speakMessage() calls from module code don't falsely
+// advertise themselves as AI output.
+export function speakMessage(text, { autoDismiss = true, echo = null, fromAI = false } = {}) {
   setEcho(echo);
-  _message.textContent = text;
+  setMessageText(text, fromAI);
   _history.push({ role: "assistant", content: text });
   if (_history.length > HISTORY_LIMIT) _history.splice(0, _history.length - HISTORY_LIMIT);
   open({ autoDismiss });
@@ -145,7 +158,8 @@ async function notify(dialogId) {
   const reply = await ask(prompt, { system: PIP_SYSTEM });
   setResponding(false);
   if (reply === "") return;                     // Pip chose silence — respect it
-  speakMessage(reply ?? ctx.fallback);          // null = network failure, use fallback
+  // reply non-null = Claude-generated, reply null = fallback static copy.
+  speakMessage(reply ?? ctx.fallback, { fromAI: reply !== null });
 }
 
 async function handleSubmit(e) {
@@ -179,7 +193,8 @@ async function handleSubmit(e) {
   const finalReply = reply === null
     ? "I can't reach my brain right now — try again in a sec?"
     : reply || "I don't have a good answer for that — tell me more?";
-  _message.textContent = finalReply;
+  // reply non-null/non-empty = Claude output; either fallback string is static.
+  setMessageText(finalReply, reply !== null && reply !== "");
   _history.push({ role: "assistant", content: finalReply });
   if (_history.length > HISTORY_LIMIT) _history.splice(0, _history.length - HISTORY_LIMIT);
 

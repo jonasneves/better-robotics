@@ -1242,6 +1242,11 @@ dialog[open]::backdrop { opacity: 1; }
    right-margin so it doesn't run under the close button. */
 .assistant-echo[hidden] + .assistant-message { margin-right: 32px; }
 .assistant-message { margin: 0; }
+/* AI-generated replies get an amber tint so the user can tell "Claude wrote
+   this" apart from the app's hardcoded copy (onboarding lines, fallback
+   messages when Claude is unreachable). Calibrates trust — yellow-ish is
+   the "this is model output, verify as needed" signal. */
+.assistant-message.ai-generated { color: #d4b24e; }
 .assistant-form { margin: 10px 0 0; }
 .assistant-input {
   width: 100%;
