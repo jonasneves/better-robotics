@@ -29,7 +29,13 @@ const DTYPE = { vision_encoder: "fp16", embed_tokens: "fp16", decoder_model_merg
 const TRANSFORMERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers";
 const POLL_MS = 2000;
 const MAX_NEW_TOKENS = 128;
-const DEFAULT_PROMPT = "Describe what you see in this image in one or two short sentences. Focus on objects, obstacles, people, and environment features a small indoor robot would care about. Be specific. Don't ask questions.";
+// Prompt discipline: every concrete noun is a subject-candidate the model
+// may hallucinate, every additive instruction is a constraint it strains
+// against the pixels. Earlier version primed "indoor robot" and produced
+// "a small indoor robot with a white body" over a photo of a blanket.
+// Two words of corrective bias ("concretely", "visibly present") point at
+// the ground truth without nominating subjects.
+const DEFAULT_PROMPT = "Describe this image concretely in one short sentence. Name only what is visibly present.";
 
 let _tf = null;
 let _model = null;
@@ -317,9 +323,9 @@ export function renderPerceptionPromptField(entry, { editAction }) {
         id="cp-${escapeHtml(entry.id)}"
         class="camera-prompt-input"
         rows="2"
-        placeholder="Describe the scene in one short sentence."
+        placeholder="${escapeHtml(DEFAULT_PROMPT)}"
         data-action="${escapeHtml(editAction)}">${escapeHtml(current)}</textarea>
-      <div class="camera-prompt-hint">Tell Pip what to focus on. Directives work better than questions. Empty uses the default.</div>
+      <div class="camera-prompt-hint">Tell Pip what to focus on. Directives work better than questions, and every noun you add nudges the VLM toward naming it — even if it's not there. Empty uses the default shown in grey.</div>
     </div>
   `;
 }
