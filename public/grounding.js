@@ -58,9 +58,20 @@ async function ensurePipe() {
   if (_loadingPromise) return _loadingPromise;
   _loadingPromise = (async () => {
     const { pipeline } = await import(TRANSFORMERS_URL);
-    _pipe = await pipeline("zero-shot-object-detection", MODEL_ID, {
-      progress_callback: (p) => { try { _onProgress(p); } catch {} },
-    });
+    // WebGPU has broader ONNX op coverage than the default WASM backend.
+    // Cast(13) in the detection head fails on WASM for both OWL-ViT and
+    // OWLv2; WebGPU runs it. Falls back to WASM if WebGPU isn't available
+    // so we don't hard-fail on browsers without WebGPU support.
+    try {
+      _pipe = await pipeline("zero-shot-object-detection", MODEL_ID, {
+        device: "webgpu",
+        progress_callback: (p) => { try { _onProgress(p); } catch {} },
+      });
+    } catch {
+      _pipe = await pipeline("zero-shot-object-detection", MODEL_ID, {
+        progress_callback: (p) => { try { _onProgress(p); } catch {} },
+      });
+    }
     return _pipe;
   })();
   return _loadingPromise;
