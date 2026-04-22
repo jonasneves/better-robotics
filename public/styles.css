@@ -842,57 +842,50 @@ details.tray[open] > :not(summary) { margin-top: 12px; }
   word-break: break-all;
 }
 
-.pinout {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+/* SVG Pi header — green PCB surround, black plastic header strip, gold
+   pin dots colored by kind. Pin dots are clickable targets (later phases
+   wire pulse tests + live state here); use pointer-events: all so hovering
+   a pin shows the title tooltip. */
+.pinout-svg-wrap {
+  background: #0f3a1e;   /* Pi PCB green */
+  padding: 12px;
+  border-radius: 6px;
   margin-bottom: 12px;
-  font-family: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
-  font-size: 12px;
+  overflow: hidden;
 }
-.pin-row { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
-.pin-cell {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  background: var(--bg);
-  border-radius: 4px;
-  min-height: 28px;
+.pinout-svg { width: 100%; height: auto; max-width: 460px; display: block; margin: 0 auto; }
+.pinout-svg .pinout-strip { fill: #1a1a1a; }  /* black header plastic */
+.pinout-svg .pin-dot {
+  fill: #d4a96a;             /* default: raw gold (GPIO) */
+  stroke: #6b5530;
+  stroke-width: 1;
+  transition: filter 0.12s ease;
 }
-.pin-cell.side-l { grid-template-columns: 1fr auto 24px; text-align: right; }
-.pin-cell.side-r { grid-template-columns: 24px auto 1fr; text-align: left; }
-.pin-cell .pin-num {
-  background: #1d1d1f;
-  color: #fff;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: 600;
-  min-width: 18px;
-  text-align: center;
+.pinout-svg .pin-dot:hover { filter: brightness(1.25); cursor: help; }
+.pinout-svg .pin-dot.kind-3v3   { fill: #f59e0b; }
+.pinout-svg .pin-dot.kind-5v    { fill: #ef4444; }
+.pinout-svg .pin-dot.kind-gnd   { fill: #525252; }
+.pinout-svg .pin-dot.kind-i2c-id { fill: #a855f7; }
+.pinout-svg .pin-dot.claimed {
+  stroke: #60a5fa;
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 3px rgba(96, 165, 250, 0.6));
 }
-.pin-cell .pin-label { font-weight: 500; color: var(--ink); }
-.pin-cell .pin-claim { color: var(--ink-muted); font-size: 11px; }
-
-/* Pin-type colors: ground muted, power hot, GPIO neutral, I²C-ID reserved. */
-.pin-cell.kind-gnd   { background: #e8e8ea; }
-.pin-cell.kind-gnd .pin-label { color: #6e6e73; }
-.pin-cell.kind-5v    { background: #ffe1d9; }
-.pin-cell.kind-5v .pin-label { color: #c2410c; }
-.pin-cell.kind-3v3   { background: #ffeac2; }
-.pin-cell.kind-3v3 .pin-label { color: #a16207; }
-.pin-cell.kind-i2c-id { background: #f0e9ff; }
-.pin-cell.kind-i2c-id .pin-label { color: #6d28d9; }
-
-/* Claimed GPIO — the cap's name rides next to the label. */
-.pin-cell.claimed {
-  background: #dbeafe;
-  outline: 1px solid #60a5fa;
+.pinout-svg .pin-label {
+  font: 600 11px ui-monospace, "SF Mono", Menlo, monospace;
+  fill: #e5e5e5;
+  dominant-baseline: middle;
 }
-.pin-cell.claimed .pin-label { color: #1d4ed8; }
-.pin-cell.claimed .pin-claim { color: #1d4ed8; font-weight: 500; }
+.pinout-svg .pin-num {
+  font: 500 9px ui-monospace, "SF Mono", Menlo, monospace;
+  fill: #9ca3af;
+  dominant-baseline: middle;
+}
+.pinout-svg .pin-claim {
+  font: 500 10px ui-sans-serif, -apple-system, sans-serif;
+  fill: #60a5fa;
+  dominant-baseline: middle;
+}
 
 /* Recovery console — widened to fit 80 cols at 13px, flex-column so the
    term container has a measurable size for FitAddon to read. */

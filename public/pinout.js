@@ -62,29 +62,52 @@ function claimsFromEntry(entry) {
   return claims;
 }
 
+// SVG representation of the Pi 40-pin header. Looks like a physical header
+// (green PCB, black plastic strip, gold pin dots) so users mentally match it
+// to the board in front of them. Later phases attach click-to-pulse and
+// live pin-state here — the SVG substrate makes animations cheap and
+// keyboard/screen-reader semantics honest.
 function renderBoard(claims) {
-  const cells = [];
+  // Coordinate grid is fixed; CSS scales the <svg> to container width.
+  // Columns (left-to-right):
+  //   0–120  left claim badge (right-aligned at 118)
+  //   120–180 left GPIO label (right-aligned at 178)
+  //   180–210 left pin dot (cx 195)
+  //   210–240 physical pin number (cx 225)
+  //   240–270 right pin dot (cx 255)
+  //   270–330 right GPIO label (left-aligned at 272)
+  //   330–450 right claim badge (left-aligned at 332)
+  const W = 450;
+  const ROW_H = 24;
+  const PAD_Y = 14;
+  const H = PAD_Y * 2 + ROW_H * 20;
+  const rows = [];
   for (let i = 0; i < PINS.length; i += 2) {
     const [lp, ll, lk] = PINS[i];
     const [rp, rl, rk] = PINS[i + 1];
     const lc = claims[lp];
     const rc = claims[rp];
-    cells.push(`
-      <div class="pin-row">
-        <div class="pin-cell side-l kind-${lk} ${lc ? "claimed" : ""}">
-          ${lc ? `<span class="pin-claim">${escapeHtml(lc.cap)} · ${escapeHtml(lc.role)}</span>` : ""}
-          <span class="pin-label">${escapeHtml(ll)}</span>
-          <span class="pin-num">${lp}</span>
-        </div>
-        <div class="pin-cell side-r kind-${rk} ${rc ? "claimed" : ""}">
-          <span class="pin-num">${rp}</span>
-          <span class="pin-label">${escapeHtml(rl)}</span>
-          ${rc ? `<span class="pin-claim">${escapeHtml(rc.cap)} · ${escapeHtml(rc.role)}</span>` : ""}
-        </div>
-      </div>
+    const y = PAD_Y + (i / 2) * ROW_H + ROW_H / 2;
+    rows.push(`
+      <g class="pin-row">
+        ${lc ? `<text class="pin-claim" x="118" y="${y}" text-anchor="end">${escapeHtml(lc.cap)} · ${escapeHtml(lc.role)}</text>` : ""}
+        <text class="pin-label" x="178" y="${y}" text-anchor="end">${escapeHtml(ll)}</text>
+        <circle class="pin-dot kind-${lk} ${lc ? "claimed" : ""}" cx="195" cy="${y}" r="7" data-phys="${lp}"><title>${escapeHtml(ll)} (physical ${lp})${lc ? " — " + escapeHtml(lc.cap) + " " + escapeHtml(lc.role) : ""}</title></circle>
+        <text class="pin-num" x="225" y="${y}" text-anchor="middle">${lp}·${rp}</text>
+        <circle class="pin-dot kind-${rk} ${rc ? "claimed" : ""}" cx="255" cy="${y}" r="7" data-phys="${rp}"><title>${escapeHtml(rl)} (physical ${rp})${rc ? " — " + escapeHtml(rc.cap) + " " + escapeHtml(rc.role) : ""}</title></circle>
+        <text class="pin-label" x="272" y="${y}" text-anchor="start">${escapeHtml(rl)}</text>
+        ${rc ? `<text class="pin-claim" x="332" y="${y}" text-anchor="start">${escapeHtml(rc.cap)} · ${escapeHtml(rc.role)}</text>` : ""}
+      </g>
     `);
   }
-  return `<div class="pinout">${cells.join("")}</div>`;
+  return `
+    <div class="pinout-svg-wrap">
+      <svg class="pinout-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Raspberry Pi 40-pin header with current pin assignments">
+        <rect class="pinout-strip" x="180" y="${PAD_Y - 4}" width="90" height="${H - 2 * PAD_Y + 8}" rx="3"/>
+        ${rows.join("")}
+      </svg>
+    </div>
+  `;
 }
 
 // State for edit mode. Scoped per-open-dialog; cleared on close.
