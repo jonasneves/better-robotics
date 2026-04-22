@@ -8,6 +8,7 @@ One-page cheat sheet for diagnostic flags, console handles, and debug paths. If 
 - `?debug` or `#debug` — verbose pairing logs to console **and** a floating green-on-black log panel (bottom-right). Implementation: `pairing.js`.
 - `?prepare` — opens the Customize-card SD-prep dialog on load. Implementation: `app.js`.
 - `?robot=<name>` — pre-selects a robot by name (useful for direct-link workflows). Implementation: `app.js`.
+- `?no-grounding-preload` — skip the background download of the spatial detector when Watch is enabled. VLM scene captions still work; `get_robot_detections` will load the model on first call instead (with a ~30–60s wait). Use on slow / metered connections. Implementation: `grounding.js`.
 
 ### Phone (`phone.html`)
 - `?debug` or `#debug` — same pairing debug as above; the floating panel is visible on the phone too.

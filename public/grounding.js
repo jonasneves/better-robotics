@@ -38,6 +38,21 @@ let _onProgress = () => {};
 export function onGroundingProgress(cb) { _onProgress = cb || (() => {}); }
 export function isGroundingLoaded() { return !!_pipe; }
 
+// Perception layer owns when the detector loads — not Pip's tool calls.
+// Called from startWatching() in perception.js so "enable Watch" triggers
+// both the VLM load (required for scene captions) and the detector load
+// (required for spatial grounding) in parallel. Fire-and-forget: a
+// detector failure shouldn't block Watch, since VLM scenes are still
+// useful on their own. Any error surfaces naturally when Pip later calls
+// get_robot_detections.
+export function preloadGrounding() {
+  // URL opt-out for bandwidth-sensitive scenarios (mobile hotspot,
+  // users who only want VLM scene captions without spatial grounding).
+  // Documented in DEV.md.
+  if (typeof location !== "undefined" && /\bno-grounding-preload\b/.test(location.search + location.hash)) return;
+  ensurePipe().catch(() => { /* surface at tool-call time, not here */ });
+}
+
 async function ensurePipe() {
   if (_pipe) return _pipe;
   if (_loadingPromise) return _loadingPromise;

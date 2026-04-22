@@ -23,6 +23,7 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./dom.js";
 import { broadcastSceneToPhones } from "./phones.js";
+import { preloadGrounding } from "./grounding.js";
 
 const MODEL_ID = "LiquidAI/LFM2.5-VL-450M-ONNX";
 const DTYPE = { vision_encoder: "fp16", embed_tokens: "fp16", decoder_model_merged: "q4" };
@@ -172,6 +173,12 @@ export async function startWatching(entry, opts = {}) {
   if (_loops.has(entry.id)) return;
   const loop = { timer: null, running: false, stopped: false, onScene, onError };
   _loops.set(entry.id, loop);
+  // Kick off the spatial detector download in parallel with the VLM load.
+  // Fire-and-forget: VLM is the blocking path (scene captions need it); the
+  // detector earns its slot once Pip asks a spatial question. By the time
+  // that happens, the detector is usually already cached. Fully opt-out via
+  // ?no-grounding-preload (see DEV.md).
+  preloadGrounding();
   try { await ensureModel(onProgress); }
   catch (err) { _loops.delete(entry.id); throw err; }
 
