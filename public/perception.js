@@ -173,14 +173,18 @@ export async function startWatching(entry, opts = {}) {
   if (_loops.has(entry.id)) return;
   const loop = { timer: null, running: false, stopped: false, onScene, onError };
   _loops.set(entry.id, loop);
-  // Kick off the spatial detector download in parallel with the VLM load.
-  // Fire-and-forget: VLM is the blocking path (scene captions need it); the
-  // detector earns its slot once Pip asks a spatial question. By the time
-  // that happens, the detector is usually already cached. Fully opt-out via
-  // ?no-grounding-preload (see DEV.md).
-  preloadGrounding();
   try { await ensureModel(onProgress); }
   catch (err) { _loops.delete(entry.id); throw err; }
+  // Detector download kicks off AFTER the VLM is up, not alongside it.
+  // Parallel init of two transformers.js pipelines can race on shared
+  // onnxruntime-web backend state — a detector-session failure was
+  // surfacing as a VLM startup error through that shared path. Sequential
+  // keeps the architectural principle (perception owns the preload, not
+  // Pip's tool calls) without coupling the two loads' failure modes.
+  // Fire-and-forget: any detector-load failure surfaces when Pip calls
+  // get_robot_detections, not here. Opt out entirely via
+  // ?no-grounding-preload (see DEV.md).
+  preloadGrounding();
 
   const tick = async () => {
     if (loop.stopped) return;
