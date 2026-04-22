@@ -1199,6 +1199,14 @@ dialog[open]::backdrop { opacity: 1; }
   left: auto;
   top: auto;
   width: min(320px, calc(100vw - 40px));
+  /* Cap height so long Pip replies (tool output, multi-step reasoning)
+     can't climb past the top of the viewport. Panel grows upward from
+     the bottom anchor until it hits the cap, then content scrolls inside. */
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  /* Reserve gutter so the scrollbar appearing/disappearing doesn't reflow
+     the message width as Pip types. */
+  scrollbar-gutter: stable;
   margin: 0;
   /* Extra top padding reserves space for the floating close button without
      a dedicated header row. Matches the conversational-bubble pattern where
@@ -1224,6 +1232,10 @@ dialog[open]::backdrop { opacity: 1; }
   height: 28px;
   padding: 0;
   color: var(--ink-muted);
+  /* Panel content scrolls beneath the absolutely-positioned close button;
+     without an opaque background the scrolling text would show through. */
+  background: var(--surface);
+  border-radius: 6px;
 }
 .assistant-panel .assistant-close:hover { color: var(--ink); }
 /* Echo of the user's last turn — muted quote, takes the space the "Pip"

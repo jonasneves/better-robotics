@@ -126,6 +126,10 @@ function setMessageText(text, fromAI = false) {
   if (fromAI) _message.innerHTML = renderMd(text);
   else        _message.textContent = text;
   _message.classList.toggle("ai-generated", !!fromAI);
+  // Long replies are now scrollable inside the panel — snap to the top so
+  // the user sees the start of Pip's new message, not wherever they'd
+  // scrolled during the previous one.
+  if (_panel) _panel.scrollTop = 0;
 }
 
 // Public API — any module can push a line from Pip. Auto-dismissing is the
