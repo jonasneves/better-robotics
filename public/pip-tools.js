@@ -8,6 +8,7 @@ import {
   observeOnce,
   captureFrameDataUrl,
 } from "./perception.js";
+import { detectOnce } from "./grounding.js";
 import { wrapExecutor } from "./replay.js";
 
 // One-shot ops-response wait — register, wait for the response that targets
@@ -116,6 +117,23 @@ export const TOOLS = [
       required: ["id", "text"],
     },
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  {
+    name: "get_robot_detections",
+    description: "Runs an open-vocabulary object detector (OWL-ViT) on the robot's current camera frame and returns bounding boxes for the queries you provide. Use this WHENEVER a decision depends on knowing where-in-the-frame something is — get_robot_scene and ask_robot_scene are text-only and do NOT reliably report left/right/near/far. Prefer this over guessing lateral position from scene captions. Returns {label, score, bbox:{x,y,w,h,cx,cy}} per hit, coordinates normalized to [0,1]: x=0 is left edge, x=1 is right edge, y=0 is top, y=1 is bottom. cx/cy is the center of the box — use cx to decide which way to turn (cx<0.45 = left of center, cx>0.55 = right of center). Empty array means nothing matching was found. Queries should be short concrete noun phrases (up to ~5 per call): 'yellow can', 'doorway', 'chair'. ~1-2s per call; first call after page load triggers a one-time model download (~300-600MB, cached).",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Robot id" },
+        queries: {
+          type: "array",
+          items: { type: "string" },
+          description: "Up to ~5 short concrete noun phrases to locate in the frame.",
+        },
+      },
+      required: ["id", "queries"],
+    },
+    annotations: { readOnlyHint: true, idempotentHint: false, openWorldHint: true },
   },
   {
     name: "ask_human_via_phone",
@@ -234,6 +252,22 @@ async function dispatch(name, input) {
       const text = String(input.text || "").slice(0, 300);
       const ok = sendToPhone(input.id, text);
       return ok ? { ok: true } : { error: `no phone with id ${input.id}` };
+    }
+    case "get_robot_detections": {
+      const entry = state.devices.get(input.id);
+      if (!entry) return { error: `no robot with id ${input.id}` };
+      if (!isWatchingRobot(input.id)) {
+        return { error: "Watch isn't on for this robot — user needs to enable it first so the camera feed is live" };
+      }
+      const queries = Array.isArray(input.queries) ? input.queries.map(String).slice(0, 5) : [];
+      if (queries.length === 0) return { error: "queries is required (up to 5 short noun phrases)" };
+      try {
+        const detections = await detectOnce(entry, queries);
+        if (detections === null) return { error: "couldn't capture a frame — camera element missing or CORS-tainted" };
+        return { detections };
+      } catch (err) {
+        return { error: `detector failed: ${String(err.message || err)}` };
+      }
     }
     case "ask_human_via_phone": {
       const question = String(input.question || "").trim();

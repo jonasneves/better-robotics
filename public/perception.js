@@ -92,7 +92,7 @@ export function captureFrameDataUrl(entry, maxDim = 320, quality = 0.75) {
   catch { return null; }
 }
 
-function drawFrameToCanvas(entry, maxDim) {
+export function drawFrameToCanvas(entry, maxDim) {
   const source = findCameraElement(entry);
   if (!source) return null;
   let w = source.naturalWidth || source.videoWidth;
