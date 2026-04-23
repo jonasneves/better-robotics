@@ -97,9 +97,18 @@ export async function ask(userText, { system, maxTokens = 200 } = {}) {
 // loops until Claude returns a text-only reply (stop_reason !== "tool_use") or
 // we hit maxIterations. Returns the final text, "" if Claude chose silence,
 // or null on transport failure.
-export async function askWithTools(messages, { system, tools, executor, maxIterations = 5, maxTokens = 1024 } = {}) {
+//
+// Optional hooks for live UI tracing:
+//   onToolStart({ name, input })           — fires before each tool dispatch
+//   onToolEnd({ name, input, result, error, durationMs }) — after, with outcome
+//   shouldAbort() → boolean                — checked between iterations; true
+//                                             returns the aborted sentinel
+//                                             "(stopped)" so the caller can
+//                                             render it as a final reply
+export async function askWithTools(messages, { system, tools, executor, maxIterations = 5, maxTokens = 1024, onToolStart, onToolEnd, shouldAbort } = {}) {
   const convo = [...messages];
   for (let i = 0; i < maxIterations; i++) {
+    if (shouldAbort?.()) return "(stopped)";
     const res = await bridgeRequest({
       type: "proxy", provider: "claude", path: "/v1/messages", method: "POST",
       body: {
@@ -132,18 +141,23 @@ export async function askWithTools(messages, { system, tools, executor, maxItera
     const toolUses = json.content.filter(b => b.type === "tool_use");
     const toolResults = [];
     for (const tu of toolUses) {
+      const startedAt = performance.now();
+      onToolStart?.({ name: tu.name, input: tu.input });
       try {
         const result = await executor(tu.name, tu.input);
+        onToolEnd?.({ name: tu.name, input: tu.input, result, error: null, durationMs: performance.now() - startedAt });
         toolResults.push({
           type: "tool_result",
           tool_use_id: tu.id,
           content: JSON.stringify(result),
         });
       } catch (err) {
+        const error = String(err.message || err);
+        onToolEnd?.({ name: tu.name, input: tu.input, result: null, error, durationMs: performance.now() - startedAt });
         toolResults.push({
           type: "tool_result",
           tool_use_id: tu.id,
-          content: JSON.stringify({ error: String(err.message || err) }),
+          content: JSON.stringify({ error }),
           is_error: true,
         });
       }

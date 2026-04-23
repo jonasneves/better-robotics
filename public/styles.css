@@ -1358,58 +1358,102 @@ dialog[open]::backdrop { opacity: 1; }
   border-radius: 6px;
 }
 .assistant-panel .assistant-close:hover { color: var(--ink); }
-/* Echo of the user's last turn — muted quote, takes the space the "Pip"
-   title used to hold so the conversation context is always at the top. */
-.assistant-echo {
+/* Pip turns — each turn is a (echo, trace, reply) triple. Auto-collapses to
+   a one-liner when the next turn opens, so the active loop never has to share
+   visual weight with stale text. Stack flows top→bottom, latest at bottom. */
+.pip-turns { display: flex; flex-direction: column; gap: 12px; }
+.pip-turn { margin: 0; }
+.pip-turn:first-child > .pip-echo,
+.pip-turn:first-child > .pip-reply:only-child { margin-right: 32px; }  /* clear close button */
+
+.pip-echo {
   font-size: 13px;
   font-style: italic;
   color: var(--ink-muted);
-  margin: 0 32px 8px 0;  /* right margin clears the floating close button */
+  margin: 0 0 6px;
   padding-left: 8px;
   border-left: 2px solid var(--border-default);
   white-space: pre-wrap;
   word-break: break-word;
 }
-/* When there's no echo (fresh session), Pip's greeting needs a bit of extra
-   right-margin so it doesn't run under the close button. */
-.assistant-echo[hidden] + .assistant-message { margin-right: 32px; }
-.assistant-message { margin: 0; }
+
+/* Live trace — one row per tool_use call, appended as Claude dispatches them.
+   .pending = tool is in flight (italic + dim). Resolved rows show the result
+   summary. .error = tool returned/threw an error. */
+.pip-trace {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: var(--ink-muted);
+  border-left: 2px solid color-mix(in srgb, var(--duke-persimmon) 40%, transparent);
+  padding-left: 8px;
+}
+.pip-trace-line { padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+.pip-trace-line.pending { font-style: italic; opacity: 0.7; }
+.pip-trace-line.error   { color: var(--danger); }
+
+.pip-stop {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  padding: 2px 8px;
+  min-height: 22px;
+}
+
+/* Collapsed turn — one button-styled line. Click to expand back. Shows the
+   echo (when present) + action count, otherwise truncated reply text. */
+.pip-turn.collapsed { margin: 0; }
+.pip-turn-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.pip-turn-toggle:hover { color: var(--ink); }
+
+.pip-reply { margin: 0; }
 /* Amber tint = Pip is answering something the user just asked right now.
    Narrow scope on purpose: proactive notify tips and static fallbacks
    stay gray, even when Claude wrote them, because they're Pip's background
    voice rather than a live reply. Calibrates trust the right way —
    yellow appears when the user has context for "I asked, this is the
    answer" and can judge it against their question. */
-.assistant-message.ai-generated { color: #d4b24e; }
+.pip-reply.ai-generated { color: #d4b24e; }
 /* Markdown rendering inside Pip's AI replies. Keeps the amber tint from
    .ai-generated but gives code, lists, and emphasis proper structure
    instead of showing raw backticks / asterisks. */
-.assistant-message.ai-generated p { margin: 0 0 8px; }
-.assistant-message.ai-generated p:last-child { margin-bottom: 0; }
-.assistant-message.ai-generated code {
+.pip-reply.ai-generated p { margin: 0 0 8px; }
+.pip-reply.ai-generated p:last-child { margin-bottom: 0; }
+.pip-reply.ai-generated code {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12px;
   padding: 1px 5px;
   border-radius: 3px;
   background: rgba(212, 178, 78, 0.12);
 }
-.assistant-message.ai-generated pre {
+.pip-reply.ai-generated pre {
   margin: 8px 0;
   padding: 8px 10px;
   border-radius: 6px;
   background: rgba(212, 178, 78, 0.08);
   overflow-x: auto;
 }
-.assistant-message.ai-generated pre code {
+.pip-reply.ai-generated pre code {
   padding: 0;
   background: transparent;
   font-size: 12px;
 }
-.assistant-message.ai-generated strong { font-weight: 600; }
-.assistant-message.ai-generated em { font-style: italic; }
-.assistant-message.ai-generated ul,
-.assistant-message.ai-generated ol { margin: 6px 0; padding-left: 20px; }
-.assistant-message.ai-generated li { margin: 2px 0; }
+.pip-reply.ai-generated strong { font-weight: 600; }
+.pip-reply.ai-generated em { font-style: italic; }
+.pip-reply.ai-generated ul,
+.pip-reply.ai-generated ol { margin: 6px 0; padding-left: 20px; }
+.pip-reply.ai-generated li { margin: 2px 0; }
 .assistant-form { margin: 10px 0 0; }
 .assistant-input {
   width: 100%;

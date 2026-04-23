@@ -361,8 +361,11 @@
        user's last question takes the place the title used to occupy,
        contextualizing Pip's reply. Close button floats in the corner. -->
   <button class="icon assistant-close" id="assistant-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
-  <div id="assistant-echo" class="assistant-echo" hidden></div>
-  <p id="assistant-message" class="meta assistant-message">Hi — I'm Pip. I'll pipe up when there's something worth knowing.</p>
+  <div id="assistant-turns" class="pip-turns">
+    <div class="pip-turn">
+      <div class="pip-reply">Hi — I'm Pip. I'll pipe up when there's something worth knowing.</div>
+    </div>
+  </div>
   <form id="assistant-form" class="assistant-form">
     <input id="assistant-input" class="assistant-input" type="text" autocomplete="off"
            placeholder="Ask Pip…" maxlength="4000" aria-label="Ask Pip">

@@ -72,11 +72,82 @@ const CONTEXTS = {
   },
 };
 
-let _bubble, _panel, _message, _echo, _input, _form;
+let _bubble, _panel, _turns, _input, _form;
 let _fadeTimer = null, _closeTimer = null, _resumeTimer = null;
 let _lastNotifyAt = 0;
 let _pending = false;
+let _abort = false;            // set by Stop button; checked between askWithTools iterations
+let _activeTurnEl = null;      // turn currently being filled (live trace destination)
 const _history = [];
+
+// One row in a turn's trace list — a tool call.  pendingMs/result/error filled
+// in by finishTrace once the call returns.  Kept terse; deeper inspection lives
+// in replay.js (IndexedDB) — see CLAUDE.md → Replay.
+function appendTraceLine(turnEl, name) {
+  let ul = turnEl.querySelector(".pip-trace");
+  if (!ul) {
+    ul = document.createElement("ul");
+    ul.className = "pip-trace";
+    // Insert before the reply slot if it exists, otherwise append.
+    const reply = turnEl.querySelector(".pip-reply");
+    turnEl.insertBefore(ul, reply || null);
+  }
+  const li = document.createElement("li");
+  li.className = "pip-trace-line pending";
+  li.textContent = `${labelTool(name)} …`;
+  ul.appendChild(li);
+  scrollPanelToBottom();
+  return li;
+}
+
+function finishTraceLine(li, summary, isError) {
+  if (!li) return;
+  li.classList.remove("pending");
+  if (isError) li.classList.add("error");
+  li.textContent = summary;
+  scrollPanelToBottom();
+}
+
+function labelTool(name) {
+  return name.replace(/^(get_|set_|do_|ask_)/, "").replace(/_/g, " ");
+}
+
+function shorten(s, n) {
+  s = String(s ?? "");
+  return s.length <= n ? s : s.slice(0, n - 1) + "…";
+}
+
+// Best-effort one-line summary per tool. Default falls back to the truncated
+// JSON stringification so unknown tools still render something.
+function summarizeTool(name, input, result, error) {
+  const lbl = labelTool(name);
+  if (error) return `${lbl} · ${shorten(error, 80)}`;
+  const r = result || {};
+  if (name === "move_motor" || name === "pulse_motor") {
+    const a = r.applied || input || {};
+    return `${lbl} · L${a.l ?? a.left ?? "?"} R${a.r ?? a.right ?? "?"} · ${a.duration_ms ?? "?"}ms`;
+  }
+  if (name === "get_robot_scene" || name === "ask_robot_scene" || name === "get_robot_scene_now") {
+    return `${lbl} · "${shorten(r.scene || r.text || "", 80)}"`;
+  }
+  if (name === "ask_human_via_phone") {
+    return `${lbl} · phone said "${shorten(r.answer || "(no answer)", 60)}"`;
+  }
+  if (name === "list_robots") {
+    return `${lbl} · ${(r.robots || []).map(x => x.name).join(", ") || "(none)"}`;
+  }
+  if (name === "get_robot_state") {
+    return `${lbl} · ${r.name || "?"}`;
+  }
+  if (name === "get_log") {
+    return `${lbl} · ${shorten((r.text || "").trim().split("\n").pop() || "(empty)", 80)}`;
+  }
+  return `${lbl} · ${shorten(JSON.stringify(r), 80)}`;
+}
+
+function scrollPanelToBottom() {
+  if (_panel) _panel.scrollTop = _panel.scrollHeight;
+}
 
 // Two distinct states on the mascot button:
 //   .open        — panel is visible; icon lit amber ("attention"). No motion.
@@ -114,27 +185,83 @@ function open({ autoDismiss = false } = {}) {
   if (autoDismiss) scheduleAutoDismiss();
 }
 
-function setEcho(text) {
-  if (text) { _echo.textContent = `"${text}"`; _echo.hidden = false; }
-  else      { _echo.textContent = "";          _echo.hidden = true;  }
+// Collapse every previously-completed turn so only the current/active one is
+// expanded. A turn is considered "complete" when it carries a reply slot. The
+// active turn (the one we're currently filling) is left alone.
+function collapsePreviousTurns() {
+  const turns = _turns.querySelectorAll(".pip-turn:not(.collapsed)");
+  for (const t of turns) {
+    if (t === _activeTurnEl) continue;
+    if (!t.querySelector(".pip-reply")) continue;  // can't collapse a turn that has no reply yet
+    const echo = t.querySelector(".pip-echo")?.textContent?.trim() || "";
+    const replyText = t.querySelector(".pip-reply")?.textContent?.trim() || "";
+    const traceCount = t.querySelectorAll(".pip-trace-line").length;
+    const summary = echo
+      ? `${shorten(echo, 50)}${traceCount ? ` · ${traceCount} action${traceCount === 1 ? "" : "s"}` : ""}`
+      : shorten(replyText, 70);
+    t.classList.add("collapsed");
+    t.innerHTML = `<button class="pip-turn-toggle" type="button">▸ ${escapeForHtml(summary)}</button>`;
+    // Stash the original DOM so re-expand restores it byte-for-byte. Browsers
+    // can hold this; turns are bounded by HISTORY_LIMIT.
+  }
 }
 
-// Set the message text and mark it as a live chat reply vs app voice.
-// fromAI is narrowly scoped: "Pip is answering what the user just asked
-// right now" — chat responses only. Proactive notify tips and static
-// fallbacks stay gray even though notify tips are technically Claude-
-// generated; they're Pip's background voice, not a response to an input.
-// The .ai-generated CSS class tints the text amber and runs markdown
-// (code/bold/italic/lists) so live replies are visually and structurally
-// distinct from the UI chrome around them.
-function setMessageText(text, fromAI = false) {
-  if (fromAI) _message.innerHTML = renderMd(text);
-  else        _message.textContent = text;
-  _message.classList.toggle("ai-generated", !!fromAI);
-  // Long replies are now scrollable inside the panel — snap to the top so
-  // the user sees the start of Pip's new message, not wherever they'd
-  // scrolled during the previous one.
-  if (_panel) _panel.scrollTop = 0;
+function escapeForHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = String(s ?? "");
+  return d.innerHTML;
+}
+
+// Build a fresh turn DOM for a new user prompt, append it, set as active.
+// reply slot is created upfront so live trace can insertBefore() it cleanly.
+function startNewTurn({ echo = null } = {}) {
+  collapsePreviousTurns();
+  const t = document.createElement("div");
+  t.className = "pip-turn active";
+  if (echo) {
+    const e = document.createElement("div");
+    e.className = "pip-echo";
+    e.textContent = `"${echo}"`;
+    t.appendChild(e);
+  }
+  // Reply slot is created empty; trace lines insertBefore it; setReplyText
+  // populates it once Claude's final text arrives.
+  const reply = document.createElement("div");
+  reply.className = "pip-reply";
+  t.appendChild(reply);
+  _turns.appendChild(t);
+  _activeTurnEl = t;
+  scrollPanelToBottom();
+  return t;
+}
+
+function setReplyText(turnEl, text, fromAI = false) {
+  const reply = turnEl.querySelector(".pip-reply");
+  if (!reply) return;
+  if (fromAI) reply.innerHTML = renderMd(text);
+  else        reply.textContent = text;
+  reply.classList.toggle("ai-generated", !!fromAI);
+  scrollPanelToBottom();
+}
+
+// Stop button rendered into the active turn while askWithTools is iterating.
+// Click sets the abort flag the loop polls between iterations; current
+// in-flight tool call still completes (firmware safety floor caps blast
+// radius — see .claude/CLAUDE.md → Control-loop invariants).
+function attachStopButton(turnEl) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "secondary sm pip-stop";
+  btn.textContent = "Stop";
+  btn.addEventListener("click", () => {
+    _abort = true;
+    btn.disabled = true;
+    btn.textContent = "Stopping…";
+  });
+  // Insert just before the reply slot so it sits at the bottom of the trace.
+  const reply = turnEl.querySelector(".pip-reply");
+  turnEl.insertBefore(btn, reply || null);
+  return btn;
 }
 
 // Public API — any module can push a line from Pip. Auto-dismissing is the
@@ -143,8 +270,9 @@ function setMessageText(text, fromAI = false) {
 // static so ad-hoc speakMessage() calls from module code don't falsely
 // advertise themselves as AI output.
 export function speakMessage(text, { autoDismiss = true, echo = null, fromAI = false } = {}) {
-  setEcho(echo);
-  setMessageText(text, fromAI);
+  const t = startNewTurn({ echo });
+  setReplyText(t, text, fromAI);
+  _activeTurnEl = null;
   _history.push({ role: "assistant", content: text });
   if (_history.length > HISTORY_LIMIT) _history.splice(0, _history.length - HISTORY_LIMIT);
   open({ autoDismiss });
@@ -172,7 +300,7 @@ async function notify(dialogId) {
   if (reply === "") return;                     // Pip chose silence — respect it
   // Proactive notify tips are app voice even when Claude generated them —
   // user didn't ask anything, this is Pip volunteering context on the side.
-  // Only chat replies get the amber 'live reply' tint (see setMessageText).
+  // Only chat replies get the amber 'live reply' tint (see setReplyText).
   speakMessage(reply ?? ctx.fallback);
 }
 
@@ -181,19 +309,21 @@ async function handleSubmit(e) {
   const text = _input.value.trim();
   if (!text || _pending) return;
   _pending = true;
+  _abort = false;
   _input.disabled = true;
   cancelAutoDismiss();  // user is engaged — don't fade out under them
 
   _history.push({ role: "user", content: text });
-  setEcho(text);
-  // No "…" placeholder — the antenna sway (triggered by setResponding below)
-  // is the typing indicator. Keep the previous reply visible as context
-  // while Pip generates the next one.
+  // Open the new turn FIRST — collapsing prior turns and clearing the active
+  // visual context happens before Claude is even contacted, so there's no
+  // moment where the old reply sits next to the new prompt.
+  const turnEl = startNewTurn({ echo: text });
+  const stopBtn = attachStopButton(turnEl);
   _input.value = "";
   setResponding(true);
 
-  // Build a messages array for Claude from recent history. We pass the running
-  // conversation so Pip can follow references ("the pin I mentioned?").
+  let pendingTraceLi = null;
+
   const messages = _history.slice(-HISTORY_LIMIT)
     .map(m => ({ role: m.role, content: m.content }));
   const reply = await askWithTools(messages, {
@@ -201,17 +331,26 @@ async function handleSubmit(e) {
     tools: TOOLS,
     executor,
     maxTokens: 1024,
+    onToolStart: ({ name }) => { pendingTraceLi = appendTraceLine(turnEl, name); },
+    onToolEnd: ({ name, input, result, error }) => {
+      finishTraceLine(pendingTraceLi, summarizeTool(name, input, result, error), !!error);
+      pendingTraceLi = null;
+    },
+    shouldAbort: () => _abort,
   });
+
+  stopBtn.remove();
   // In chat, empty means "I don't have anything useful" — surface that instead of silence,
   // since the user directly asked and expects an answer.
   const finalReply = reply === null
     ? "I can't reach my brain right now — try again in a sec?"
     : reply || "I don't have a good answer for that — tell me more?";
   // reply non-null/non-empty = Claude output; either fallback string is static.
-  setMessageText(finalReply, reply !== null && reply !== "");
+  setReplyText(turnEl, finalReply, reply !== null && reply !== "");
   _history.push({ role: "assistant", content: finalReply });
   if (_history.length > HISTORY_LIMIT) _history.splice(0, _history.length - HISTORY_LIMIT);
 
+  _activeTurnEl = null;
   setResponding(false);
   _input.disabled = false;
   _pending = false;
@@ -270,8 +409,7 @@ function watchDialogs() {
 export function initAssistant() {
   _bubble  = $("assistant-bubble");
   _panel   = $("assistant-panel");
-  _message = $("assistant-message");
-  _echo    = $("assistant-echo");
+  _turns   = $("assistant-turns");
   _input   = $("assistant-input");
   _form    = $("assistant-form");
 
@@ -284,5 +422,17 @@ export function initAssistant() {
   _form.addEventListener("submit", handleSubmit);
   // Typing cancels the auto-dismiss so Pip doesn't vanish mid-thought.
   _input.addEventListener("input", () => { if (_input.value) cancelAutoDismiss(); });
+  // Click any collapsed turn's toggle button to re-expand it. We replaced its
+  // inner DOM on collapse so the original is gone — render a stub from the
+  // saved summary instead (keeps state minimal; full detail lives in
+  // replay.js / IndexedDB anyway).
+  _turns.addEventListener("click", (e) => {
+    const btn = e.target.closest(".pip-turn-toggle");
+    if (!btn) return;
+    const turn = btn.closest(".pip-turn");
+    if (!turn) return;
+    turn.classList.remove("collapsed");
+    turn.innerHTML = `<div class="pip-reply">${btn.textContent.replace(/^▸\s*/, "")}</div>`;
+  });
   watchDialogs();
 }
