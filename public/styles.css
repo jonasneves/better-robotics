@@ -455,6 +455,19 @@ details.tray > summary::marker { content: ""; }
    [open] selector for details. */
 details.tray[open] > summary .disclosure-chevron { transform: rotate(0); }
 details.tray[open] > :not(summary) { margin-top: 12px; }
+/* Unread-error pip: cleared by log.js on toggle-open, re-set by the next error
+   logged while the tray is closed. Keeps the collapsed default from silently
+   hiding failures. */
+details.tray.has-alert > summary::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+  margin-left: 8px;
+  vertical-align: middle;
+}
 
 .empty-state .empty-actions { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
 .gamepad-dot { font-size: 12px; margin-left: 4px; vertical-align: middle; }

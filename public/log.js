@@ -11,6 +11,34 @@ const _errRe = /\b(fail(?:ed|ure)?|error|rejected|timeout|cancelled|stalled|stuc
 const _okRe  = /\b(paired|joined|installed|done|ready|enabled|ok)\b/i;
 const _logClass = (msg) => _errRe.test(msg) ? "err" : _okRe.test(msg) ? "ok" : "";
 
+// Unread-error pip on the collapsed tray. Yielding lens: the log stays out of
+// the way when quiet, but has to step forward when errors land while closed,
+// otherwise "collapsed" silently hides failures from the operator.
+let _trayWired = false;
+let _trayHasAlert = false;
+function _getTray() {
+  const el = $("log");
+  return el && el.closest("details.tray");
+}
+function _wireTrayOnce(tray) {
+  if (_trayWired || !tray) return;
+  _trayWired = true;
+  tray.addEventListener("toggle", () => {
+    if (tray.open && _trayHasAlert) {
+      _trayHasAlert = false;
+      tray.classList.remove("has-alert");
+    }
+  });
+}
+function _flagTrayAlert() {
+  const tray = _getTray();
+  if (!tray) return;
+  _wireTrayOnce(tray);
+  if (tray.open || _trayHasAlert) return;
+  _trayHasAlert = true;
+  tray.classList.add("has-alert");
+}
+
 // Split on the last hyphen so "BetterRobot-" dims and the identifying suffix
 // ("E9D4") keeps the weight — and the column truncates the prefix first under
 // width pressure rather than the part that actually identifies the robot.
@@ -47,6 +75,7 @@ export const log = (msg, name = "") => {
   const line = document.createElement("div");
   const cls = _logClass(msg);
   if (cls) line.className = cls;
+  if (cls === "err") _flagTrayAlert();
   if (!name) line.classList.add("sys");
   const timeSpan = document.createElement("span");
   timeSpan.className = "log-time";
