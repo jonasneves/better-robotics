@@ -917,8 +917,10 @@ void setup() {
   server->setCallbacks(new ServerCallbacks());
   // Default numHandles (15) silently drops characteristics past the cap.
   // Each characteristic = 2 handles (decl + val); each CCCD (2902) = 1 more.
-  // 32 leaves room; exceeding the budget gives no error.
-  BLEService* service = server->createService(BLEUUID(SERVICE_UUID), 32, 0);
+  // Current count: 33 with camera-ready branch (cameraProfileChar pushed us
+  // over 32, which presents as "BLE won't load"). 40 leaves headroom for ~4
+  // more chars; exceeding the budget gives no error, chars just vanish.
+  BLEService* service = server->createService(BLEUUID(SERVICE_UUID), 40, 0);
 
   ledChar = service->createCharacteristic(
     LED_CHAR_UUID,
