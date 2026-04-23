@@ -25,6 +25,17 @@ async function connect() {
     else setStatus("disconnected");
     return;
   }
+  // Open the port BEFORE handing it to <ewt-console>. ewt-console assumes the
+  // port is already open and starts reading immediately on insert; without
+  // open() it just shows the empty pane (the dialog reads "connected" but
+  // nothing streams). 115200 8N1 matches the Arduino default Serial.begin.
+  try {
+    await _port.open({ baudRate: 115200 });
+  } catch (err) {
+    setStatus(`open failed: ${err.message}`);
+    _port = null;
+    return;
+  }
   // Create <ewt-console> fresh with port set BEFORE the element is inserted
   // into the DOM — its connectedCallback runs the moment we appendChild and
   // assumes a port exists. Static-HTML insertion crashes ewt internally.

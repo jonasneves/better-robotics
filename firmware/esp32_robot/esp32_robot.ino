@@ -801,19 +801,31 @@ void setup() {
   char name[32];
   snprintf(name, sizeof(name), "BetterRobot-%04X", (uint16_t)(chipid & 0xFFFF));
 
-  // Allocation order is the whole trick on classic ESP32-CAM where
-  // BLE + WiFi + esp32-camera compete for ~250 KB of DRAM:
-  //   1) Camera first — claims its 32 KB contiguous DMA buffer while the
-  //      heap is still unfragmented. JPEG DMA must live in internal DRAM
-  //      (PSRAM isn't DMA-coherent on classic ESP32) and the driver allocates
-  //      this lazily in esp_camera_init().
-  //   2) BLE next — bluedroid's ~50 KB heap + semaphores for each char fit
-  //      comfortably in the remaining ~210 KB. Previously we had camera
-  //      compete AFTER BLE and BLE char creation would crash in
-  //      FreeRTOS::Semaphore() with `xQueueGenericSend NULL pxQueue` (a
-  //      failed xSemaphoreCreateBinary returning NULL).
-  //   3) WiFi last — driver up on whatever's left; if it's marginal, the
-  //      user at least still has a working BLE peripheral to diagnose with.
+  // Allocation order on classic ESP32-CAM is the whole trick — BLE + WiFi +
+  // esp32-camera compete for ~250 KB of DRAM. Connection-first principle
+  // (.claude/CLAUDE.md → Connection-first init): WiFi and BLE drivers come
+  // up BEFORE capability infrastructure. Recovery + diagnostics require
+  // connectivity; capabilities degrade gracefully.
+  //
+  //   1) WiFi.mode(WIFI_STA) first — calls esp_wifi_init + esp_wifi_start,
+  //      which reserves 4 RX DMA buffers (~16 KB DRAM contiguous-ish).
+  //      Previously deferred to first scan/join; by then camera + BLE had
+  //      eaten the heap and only 3 buffers fit, leaving WiFi marginal
+  //      (scans returned WIFI_SCAN_FAILED, joins flaked). Allocating up
+  //      front in the fresh heap fixes this.
+  //   2) Camera next — claims its 32 KB contiguous DMA buffer. JPEG DMA
+  //      must live in internal DRAM (PSRAM isn't DMA-coherent on classic
+  //      ESP32). After WiFi takes its slice, ~64 KB DMA-capable internal
+  //      RAM remains, which is enough for the camera buffer in practice.
+  //      If it's not, cameraInitError surfaces in fw-info and the user
+  //      can drop framesize.
+  //   3) BLE last — bluedroid's ~50 KB heap + per-char semaphores fit in
+  //      the remainder. Char creation would previously crash in
+  //      FreeRTOS::Semaphore() (xQueueGenericSend NULL pxQueue) when
+  //      kernel-object heap got squeezed; with WiFi pre-allocated and
+  //      camera using PSRAM-resident frame buffers, there's enough left.
+  WiFi.mode(WIFI_STA);
+
   cameraReady = initCamera();
 
   BLEDevice::init(name);
@@ -933,7 +945,9 @@ void setup() {
   Serial.printf("\nAdvertising as %s\n", name);
 
   // WiFi last in the allocation order (see the comment at the top of setup).
-  // `WiFi.mode(WIFI_STA)` runs esp_wifi_init + esp_wifi_start; after it
+  // `WiFi.mode(WIFI_STA)` already ran in setup() (connection-first init).
+  // Calling it again here is a no-op if mode is unchanged but helps when
+  // a previous join's WiFi.disconnect(true, false) deinit'd the driver.
   // returns the driver is up and the 4 static RX buffers are allocated.
   // setSleep(false) keeps the radio awake during BLE windows (default DTIM
   // sleep drops beacons and makes scans come back empty). Max TX power

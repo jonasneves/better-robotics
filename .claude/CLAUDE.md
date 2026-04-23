@@ -41,6 +41,19 @@ Three design rules for anything that couples an LLM / VLM to the robot's motion.
 - **Pulse-bounded motion under LLM control.** LLM-issued motor commands always carry `duration_ms` and the firmware auto-stops at the end. Persistent speed ("set and hold") is reserved for user joystick control, where a human is in the decision loop at 20Hz+. Between Pip decisions the robot is at rest — not cruising blindly while Claude thinks for 3 seconds.
 - **Confidence-based handoff is core policy, not a tool.** `ask_human_via_phone` isn't an escape hatch, it's the terminal rung of the decision cascade. The model should ask to be overridden rather than wait to be overridden. Any new planner-layer feature that doesn't have a "defer upward" path is incomplete.
 
+# Connection-first init
+
+Same shape as safety-below-planner, applied to boot order: **connection infrastructure (BLE, WiFi, USB-CDC) initializes BEFORE capability infrastructure (camera, perception, motors, sensors).** When constrained resources (DMA-capable heap on ESP32, file handles on Pi, etc.) force a tradeoff, connection wins.
+
+Reasoning: recovery and diagnostics require connectivity. A robot whose BLE stays up with no camera is observable + actionable; a robot whose camera works but BLE doesn't is a brick. Capabilities can degrade gracefully (no camera = `camera_err` in fw-info, dashboard hides the cap); connection failures cascade to total opacity.
+
+Concrete examples:
+- ESP32: `WiFi.mode(WIFI_STA)` runs at the top of `setup()` so the WiFi driver pre-allocates its 4 RX DMA buffers in fresh internal heap. Camera + BLE come after. If camera can't fit its 32 KB DMA buffer in what's left, it fails loudly via `camera_err`; the user can drop framesize. WiFi reliably works either way.
+- Pi: `pi-robot-heartbeat.service` (always-on BLE) starts independent of `pi-robot.service` so the firmware-down state stays observable.
+- Recovery plane: USB-CDC-ACM gadget runs as its own systemd unit so a `pi-robot.service` crash doesn't take serial recovery with it.
+
+The pattern generalizes: any new on-device infrastructure should ask "if this resource is constrained, what would I rather lose first — connection or this capability?" The answer is almost always "this capability."
+
 # Replay
 
 Every Pip tool call is persisted to IndexedDB via `replay.wrapExecutor()` in `pip-tools.js`. Records carry `{sessionId, name, input, output, error, startedAt, endedAt, durationMs}`. Image data URLs (from `ask_human_via_phone`'s robot-camera attach) stay in the record — the point is to reconstruct "what did Pip see when it made that call?"
