@@ -82,6 +82,8 @@ Commit + push when ready. CI rebuilds firmware artifacts on every change under `
 
 - [**Hardware guide**](HARDWARE.md) — recommended boards, board-specific knobs, driver notes.
 - [**Pi firmware**](firmware/pi_robot/README.md) — BLE service spec, SD-card prep details, Bookworm/Trixie troubleshooting.
+- [**User code**](USER-CODE.md) — why per-user code runs in the browser, not on the Pi.
+- [**Observations**](OBSERVATIONS.md) — why Pip's proactive messages come from project state, not a scheduled content feed.
 
 ## Browser support
 
