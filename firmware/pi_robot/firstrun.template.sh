@@ -193,6 +193,16 @@ BTEOF
     if ! grep -q "^Experimental=true" /etc/bluetooth/main.conf; then
         sed -i '/^\[General\]/a Experimental=true' /etc/bluetooth/main.conf
     fi
+    # Pi OS Trixie boots the adapter with Pairable=no — dashboard can see the
+    # robot but Chrome's Web Bluetooth connect triggers a BLE pairing which
+    # BlueZ then rejects. pi-robot.service has an ExecStartPre that tries to
+    # set this runtime via bluetoothctl, but that's racy and failure-tolerant
+    # (`-` prefix), so we see post-reboot 'visible but won't connect'. Force
+    # Pairable=true in main.conf so bluetoothd reads it on every startup,
+    # independent of distribution defaults.
+    if ! grep -q "^Pairable=true" /etc/bluetooth/main.conf; then
+        sed -i '/^\[General\]/a Pairable=true' /etc/bluetooth/main.conf
+    fi
     systemctl daemon-reload
     # Pi OS Trixie ships with bluetooth + WiFi soft-blocked in rfkill; unblock
     # before restarting bluetoothd or `bluetoothctl power on` will silently
