@@ -4,13 +4,19 @@
 
 For new builds where BLE is the primary channel and a camera isn't required, pick an **ESP32-C6** — DevKitC-1 or any WROOM-based C6 board. It has native USB CDC (no drivers), Bluetooth 5.3 LE with materially better RAM headroom than S3 when the TLS stack shares memory with BLE during OTA, and matches the "BLE is the control plane" shape of this project better than dual-radio boards. Same Arduino core, same firmware, board knobs below.
 
+Buy in US: [Adafruit](https://www.adafruit.com/?q=ESP32-C6), DigiKey, Mouser. Espressif's official store ships globally.
+
 ## Alternative: ESP32-S3 with native USB
 
 If you need dual-core horsepower or a camera, the **ESP32-S3** remains a strong choice — ESP32-S3-CAM, Freenove ESP32-S3-WROOM dev kit, or any DevKitC-S3. Native USB CDC (no drivers), same firmware. Picks up some headroom over the C6 at the cost of a larger BLE/WiFi memory footprint.
 
+Buy in US: [Adafruit](https://www.adafruit.com/?q=ESP32-S3), DigiKey. Freenove kit ships from Amazon.
+
 ## Legacy: ESP32-CAM-MB
 
 The published binaries currently target the **ESP32-CAM-MB** (AI Thinker ESP32-CAM + MB programmer carrier) — the original development hardware. Its USB-UART bridge is CP210x (Silicon Labs) or FT232R (FTDI). macOS has the FTDI driver built in; CP210x requires a [one-time kernel extension install](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers). Works, but the kext is the friction the S3 recommendation is meant to sidestep.
+
+Buy: AI Thinker ESP32-CAM-MB sells widely on Amazon and AliExpress. The gotcha is listings that ship just the bare camera module without the MB programmer carrier; confirm the carrier is included.
 
 ### Camera on the CAM-MB
 
@@ -20,6 +26,8 @@ The 24-pin socket on the AI-Thinker board accepts OV2640, OV3660, and OV5640 mod
 
 Tested on **Pi 4 Model B**. Bluetooth radio built in. Pi OS Bookworm (Python 3.11) or Trixie (Python 3.13) — the dashboard's Customize-card flow stages wheels for both.
 
+Buy in US: [Adafruit](https://www.adafruit.com/?q=raspberry+pi+4), CanaKit, PiShop.us. Outside US: [official reseller list](https://www.raspberrypi.com/products/raspberry-pi-4-model-b/).
+
 ### Recovery plane (USB-C)
 
 The Pi boots with a **composite USB gadget** (ECM ethernet + ACM serial) under `usb-gadget.service`, independent of the main firmware service. Plug USB-C from the Pi into your laptop:
@@ -27,7 +35,7 @@ The Pi boots with a **composite USB gadget** (ECM ethernet + ACM serial) under `
 - **ECM ethernet** — Pi appears at `10.55.0.1`; `ssh pi@10.55.0.1` works with the sudo password you set in Customize card.
 - **ACM serial** — Pi appears as `/dev/cu.usbmodem*`; the dashboard's ⋯ → **Recovery console** menu item opens a full xterm.js terminal over this. Works even when BLE and WiFi are both dead, because the gadget is a kernel-level service that runs before `pi-robot` and doesn't depend on it.
 
-Requires a USB-C **data** cable (not charge-only). The Pi 4's USB-C port is the only gadget-capable port — USB-A ports on the top edge are hosts and won't work for this.
+Requires a USB-C **data** cable (not charge-only) — Anker or Cable Matters USB-C-to-USB-C marked "data" or "sync" works. The gotcha is power-only variants that look identical and ship in the box with most chargers. The Pi 4's USB-C port is the only gadget-capable port; USB-A ports on the top edge are hosts and won't work for this.
 
 ## Board-specific knobs
 
