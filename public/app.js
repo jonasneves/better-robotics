@@ -11,6 +11,7 @@ import {
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
 import { RUNTIMES } from "./capabilities/runtime/index.js";
 import { setOpen as capSetOpen } from "./capabilities/runtime/cap-section.js";
+import { formatUptime, formatWifi, formatResetReason } from "./format.js";
 import { updateFirmware, updateFromFile } from "./capabilities/ota.js";
 import { restartService, rebootRobot, enrollKey, getLog, getConfig } from "./capabilities/runtime/command.js";
 import { initGamepad } from "./gamepad.js";
@@ -34,14 +35,8 @@ function telemetryText(entry) {
   const t = entry.telemetry;
   if (!t) return "";
   const parts = [];
-  const upS = typeof t.uptime_s === "number" ? t.uptime_s
-            : typeof t.uptime_ms === "number" ? Math.floor(t.uptime_ms / 1000)
-            : null;
-  if (upS != null) {
-    parts.push(upS < 60 ? `up ${upS}s`
-      : upS < 3600 ? `up ${Math.floor(upS/60)}m`
-      : `up ${Math.floor(upS/3600)}h${Math.floor((upS%3600)/60)}m`);
-  }
+  const up = formatUptime(t);
+  if (up) parts.push(up);
   if (typeof t.mem_free_mb === "number") parts.push(`${t.mem_free_mb} MB free`);
   if (typeof t.free_heap === "number") parts.push(`${Math.floor(t.free_heap / 1024)} KB free`);
   if (typeof t.temp_c === "number") parts.push(`${t.temp_c.toFixed(1)}°C`);
@@ -55,28 +50,16 @@ function telemetryHtml(entry) {
 
 // The header meta line ("WiFi … · up …h · reset: …"). Reused by renderEntry
 // (full render) and patchSecondaryRow (telemetry-driven updates that would
-// otherwise flash the whole card every 10 s).
+// otherwise flash the whole card every 10 s). Composes pure formatters
+// from format.js (smoke-tested) so the display logic isn't duplicated.
 function metaText(entry) {
   const connected = entry.status === "connected" || entry.status === "firmware-down";
   if (!connected) return "";
-  const parts = [];
-  const w = entry.wifiStatus;
-  if (w?.st === "joined") parts.push(`WiFi ${w.ip || w.ssid || "joined"}`);
-  else if (w?.st === "joining") parts.push("WiFi joining…");
-  else if (w?.st === "scanning") parts.push("WiFi scanning");
-  else if (w?.st === "failed")   parts.push("WiFi failed");
-  const tel = entry.telemetry;
-  const upS = tel?.uptime_s ?? (tel?.uptime_ms != null ? Math.floor(tel.uptime_ms / 1000) : null);
-  if (upS != null) {
-    parts.push(
-      upS < 60   ? `up ${upS}s`
-    : upS < 3600 ? `up ${Math.floor(upS / 60)}m`
-    : upS < 86400 ? `up ${Math.floor(upS / 3600)}h ${Math.floor((upS % 3600) / 60)}m`
-    :              `up ${Math.floor(upS / 86400)}d`
-    );
-  }
-  const rr = tel?.reset_reason;
-  if (rr && rr !== "poweron" && rr !== "sw" && rr !== "ext") parts.push(`reset: ${rr}`);
+  const parts = [
+    formatWifi(entry.wifiStatus),
+    formatUptime(entry.telemetry),
+    formatResetReason(entry.telemetry?.reset_reason),
+  ].filter(Boolean);
   return parts.join(" · ");
 }
 

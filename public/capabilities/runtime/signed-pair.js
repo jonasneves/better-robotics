@@ -85,7 +85,16 @@ export function makeSignedPairCap(schema) {
             }
             entry[leftField] = l;
             entry[rightField] = r;
-            renderEntry(entry);
+            // Surgical patch — joypad updates fire 5x/s during drag; full
+            // renderEntry would flash the whole card and rebuild the joypad
+            // mid-drag. Update only the .cap-state text in place.
+            const sec = entry.node?.querySelector(`.cap-section[data-cap-name="${name}"]`);
+            const stateEl = sec?.querySelector(".cap-state");
+            if (stateEl) {
+              stateEl.textContent = `${labels.left}: ${l} · ${labels.right}: ${r}`;
+            } else {
+              renderEntry(entry);
+            }
           }
         });
       } catch {

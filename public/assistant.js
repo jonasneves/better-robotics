@@ -2,6 +2,7 @@ import { $ } from "./dom.js";
 import { ask, askWithTools } from "./claude.js";
 import { TOOLS, executor, setAskInChatHandler } from "./pip-tools.js";
 import { renderMd } from "./markdown.js";
+import { shorten, labelTool, summarizeTool } from "./format.js";
 
 // Auto-dismiss timings match Buddy: 10s total show, fade begins at 7s (last 3s).
 const SHOW_MS = 10000;
@@ -115,46 +116,8 @@ function finishTraceLine(li, summary, isError) {
   scrollPanelToBottom();
 }
 
-function labelTool(name) {
-  return name.replace(/^(get_|set_|do_|ask_)/, "").replace(/_/g, " ");
-}
-
-function shorten(s, n) {
-  s = String(s ?? "");
-  return s.length <= n ? s : s.slice(0, n - 1) + "…";
-}
-
-// Best-effort one-line summary per tool. Default falls back to the truncated
-// JSON stringification so unknown tools still render something.
-function summarizeTool(name, input, result, error) {
-  const lbl = labelTool(name);
-  if (error) return `${lbl} · ${shorten(error, 80)}`;
-  const r = result || {};
-  if (name === "move_motor" || name === "pulse_motor") {
-    const a = r.applied || input || {};
-    return `${lbl} · L${a.l ?? a.left ?? "?"} R${a.r ?? a.right ?? "?"} · ${a.duration_ms ?? "?"}ms`;
-  }
-  if (name === "get_robot_scene" || name === "ask_robot_scene" || name === "get_robot_scene_now") {
-    return `${lbl} · "${shorten(r.scene || r.text || "", 80)}"`;
-  }
-  if (name === "ask_human") {
-    const via = r.via ? ` (via ${r.via})` : "";
-    return `${lbl}${via} · "${shorten(r.answer || "(no answer)", 60)}"`;
-  }
-  if (name === "start_live_scene" || name === "stop_live_scene") {
-    return `${lbl} · ${input?.id || "?"}${r.already_watching ? " (already on)" : ""}`;
-  }
-  if (name === "list_robots") {
-    return `${lbl} · ${(r.robots || []).map(x => x.name).join(", ") || "(none)"}`;
-  }
-  if (name === "get_robot_state") {
-    return `${lbl} · ${r.name || "?"}`;
-  }
-  if (name === "get_log") {
-    return `${lbl} · ${shorten((r.text || "").trim().split("\n").pop() || "(empty)", 80)}`;
-  }
-  return `${lbl} · ${shorten(JSON.stringify(r), 80)}`;
-}
+// labelTool / shorten / summarizeTool live in format.js — pure, testable,
+// imported above. Single source of truth for trace-line formatting.
 
 function scrollPanelToBottom() {
   if (_panel) _panel.scrollTop = _panel.scrollHeight;

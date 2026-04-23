@@ -8,7 +8,7 @@ PUBLISH_DIR := public/firmware/bins
 BOOT_APP0   := $(shell find ~/Library/Arduino15 ~/.arduino15 -name boot_app0.bin 2>/dev/null | sort -V | tail -1)
 MONITOR      = arduino-cli monitor --port "$(PORT)" --config baudrate=115200,dtr=off,rts=off
 
-.PHONY: help setup compile flash monitor flash-monitor install-pi-os preview publish publish-firmware publish-pi-firmware
+.PHONY: help setup compile flash monitor flash-monitor install-pi-os preview publish publish-firmware publish-pi-firmware smoke
 
 help:
 	@echo ""
@@ -23,6 +23,9 @@ help:
 	@echo ""
 	@echo "\033[2mPi SD provisioning\033[0m"
 	@echo "  \033[36minstall-pi-os\033[0m  Write Raspberry Pi OS Lite 64-bit to SD card (then use dashboard 'Customize card')"
+	@echo ""
+	@echo "\033[2mTesting\033[0m"
+	@echo "  \033[36msmoke\033[0m              Run pure-function smoke tests (node --test). Hardware checks live in SMOKE.md."
 	@echo ""
 	@echo "\033[2mDashboard & publishing (what the browser serves + OTA fetches)\033[0m"
 	@echo "  \033[36mpreview\033[0m             Serve dashboard at http://localhost:8080 (local)"
@@ -107,3 +110,9 @@ publish-pi-firmware:
 	@echo "Pi firmware + wheels published. Commit and push to deploy."
 
 publish: publish-firmware publish-pi-firmware
+
+# Pure-function smoke tests — fast, no hardware. Hardware/UI checks live in
+# SMOKE.md (manual). New formatters / utilities in public/format.js earn a
+# row in tests/format.test.js.
+smoke:
+	node --test tests/*.test.js

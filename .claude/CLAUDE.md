@@ -6,6 +6,17 @@
 
 - **`docs/` is a symlink to `public/`.** GitHub Pages serves from `docs/` on `main`, but the site content lives in `public/`. Do not put repo-level documentation under `docs/` or `public/` unless you want it published as part of the dashboard. Repo-level docs live at the root (e.g. `HARDWARE.md`) or inside a subsystem (e.g. `firmware/pi_robot/README.md`).
 
+# Smoke testing
+
+Two layers, each kept cheap:
+
+- **`make smoke`** — pure-function tests via `node --test tests/*.test.js`. Anything in `public/format.js` (and any future pure helper) earns a row in `tests/format.test.js`. No DOM, no BLE, no Playwright. Runs in <1 s. Catches regressions in display logic, parsers, formatters, anything testable without hardware.
+- **`SMOKE.md`** — manual checklist for the architectural promises (robot lifecycle, render patterns, capability behavior, Pip flow, recovery). When this list passes end-to-end, the project's stated value is intact. New behaviors that promise something to the user earn a row.
+
+The split is deliberate: full automation (Playwright, hardware-in-the-loop) would cost more than the project earns from it today. Pure tests cover what's cheap; the manual checklist anchors what "working" means without the infra cost.
+
+Pattern for new pure helpers: extract from app.js / capability runtime into `public/format.js`, import where used, add a test. The cost of extraction pays for itself in (a) test coverage and (b) preventing the same display logic from being implemented three slightly-different ways.
+
 # Comment discipline
 
 This is an AI-edited codebase. Every line of comment is context cost. The global CLAUDE.md rule ("default to writing no comments") applies with extra force here. Past drift has added module-preamble paragraphs and inline narration that collectively wasted real context window; a `brief` agent pass trimmed ~17 KB across the repo. Don't re-introduce it.

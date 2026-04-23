@@ -48,7 +48,18 @@ export function makeToggleCap(schema) {
         await ch.startNotifications();
         ch.addEventListener("characteristicvaluechanged", (e) => {
           entry[onField] = e.target.value.getUint8(0) !== 0;
-          renderEntry(entry);
+          // Surgical patch instead of renderEntry — toggles fire on every
+          // user click + on firmware confirm; full re-render flashes the
+          // card. Update only the cap-state text + button label in place.
+          const sec = entry.node?.querySelector(`.cap-section[data-cap-name="${name}"]`);
+          if (sec) {
+            const stateEl = sec.querySelector(".cap-state");
+            if (stateEl) stateEl.textContent = entry[onField] ? "on" : "off";
+            const btn = sec.querySelector(`[data-action="${action}"]`);
+            if (btn) btn.textContent = entry[onField] ? "Turn off" : "Turn on";
+          } else {
+            renderEntry(entry);  // section not in DOM yet — full render
+          }
           logFor(entry, `${name} → ${entry[onField] ? "on" : "off"}`);
         });
       } catch {
