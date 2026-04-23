@@ -1,17 +1,29 @@
 # Shell over BLE — design doc
 
-> **Status: not pursuing (2026-04-19).**
+> **Status: not pursuing (2026-04-19, reaffirmed 2026-04-23).**
 >
-> Three parallel reviews (external patterns, internal consistency,
-> adversarial threat model) surfaced a blocker that sits outside this
-> feature's scope: `pi-robot` runs as user `pi`, which can read
-> `/boot/firmware/pi-robot.conf` — the file containing the classroom WiFi
-> PSK in plaintext. Adding interactive access over BLE without first
-> separating the robot service uid from the shell user (and moving WiFi
-> creds to NetworkManager's root-only store) leaks classroom network
-> credentials on any successful connect. Bonding, non-root=pi, session
-> logging, and opt-in default all assume "shell access is bounded damage,"
-> and that assumption doesn't hold on a standard install today.
+> Two reasons, ordered:
+>
+> **1. We don't need it.** The typed ops channel (`get-log`, `get-config`,
+> `restart-service`, `reboot`, `install-pkg`, `enroll-key`) covers most
+> debug needs over BLE without opening a shell. Heartbeat (added
+> 2026-04-23) covers "is the robot alive when firmware is dead." The
+> remaining cases — arbitrary debug from physical reach — go through the
+> USB-C recovery xterm. Each typed op is a deliberate, reviewable
+> decision; a shell is "everything you can run." The smart-safety move is
+> to extend the typed ops set as new debug needs appear, not to open a
+> general-purpose shell. See `.claude/CLAUDE.md → Scope discipline`.
+>
+> **2. The original blocker has shifted but isn't gone.** As of
+> 2026-04-19 the doc cited `pi-robot.conf` containing the WiFi PSK in
+> plaintext — that's stale: WiFi credentials now go straight to
+> NetworkManager via `nmcli connection ... password ...`
+> (`pi_robot.py:1139`), and NM's connection store is root-only mode 600.
+> But `pi-robot.service` runs as root, so a naively-spawned BLE shell
+> still inherits enough privilege to read those NM files. Plugging the
+> leak now requires uid separation for the spawned shell (run as `pi`,
+> tightened polkit), which is real work for a feature we don't have a
+> use case for.
 >
 > The motivating use case (live parameter tuning) is better served by a
 > structured `params` capability — typed `{key, value}` set/get over a
@@ -20,9 +32,11 @@
 >
 > **Revisit this doc only if:**
 >
-> - `params` capability ships and proves insufficient for a real use case, AND
-> - uid separation has landed (`pi-robot` → `pirobot` service user, config
->   mode tightened so the shell user can't read WiFi creds).
+> - A concrete use case appears that typed ops + USB-C recovery genuinely
+>   can't cover (e.g. a robot bolted somewhere physical access is
+>   impractical), AND
+> - uid separation has landed (the shell user can't read NM connection
+>   files, equivalent of the original `pirobot` service-user split).
 >
 > Doc is left intact below as a record of the design exploration. Internal
 > audit flagged concrete integration errors (capability `type` field missing,
