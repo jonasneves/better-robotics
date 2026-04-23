@@ -621,6 +621,32 @@ details.tray.has-alert > summary::after {
 }
 .cap-profile .meta { display: block; margin-top: 4px; }
 
+/* Pip backend selector + API-key row in Settings. Same shape as other
+   settings-item blocks; key input shows only when backend is "anthropic". */
+.settings-select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  font-size: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--ink);
+}
+.pip-key-row { margin-top: 12px; }
+.pip-key-row input[type="password"] {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--ink);
+}
+
 /* Service-worker update banner. Sits at the bottom-center of the viewport
    when a new dashboard version is waiting. Dismissable, never auto-applies. */
 #sw-update-banner {

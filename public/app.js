@@ -1197,6 +1197,36 @@ document.addEventListener("DOMContentLoaded", () => {
     saveSettings();
   });
 
+  // Pip backend picker — bridge (default) or direct Anthropic API. Phase 2/3
+  // (OpenAI, local LFM2.5) extend this list when the adapters land.
+  const backendSelect = $("setting-pip-backend");
+  const backendHint = $("setting-pip-backend-hint");
+  const keyRow = $("setting-pip-key-row");
+  const keyInput = $("setting-pip-key");
+  const HINTS = {
+    bridge: "Routes through the AI Bridge extension. Token stays in Keychain via native messaging — never exposed to the page.",
+    anthropic: "Calls api.anthropic.com directly with your API key. Works without the AI Bridge extension. Key stays in this browser.",
+  };
+  function syncBackendUI() {
+    const b = settings.pipBackend || "bridge";
+    backendSelect.value = b;
+    backendHint.textContent = HINTS[b] || "";
+    keyRow.hidden = b !== "anthropic";
+    keyInput.value = settings.pipApiKey || "";
+  }
+  syncBackendUI();
+  backendSelect.addEventListener("change", () => {
+    settings.pipBackend = backendSelect.value;
+    saveSettings();
+    syncBackendUI();
+  });
+  // Save key on blur, not per-keystroke — avoids persisting partial pastes
+  // and keeps the storage write off the typing critical path.
+  keyInput.addEventListener("blur", () => {
+    settings.pipApiKey = keyInput.value.trim();
+    saveSettings();
+  });
+
   // Profile — classroom-local identity (no auth, browser-only). Seeded hue from name hash.
   const seedColor = (str) => {
     if (!str) return null;

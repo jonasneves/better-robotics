@@ -145,6 +145,23 @@
     <div id="passwords-list"></div>
   </div>
 
+  <div class="settings-group-header">Pip backend</div>
+  <div class="settings-item">
+    <label class="settings-title" for="setting-pip-backend">How Pip reaches Claude</label>
+    <select id="setting-pip-backend" class="settings-select">
+      <option value="bridge">AI Bridge extension (default)</option>
+      <option value="anthropic">Anthropic API (direct, your key)</option>
+      <!-- <option value="openai">OpenAI API (direct)</option>     Phase 2 -->
+      <!-- <option value="local">LFM2.5-1.2B-Thinking (local)</option>  Phase 3 -->
+    </select>
+    <div class="hint" id="setting-pip-backend-hint"></div>
+    <div id="setting-pip-key-row" class="pip-key-row" hidden>
+      <label for="setting-pip-key" class="settings-title">Anthropic API key</label>
+      <input type="password" id="setting-pip-key" autocomplete="off" placeholder="sk-ant-…" spellcheck="false">
+      <div class="hint">Stored in this browser only (localStorage). Goes directly to api.anthropic.com — never crosses our infrastructure. Treat like a password.</div>
+    </div>
+  </div>
+
   <div class="settings-group-header">Experimental</div>
   <div class="settings-item">
     <input type="checkbox" id="setting-passive-scan">
