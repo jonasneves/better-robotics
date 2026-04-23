@@ -1,0 +1,72 @@
+name: Stamp SW version
+
+# Bumps the VERSION constant in public/sw.js to the content hash of all
+# dashboard assets. Changes to assets → new hash → sw.js content changes →
+# browsers see a new SW → "Reload to update" banner appears in the dashboard.
+#
+# Why hash and not raw commit SHA: raw SHA would change on every commit,
+# including no-op CI pushes (firmware artifacts, doc edits, comment-only).
+# Hash only changes when an asset the user actually consumes changed —
+# so the banner fires when there's something worth reloading for.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'public/**'
+    paths-ignore:
+      # OTA bundles + their manifests have their own freshness story; not
+      # part of the cached dashboard shell.
+      - 'public/firmware/**'
+      # Excluding sw.js avoids the self-reference loop (changing the file
+      # would always re-trigger this workflow).
+      - 'public/sw.js'
+  workflow_dispatch: {}
+
+jobs:
+  stamp:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute asset content hash
+        id: hash
+        run: |
+          # Sort for deterministic ordering across runners. xargs cat gives
+          # us one big stream; sha256 + first 8 hex chars = compact version.
+          HASH=$(find public -type f \
+            \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' \) \
+            -not -path 'public/firmware/*' \
+            -not -name 'sw.js' \
+            | sort | xargs cat | sha256sum | cut -c1-8)
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Hash: $HASH"
+
+      - name: Stamp sw.js
+        run: |
+          sed -i 's|^const VERSION = .*|const VERSION = "${{ steps.hash.outputs.hash }}";|' public/sw.js
+          grep -E '^const VERSION = ' public/sw.js
+
+      - name: Commit if changed
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add public/sw.js
+          if git diff --staged --quiet; then
+            echo 'SW version unchanged — nothing to commit.'
+            exit 0
+          fi
+          git commit -m 'CI: stamp sw.js VERSION [skip ci]'
+          # Same retry-on-rebase pattern build-firmware.yml uses for the
+          # case where a concurrent human push lands first.
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main || true
+            if git push; then exit 0; fi
+            echo "Push attempt $attempt failed; retrying after sleep…"
+            sleep $((attempt * 3))
+          done
+          echo 'Giving up after 5 retries.'
+          exit 1

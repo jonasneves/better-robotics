@@ -10,11 +10,19 @@
 //   these have their own freshness needs and we'd be wrong to gatekeep.
 //
 // Update flow:
-// - Bump VERSION below when shipping a change worth a "reload now" prompt.
+// - VERSION is auto-stamped by CI on every dashboard-asset change
+//   (.github/workflows/stamp-sw-version.yml computes the content hash of
+//   all public/*.{js,css,html,svg,json} files except firmware + sw.js
+//   itself). Hash-based, not raw commit SHA — no-op commits (artifact
+//   pushes, doc edits) don't trigger the banner.
 // - Browser sees new SW → installs → waits.
 // - App detects the waiting worker → shows the update banner.
 // - User clicks "Reload" → SW skipWaiting + controllerchange + reload →
 //   all assets re-fetched from network. Intentional, never silent.
+// - Manual edits to VERSION are pointless — CI overwrites on next deploy.
+//   For an intentional bump unrelated to assets (e.g. server-side change
+//   in an API contract), edit any cached asset (a comment will do) and
+//   CI will pick up a new hash.
 const VERSION = "v1";
 const CACHE = `dashboard-${VERSION}`;
 
