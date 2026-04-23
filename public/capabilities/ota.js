@@ -310,7 +310,22 @@ export const ota = {
       entry.otaDataChar   = await service.getCharacteristic(OTA_DATA_CHAR_UUID);
       entry.otaStatusChar = await service.getCharacteristic(OTA_STATUS_CHAR_UUID);
       // fw-info is read once in app.js connect() before any capability probe.
-      entry.otaStatus = decodeJson(await entry.otaStatusChar.readValue()) || { st: "idle" };
+      const initial = decodeJson(await entry.otaStatusChar.readValue()) || { st: "idle" };
+      entry.otaStatus = initial;
+      // Orphaned-state cleanup: if the firmware reports an in-progress upload
+      // (receiving / committing) but this dashboard session didn't initiate
+      // one, that's a tombstone from a previous session that got interrupted
+      // (refresh during OTA, BLE drop mid-stream, etc.). Send the 0x00 reset
+      // opcode so the firmware drops its half-buffer and the next intentional
+      // OTA starts clean — and the user doesn't see a misleading "receiving
+      // 1%" frozen on the card forever.
+      if (initial.st === "receiving" || initial.st === "committing") {
+        try {
+          await entry.otaDataChar.writeValueWithResponse(new Uint8Array([0x00]));
+          entry.otaStatus = { st: "idle" };
+          logFor(entry, `cleared orphaned OTA state (was ${initial.st} ${initial.n || 0}/${initial.total || 0} B)`);
+        } catch { /* if write fails, fall back to displaying the orphaned state — still better than freezing */ }
+      }
       await entry.otaStatusChar.startNotifications();
       entry.otaStatusChar.addEventListener("characteristicvaluechanged", (e) => {
         const prevSt = entry.otaStatus?.st || "idle";
