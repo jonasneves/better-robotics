@@ -23,7 +23,13 @@ export function makeBleSnapshotCap(schema) {
   const urlField    = `${name}Url`;       // last successful data URL
   const errField    = `${name}Err`;
   const busyField   = `${name}Busy`;      // a transfer is in flight
+  const watchdogField = `${name}Watchdog`; // timer id for stall detection
   const action      = `${name}-take`;
+  // Firmware notify is fire-and-forget — if a chunk or commit drops, the
+  // dashboard waits forever. Reset this watchdog on any progress; if it
+  // fires, the transfer is dead. 4 s covers expected 25 ms × 50 chunks
+  // for a typical JPEG, with margin for the connection-interval jitter.
+  const STALL_MS = 4000;
   const label = name[0].toUpperCase() + name.slice(1);
 
   return {
@@ -33,9 +39,25 @@ export function makeBleSnapshotCap(schema) {
       [reqField]: null, [dataField]: null,
       [bufField]: null, [totalField]: 0, [recvField]: 0,
       [urlField]: null, [errField]: null, [busyField]: false,
+      [watchdogField]: null,
     }),
 
     async probe(entry, service) {
+      const armWatchdog = () => {
+        if (entry[watchdogField]) clearTimeout(entry[watchdogField]);
+        entry[watchdogField] = setTimeout(() => {
+          if (!entry[busyField]) return;
+          entry[errField] = `stalled at ${entry[recvField]}/${entry[totalField]} B (chunks dropped — retry)`;
+          entry[bufField] = null;
+          entry[busyField] = false;
+          entry[watchdogField] = null;
+          logFor(entry, `snapshot: ${entry[errField]}`);
+          renderEntry(entry);
+        }, STALL_MS);
+      };
+      const clearWatchdog = () => {
+        if (entry[watchdogField]) { clearTimeout(entry[watchdogField]); entry[watchdogField] = null; }
+      };
       try {
         entry[reqField]  = await service.getCharacteristic(reqChar);
         entry[dataField] = await service.getCharacteristic(dataChar);
@@ -52,6 +74,7 @@ export function makeBleSnapshotCap(schema) {
             entry[recvField] = 0;
             entry[errField] = null;
             entry[busyField] = true;
+            armWatchdog();
             renderEntry(entry);
           } else if (op === 0x02 && entry[bufField]) {
             const payload = data.subarray(1);
@@ -59,10 +82,12 @@ export function makeBleSnapshotCap(schema) {
             const take = Math.min(payload.length, room);
             entry[bufField].set(payload.subarray(0, take), entry[recvField]);
             entry[recvField] += take;
+            armWatchdog();
             renderEntry(entry);
           } else if (op === 0x03 && entry[bufField]) {
             // commit: turn the accumulated bytes into a data URL we can <img>.
             // The protocol is JPEG-only on the firmware side; assume it.
+            clearWatchdog();
             const blob = new Blob([entry[bufField]], { type: "image/jpeg" });
             // Revoke prior url so we don't accumulate refs across snapshots.
             if (entry[urlField]) URL.revokeObjectURL(entry[urlField]);
@@ -72,6 +97,7 @@ export function makeBleSnapshotCap(schema) {
             logFor(entry, `snapshot: ${entry[recvField]} bytes`);
             renderEntry(entry);
           } else if (op === 0xff) {
+            clearWatchdog();
             const msg = new TextDecoder().decode(data.subarray(1));
             entry[errField] = msg || "snapshot failed";
             entry[bufField] = null;
@@ -86,6 +112,7 @@ export function makeBleSnapshotCap(schema) {
     },
 
     cleanup(entry) {
+      if (entry[watchdogField]) { clearTimeout(entry[watchdogField]); entry[watchdogField] = null; }
       if (entry[urlField]) { URL.revokeObjectURL(entry[urlField]); entry[urlField] = null; }
       entry[reqField] = entry[dataField] = null;
       entry[bufField] = null;

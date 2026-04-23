@@ -756,9 +756,11 @@ static void snapshotTask(void* param) {
     snapshotDataChar->setValue(chunk, 1 + take);
     snapshotDataChar->notify();
     sent += take;
-    // 6ms ≈ default connection interval; one notify per CI is the BLE flow-
-    // control sweet spot. Lower = drops; higher = wastes slots.
-    vTaskDelay(pdMS_TO_TICKS(6));
+    // 25 ms covers Mac/Chrome's typical 30 ms connection interval. Earlier
+    // 6 ms was too aggressive — Bluedroid's notify queue (~7 entries) would
+    // overflow and silently drop late chunks, leaving the dashboard stuck
+    // mid-transfer. Slower but reliable: ~9 KB JPEG ≈ 50 chunks ≈ 1.3 s.
+    vTaskDelay(pdMS_TO_TICKS(25));
   }
 
   // Commit: opcode 0x03, no payload. Dashboard validates received == total.
