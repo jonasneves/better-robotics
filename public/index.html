@@ -174,12 +174,17 @@
     <button class="icon" id="scripts-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
   <p class="meta" style="margin: 0 0 10px;">
-    JavaScript that drives connected robots over BLE. Runs in this tab — nothing is uploaded to the Pi. <code>robot</code> is the first connected robot, <code>robots</code> is all of them. <code>sleep(ms)</code> and <code>log(...)</code> are available. Cmd/Ctrl-Enter to run. See <a href="https://github.com/jonasneves/better-robotics/blob/main/USER-CODE.md" target="_blank" rel="noopener">USER-CODE.md</a>.
+    JavaScript that drives connected robots over BLE. Runs in this tab — nothing is uploaded to the Pi. <code>robot</code>, <code>robots</code>, <code>phones</code>, <code>sleep</code>, <code>log</code>, <code>speak</code> are in scope. Cmd/Ctrl-Enter to run. See <a href="https://github.com/jonasneves/better-robotics/blob/main/USER-CODE.md" target="_blank" rel="noopener">USER-CODE.md</a>.
   </p>
+  <div class="row" style="margin: 0 0 8px;">
+    <label class="meta" for="scripts-template" style="flex: 0 0 auto;">Load template:</label>
+    <select id="scripts-template" class="sm" style="flex: 1;">
+      <option value="">—</option>
+    </select>
+  </div>
   <textarea id="scripts-editor" class="scripts-editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
   <div class="row" style="margin: 10px 0 8px;">
     <button class="sm" id="scripts-run">Run</button>
-    <button class="secondary sm" id="scripts-reset">Reset to example</button>
   </div>
   <div id="scripts-output" class="scripts-output"></div>
 </dialog>

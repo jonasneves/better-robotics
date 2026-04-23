@@ -17,7 +17,7 @@ panel is the IDE; localStorage is the file system; BLE is the runtime
 link.
 
 ```js
-// What a user script looks like.
+// Multi-robot is a forEach.
 for (const r of robots) {
   await r.led(true);
   await r.move({ left: 30, right: 30, durationMs: 400 });
@@ -31,7 +31,21 @@ const log = await robot.op("get-log", { lines: 50, unit: "pi-robot" });
 
 // Fire-and-forget for ops where the robot drops BLE mid-call.
 await robot.op("reboot", {}, { await: false });
+
+// Vision in the loop — same in-browser VLM Pip uses (perception.js).
+// Camera must be streaming on this robot first.
+const scene = await robot.scene("Is the path ahead clear?");
+
+// Phone in the loop — paired phone via the WebRTC pair layer.
+const dir = await phones[0].ask({
+  question: "Which way?",
+  options: ["Forward", "Back", "Stop"],
+});
 ```
+
+In scope inside a script: `robot`, `robots`, `phones`, `sleep(ms)`, `log(...)`,
+`speak(text)`. The Scripts dialog ships several templates that demonstrate the
+shapes — pick one from the dropdown to load it into the editor.
 
 ## Why this is the right shape
 
