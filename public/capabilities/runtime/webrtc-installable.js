@@ -9,6 +9,7 @@ import { escapeHtml } from "../../dom.js";
 import { logFor } from "../../log.js";
 import { state } from "../../state.js";
 import { installPackage } from "./command.js";
+import { capSection } from "./cap-section.js";
 import {
   stopWatching as visionStop,
   renderPerceptionRow,
@@ -222,24 +223,14 @@ export function makeWebrtcInstallableCap(schema) {
         running, watching, watchingAction: actionWatch,
       });
       const promptField = running ? renderPerceptionPromptField(entry, { editAction: actionPrompt }) : "";
-      return `
-        <div class="robot-controls">
-          <div class="row">
-            <div>
-              <div class="label">${escapeHtml(label)}</div>
-              <div class="meta">${escapeHtml(meta)}</div>
-            </div>
-            ${action}
-          </div>
-          ${installHint}
-          ${s.log ? `<div class="meta install-log">${escapeHtml(s.log)}</div>` : ""}
-          ${entry[pcField] ? `
-            <video class="robot-camera" data-${name}-id="${entry.id}" autoplay playsinline muted></video>
-          ` : ""}
-          ${watchRow}
-          ${promptField}
-        </div>
+      const body = `
+        ${installHint}
+        ${s.log ? `<div class="meta install-log">${escapeHtml(s.log)}</div>` : ""}
+        ${entry[pcField] ? `<video class="robot-camera" data-${name}-id="${entry.id}" autoplay playsinline muted></video>` : ""}
+        ${watchRow}
+        ${promptField}
       `;
+      return capSection({ name, label, state: meta, action, body });
     },
 
     wireActions(entry, node) {

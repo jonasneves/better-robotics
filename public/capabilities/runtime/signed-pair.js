@@ -13,6 +13,7 @@ import { escapeHtml } from "../../dom.js";
 import { log, logFor } from "../../log.js";
 import { state } from "../../state.js";
 import { attachJoypad, mix } from "../../joypad.js";
+import { capSection } from "./cap-section.js";
 
 let renderEntry = () => {};
 export function setRender(fn) { renderEntry = fn; }
@@ -99,29 +100,18 @@ export function makeSignedPairCap(schema) {
 
     renderSection(entry) {
       if (entry.status !== "connected" || !entry[charField]) return "";
-      const header = `
-        <div class="robot-controls row">
-          <div>
-            <div class="label">${escapeHtml(label)}</div>
-            <div class="meta">${escapeHtml(labels.left)}: ${entry[leftField]} · ${escapeHtml(labels.right)}: ${entry[rightField]}</div>
-          </div>
-          <button class="secondary sm" data-action="${actionStop}">Stop</button>
-        </div>
-      `;
-      if (isMotors) {
-        return `${header}
-          <div class="joypad-wrap" data-action="motors-joypad">
-            <div class="joypad"><div class="joypad-knob"></div></div>
-            <div class="meta joypad-hint">Drag to drive · W A S D / arrow keys also work</div>
-          </div>
-        `;
-      }
-      return `${header}
-        <div class="motor-sliders">
-          <label>${escapeHtml(labels.left)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[leftField]}" data-action="${actionLeft}"></label>
-          <label>${escapeHtml(labels.right)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[rightField]}" data-action="${actionRight}"></label>
-        </div>
-      `;
+      const stateText = `${labels.left}: ${entry[leftField]} · ${labels.right}: ${entry[rightField]}`;
+      const action = `<button class="secondary sm" data-action="${actionStop}">Stop</button>`;
+      const body = isMotors
+        ? `<div class="joypad-wrap" data-action="motors-joypad">
+             <div class="joypad"><div class="joypad-knob"></div></div>
+             <div class="meta joypad-hint">Drag to drive · W A S D / arrow keys also work</div>
+           </div>`
+        : `<div class="motor-sliders">
+             <label>${escapeHtml(labels.left)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[leftField]}" data-action="${actionLeft}"></label>
+             <label>${escapeHtml(labels.right)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[rightField]}" data-action="${actionRight}"></label>
+           </div>`;
+      return capSection({ name, label, state: stateText, action, body });
     },
 
     wireActions(entry, node) {

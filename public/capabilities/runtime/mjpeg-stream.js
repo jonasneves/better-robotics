@@ -11,6 +11,7 @@ import {
   renderPerceptionPromptField,
   wirePerceptionPrompt,
 } from "../../perception.js";
+import { capSection } from "./cap-section.js";
 
 let renderEntry = () => {};
 export function setRender(fn) { renderEntry = fn; }
@@ -67,17 +68,16 @@ export function makeMjpegStreamCap(schema) {
         running, watching, watchingAction: actionWatch,
       });
       const promptField = running ? renderPerceptionPromptField(entry, { editAction: actionPrompt }) : "";
-      return `
-        <div class="robot-controls">
-          <div class="row">
-            <div><div class="label">${escapeHtml(label)}</div></div>
-            ${action}
-          </div>
-          ${body}
-          ${watchRow}
-          ${promptField}
-        </div>
-      `;
+      const stateText = !url ? "Waiting for WiFi"
+                      : running ? "streaming"
+                      : "ready";
+      return capSection({
+        name,
+        label,
+        state: stateText,
+        action,
+        body: `${body}${watchRow}${promptField}`,
+      });
     },
 
     wireActions(entry, node) {

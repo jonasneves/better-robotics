@@ -4,6 +4,7 @@
 // Three-char protocol: scan (read + notify list), join (write {s,p}),
 // status (read + notify {st, ssid, err, ip?}).
 import { UUIDS_BY_CAP, decodeJson, encodeJson } from "../../ble.js";
+import { capSection } from "./cap-section.js";
 import { escapeHtml } from "../../dom.js";
 import { logFor } from "../../log.js";
 
@@ -214,21 +215,18 @@ export function makeWifiScanCap(schema) {
       ` : Array.isArray(networks) ? `
         <div class="wifi-empty">No networks found — try again, or join another network manually.</div>
       ` : "";
-      return `
-        <div class="robot-controls row">
-          <div>
-            <div class="label">${escapeHtml(label)}</div>
-            <div class="meta">${escapeHtml(summarize(entry[statusState]))}</div>
-          </div>
-          <div class="wifi-actions">
-            <button class="secondary sm" data-action="${actionScan}" ${scanning ? "disabled" : ""}>
-              ${scanning ? `<span class="wifi-spinner"></span> Scanning…` : "Scan"}
-            </button>
-            <button class="secondary sm" data-action="${actionManualJoin}">Join other…</button>
-          </div>
-        </div>
-        ${nets}
-      `;
+      return capSection({
+        name,
+        label,
+        state: summarize(entry[statusState]),
+        action: `<div class="wifi-actions">
+          <button class="secondary sm" data-action="${actionScan}" ${scanning ? "disabled" : ""}>
+            ${scanning ? `<span class="wifi-spinner"></span> Scanning…` : "Scan"}
+          </button>
+          <button class="secondary sm" data-action="${actionManualJoin}">Join other…</button>
+        </div>`,
+        body: nets,
+      });
     },
 
     wireActions(entry, node) {

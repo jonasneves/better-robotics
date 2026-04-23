@@ -537,6 +537,62 @@ details.tray.has-alert > summary::after {
   padding-top: 12px;
   border-top: 1px dashed var(--line);
 }
+
+/* Per-capability disclosure section. Header (chevron + label + state +
+   primary action) is always visible; body collapses below. iOS Settings /
+   macOS Finder pattern — action stays clickable when collapsed, depth is
+   one tap away. Open state persists per-cap in localStorage. */
+.cap-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.cap-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cap-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0;
+  margin: -4px 0;
+  background: transparent;
+  border: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.cap-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.cap-chevron {
+  width: 12px;
+  height: 12px;
+  color: var(--ink-muted);
+  opacity: 0.85;
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+  transition: transform 0.2s ease-out;
+}
+.cap-toggle[aria-expanded="true"] .cap-chevron { transform: rotate(0); }
+.cap-label { font-weight: 500; flex-shrink: 0; }
+.cap-state {
+  color: var(--ink-muted);
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cap-body { margin-top: 10px; }
+@media (prefers-reduced-motion: reduce) { .cap-chevron { transition: none; } }
 .robot.highlight { background: #fff8e1; transition: background 1.5s; }
 
 /* Top-level robot state (installing, rebooting, …). Live = pulsing accent

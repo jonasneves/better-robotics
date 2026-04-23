@@ -10,6 +10,7 @@ import {
 } from "./state.js";
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
 import { RUNTIMES } from "./capabilities/runtime/index.js";
+import { setOpen as capSetOpen } from "./capabilities/runtime/cap-section.js";
 import { updateFirmware, updateFromFile } from "./capabilities/ota.js";
 import { restartService, rebootRobot, enrollKey, getLog, getConfig } from "./capabilities/runtime/command.js";
 import { initGamepad } from "./gamepad.js";
@@ -849,6 +850,22 @@ function renderEntry(entry) {
   for (const cap of entry.runtimeCaps || []) cap.wireActions(entry, entry.node);
   for (const cap of CAPABILITIES) cap.postRender?.(entry);
   for (const cap of entry.runtimeCaps || []) cap.postRender?.(entry);
+  // Per-capability disclosure toggles (cap-section.js renders the buttons).
+  // Click hides/shows the body without a re-render and persists the choice
+  // to localStorage so the user's collapse preferences stick across sessions.
+  entry.node.querySelectorAll("[data-cap-toggle]").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const capName = btn.dataset.capToggle;
+      const sec = btn.closest(".cap-section");
+      const body = sec?.querySelector(".cap-body");
+      if (!body) return;
+      const willOpen = body.hasAttribute("hidden");
+      body.toggleAttribute("hidden", !willOpen);
+      btn.setAttribute("aria-expanded", String(willOpen));
+      capSetOpen(capName, willOpen);
+    });
+  });
 
   const connectBtn = entry.node.querySelector('[data-action="connect"]');
   if (connectBtn) connectBtn.addEventListener("click", () => connect(id));

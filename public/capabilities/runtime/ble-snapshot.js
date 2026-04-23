@@ -6,6 +6,7 @@
 import { UUIDS_BY_CAP } from "../../ble.js";
 import { escapeHtml } from "../../dom.js";
 import { logFor } from "../../log.js";
+import { capSection } from "./cap-section.js";
 
 let renderEntry = () => {};
 export function setRender(fn) { renderEntry = fn; }
@@ -131,19 +132,13 @@ export function makeBleSnapshotCap(schema) {
         ? `<img class="robot-camera" src="${escapeHtml(url)}" alt="snapshot">`
         : "";
       const errLine = err ? `<div class="meta" style="color:var(--danger);">${escapeHtml(err)}</div>` : "";
-      return `
-        <div class="robot-controls">
-          <div class="row">
-            <div>
-              <div class="label">${escapeHtml(label)}</div>
-              <div class="meta">BLE-only · works without WiFi${progress}</div>
-            </div>
-            <button class="secondary sm" data-action="${action}" ${busy ? "disabled" : ""}>${busy ? "Capturing…" : "Take photo"}</button>
-          </div>
-          ${img}
-          ${errLine}
-        </div>
-      `;
+      return capSection({
+        name,
+        label,
+        state: `BLE-only${progress}`,
+        action: `<button class="secondary sm" data-action="${action}" ${busy ? "disabled" : ""}>${busy ? "Capturing…" : "Take photo"}</button>`,
+        body: `${img}${errLine}`,
+      });
     },
 
     wireActions(entry, node) {

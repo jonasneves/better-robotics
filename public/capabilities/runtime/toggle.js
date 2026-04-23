@@ -3,8 +3,8 @@
 // State lives on `entry[<name>Char]` (BLE handle) and `entry[<name>On]` (bool);
 // anything reading `entry.ledOn` from the previous hand-written LED module keeps working.
 import { UUIDS_BY_CAP } from "../../ble.js";
-import { escapeHtml } from "../../dom.js";
 import { logFor } from "../../log.js";
+import { capSection } from "./cap-section.js";
 
 let renderEntry = () => {};
 export function setRender(fn) { renderEntry = fn; }
@@ -61,15 +61,12 @@ export function makeToggleCap(schema) {
     renderSection(entry) {
       if (entry.status !== "connected" || !entry[charField]) return "";
       const on = entry[onField];
-      return `
-        <div class="robot-controls row">
-          <div>
-            <div class="label">${escapeHtml(label)}</div>
-            <div class="meta">${on ? "on" : "off"}</div>
-          </div>
-          <button class="secondary sm" data-action="${action}">${on ? "Turn off" : "Turn on"}</button>
-        </div>
-      `;
+      return capSection({
+        name,
+        label,
+        state: on ? "on" : "off",
+        action: `<button class="secondary sm" data-action="${action}">${on ? "Turn off" : "Turn on"}</button>`,
+      });
     },
 
     wireActions(entry, node) {
