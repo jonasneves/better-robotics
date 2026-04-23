@@ -1809,6 +1809,7 @@ dialog[open]::backdrop { opacity: 1; }
 .settings-item.key-row { grid-template-columns: 1fr; gap: 6px; }
 .settings-item.key-row .key-fingerprint { word-break: break-all; }
 .settings-item.passwords-row { grid-template-columns: 1fr; gap: 6px; }
+.settings-item.pip-backend-row { grid-template-columns: 1fr; gap: 6px; }
 .pwd-entry {
   display: flex;
   align-items: center;
