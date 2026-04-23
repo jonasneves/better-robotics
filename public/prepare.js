@@ -5,6 +5,7 @@ import { ensurePassword } from "./passwords.js";
 const FIRMWARE_URL    = "firmware/pi_robot";
 const FIRMWARE_FILES  = [
   "pi_robot.py", "requirements.txt", "pi-robot.service",
+  "heartbeat.py", "pi-robot-heartbeat.service",
   "usb-gadget-setup.sh", "usb-gadget.service",
 ];
 const SSH_KEY_STORE   = "better-robotics:ssh-pub";

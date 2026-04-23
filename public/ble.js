@@ -15,6 +15,12 @@ export const ROBOT_STATUS_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9d";
 export const OPS_RESPONSE_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9e";
 export const TELEMETRY_CHAR_UUID      = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9f";
 
+// Heartbeat is a separate, always-on service from firmware/pi_robot/heartbeat.py.
+// Distinct UUID family so the dashboard can scan for the heartbeat alone when
+// pi-robot.service is dead and only the recovery-plane process is advertising.
+export const HEARTBEAT_SVC_UUID       = "b6e8d5f3-2c9d-4bba-ae5e-6f9b8c7d5eb0";
+export const HEARTBEAT_CHAR_UUID      = "b6e8d5f3-2c9d-4bba-ae5e-6f9b8c7d5eb1";
+
 // Chunked-frame protocol shared by OTA and camera signaling: begin carries a
 // u32 big-endian length, chunks append, commit parses + acts, stop tears down.
 export const CHUNK_BYTES = 180;  // safe under ATT MTU on macOS/Chrome.

@@ -157,7 +157,7 @@ note usb_gadget_configured
 INSTALL_OK=0
 DEST="/home/$USER_NAME/better-robotics/firmware/pi_robot"
 install -d -o "$USER_NAME" -g "$USER_NAME" "$DEST"
-for f in pi_robot.py requirements.txt pi-robot.service; do
+for f in pi_robot.py requirements.txt pi-robot.service heartbeat.py pi-robot-heartbeat.service; do
     if [ -f "$STAGED/$f" ]; then
         install -m 644 -o "$USER_NAME" -g "$USER_NAME" "$STAGED/$f" "$DEST/$f"
     else
@@ -233,8 +233,13 @@ BTEOF
 
     sed "s|__HOME__|/home/$USER_NAME|g" "$DEST/pi-robot.service" > /etc/systemd/system/pi-robot.service
     chmod 644 /etc/systemd/system/pi-robot.service
+    if [ -f "$DEST/pi-robot-heartbeat.service" ]; then
+      sed "s|__HOME__|/home/$USER_NAME|g" "$DEST/pi-robot-heartbeat.service" > /etc/systemd/system/pi-robot-heartbeat.service
+      chmod 644 /etc/systemd/system/pi-robot-heartbeat.service
+    fi
     systemctl daemon-reload
     systemctl enable pi-robot.service
+    systemctl enable pi-robot-heartbeat.service 2>/dev/null || true
     note service_enabled
 
     # Probe the service + dump journal to the boot partition so issues are

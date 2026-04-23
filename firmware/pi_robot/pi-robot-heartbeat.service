@@ -1,0 +1,17 @@
+[Unit]
+Description=Better Robotics — heartbeat BLE (recovery plane)
+After=bluetooth.service
+Requires=bluetooth.service
+# Intentionally NOT After/Wants pi-robot.service — the whole point is that
+# a crash or crash-loop in pi-robot doesn't take the heartbeat down.
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=__HOME__/better-robotics/firmware/pi_robot
+ExecStart=__HOME__/better-robotics/firmware/pi_robot/.venv/bin/python heartbeat.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

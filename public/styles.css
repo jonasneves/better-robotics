@@ -313,6 +313,7 @@ button.icon:hover { background: var(--line); color: var(--ink); }
 /* Pulsing amber while a connect is in flight. Same token as Pip's voice so the
    "activity happening" feeling is consistent across the UI. */
 .dot.connecting { background: var(--duke-persimmon); animation: dot-pulse 1.4s ease-in-out infinite; }
+.dot.firmware-down { background: var(--duke-persimmon); }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .dot.connecting { animation: none; } }
 
@@ -497,6 +498,22 @@ details.tray[open] > :not(summary) { margin-top: 12px; }
 }
 .robot-state.sticky::before { animation: none; background: var(--ink-muted); }
 @keyframes robot-state-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* Heartbeat-only connect: pi-robot.service is dead, recovery plane reachable. */
+.firmware-down-banner {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--duke-persimmon);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--duke-persimmon) 8%, transparent);
+}
+.firmware-down-banner code {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
 
 /* Telemetry — ambient vitals line (uptime · mem · temp). Muted monospace. */
 .telemetry {

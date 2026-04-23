@@ -1,4 +1,5 @@
-import { SERVICE_UUID, FW_INFO_CHAR_UUID, ROBOT_STATUS_CHAR_UUID,
+import { SERVICE_UUID, HEARTBEAT_SVC_UUID, HEARTBEAT_CHAR_UUID,
+  FW_INFO_CHAR_UUID, ROBOT_STATUS_CHAR_UUID,
   OPS_RESPONSE_CHAR_UUID, TELEMETRY_CHAR_UUID, decodeJson } from "./ble.js";
 import { $, escapeHtml } from "./dom.js";
 import { log, logFor, setLogRenderer } from "./log.js";
@@ -148,10 +149,15 @@ async function scanForNew() {
     const hintedName = new URLSearchParams(location.search).get("robot");
     const useHint = hintedName
       && ![...state.devices.values()].some(e => e.name === hintedName);
-    const filter = useHint
-      ? { name: hintedName, services: [SERVICE_UUID] }
-      : { services: [SERVICE_UUID] };
-    const device = await navigator.bluetooth.requestDevice({ filters: [filter] });
+    // Match devices advertising EITHER the main service OR the heartbeat —
+    // a robot whose pi-robot.service is dead still appears via heartbeat.
+    const filters = useHint
+      ? [{ name: hintedName, services: [SERVICE_UUID] },
+         { name: hintedName, services: [HEARTBEAT_SVC_UUID] }]
+      : [{ services: [SERVICE_UUID] }, { services: [HEARTBEAT_SVC_UUID] }];
+    const device = await navigator.bluetooth.requestDevice({
+      filters, optionalServices: [SERVICE_UUID, HEARTBEAT_SVC_UUID],
+    });
     const name = device.name || device.id;
     entryFor(device);
     log("paired", name);
@@ -186,7 +192,7 @@ async function scanForNewPassive() {
   navigator.bluetooth.addEventListener("advertisementreceived", onAdv);
   try {
     _discoverState.scanHandle = await navigator.bluetooth.requestLEScan({
-      filters: [{ services: [SERVICE_UUID] }],
+      filters: [{ services: [SERVICE_UUID] }, { services: [HEARTBEAT_SVC_UUID] }],
       keepRepeatedDevices: false,
     });
     log("Passive scan started — watching for 15 s");
@@ -204,7 +210,9 @@ async function scanForNewPassive() {
 async function pairDiscovered(name) {
   try {
     const device = await navigator.bluetooth.requestDevice({
-      filters: [{ name, services: [SERVICE_UUID] }],
+      filters: [{ name, services: [SERVICE_UUID] },
+                { name, services: [HEARTBEAT_SVC_UUID] }],
+      optionalServices: [SERVICE_UUID, HEARTBEAT_SVC_UUID],
     });
     entryFor(device);
     log("paired", name);
@@ -251,7 +259,9 @@ function renderDiscovered() {
 async function restoreDevice(entry) {
   // Required on browsers without getDevices(): chooser filtered to the saved name.
   const device = await navigator.bluetooth.requestDevice({
-    filters: [{ name: entry.name, services: [SERVICE_UUID] }],
+    filters: [{ name: entry.name, services: [SERVICE_UUID] },
+              { name: entry.name, services: [HEARTBEAT_SVC_UUID] }],
+    optionalServices: [SERVICE_UUID, HEARTBEAT_SVC_UUID],
   });
   attachDevice(entry, device);
 }
@@ -272,7 +282,18 @@ async function connect(id) {
   renderEntry(entry);
   try {
     const server = await gattConnectWithTimeout(entry.device);
-    const service = await server.getPrimaryService(SERVICE_UUID);
+    let service;
+    try {
+      service = await server.getPrimaryService(SERVICE_UUID);
+    } catch (svcErr) {
+      // pi-robot.service is dead but the robot's heartbeat plane is still up.
+      // Surface the recovery info instead of bouncing the user back to "Error".
+      if (await tryConnectHeartbeatOnly(entry, server)) {
+        renderEntry(entry);
+        return;
+      }
+      throw svcErr;
+    }
     // A robot advertising only the service (no chars) is still "connected".
     // Every capability is optional.
     entry.status = "connected";
@@ -390,6 +411,34 @@ async function connect(id) {
   renderEntry(entry);
 }
 
+// Recovery-plane connect. The robot's main GATT service is gone, but
+// heartbeat.py is still advertising. Read its status char so the card can
+// show the IP + a recovery-console shortcut instead of an opaque error.
+async function tryConnectHeartbeatOnly(entry, server) {
+  try {
+    const svc = await server.getPrimaryService(HEARTBEAT_SVC_UUID);
+    const ch  = await svc.getCharacteristic(HEARTBEAT_CHAR_UUID);
+    entry.heartbeat = decodeJson(await ch.readValue()) || {};
+    try {
+      await ch.startNotifications();
+      ch.addEventListener("characteristicvaluechanged", (e) => {
+        entry.heartbeat = decodeJson(e.target.value) || entry.heartbeat;
+        renderEntry(entry);
+      });
+    } catch { /* notify optional */ }
+    entry.status = "firmware-down";
+    entry.autoReconnect = true;
+    entry.lastConnectedAt = Date.now();
+    entry.consecutiveFailures = 0;
+    entry.lastConnectError = null;
+    persist();
+    logFor(entry, `firmware down — heartbeat ip=${entry.heartbeat.ip || "?"} pi_robot=${entry.heartbeat.pi_robot || "?"}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Build + probe only runtime caps that aren't already live. Used both at
 // connect time and when fw-info notifies a schema change mid-session (ESP32
 // adds camera post-WiFi-join). Keyed by name so an existing cap's state
@@ -435,6 +484,7 @@ function onDisconnected(id) {
     }, 30000);
   }
   entry.robotStatus = null;
+  entry.heartbeat = null;
   for (const cap of CAPABILITIES) cap.cleanup(entry);
   for (const cap of entry.runtimeCaps || []) cap.cleanup(entry);
   entry.runtimeCaps = [];
@@ -550,15 +600,22 @@ function renderEntry(entry) {
   const savedStart = savedAction && active.selectionStart != null ? active.selectionStart : null;
   const savedEnd   = savedAction && active.selectionEnd != null ? active.selectionEnd : null;
   const { id, name, status } = entry;
-  const connected = status === "connected";
+  const firmwareDown = status === "firmware-down";
+  // GATT IS connected when firmwareDown — only the main service is missing.
+  // Treat as connected for button + dot purposes so the user gets Disconnect.
+  const connected = status === "connected" || firmwareDown;
   const connecting = status === "connecting";
   // Connecting state is carried by the dot's amber pulse + the button label;
   // the sub-line is reserved for error detail so the user knows whether to
   // retry (Out of range = robot just needs to be awake) or investigate.
   const statusText = status === "error"
     ? (/no longer in range|not found/i.test(entry.lastConnectError || "") ? "Out of range" : "Error")
+    : firmwareDown ? "Firmware down"
     : "";
-  const dotClass = connected ? " connected" : connecting ? " connecting" : status === "error" ? " error" : "";
+  const dotClass = firmwareDown ? " firmware-down"
+                 : status === "connected" ? " connected"
+                 : connecting ? " connecting"
+                 : status === "error" ? " error" : "";
 
   // Canonical capability order across robot types so the eye lands on the same
   // control in the same place on both Pi and ESP32 cards. Unknown names fall
@@ -637,7 +694,17 @@ function renderEntry(entry) {
       </div>
     </div>
     ${stateHtml}
-    ${expanded ? `
+    ${firmwareDown ? `
+      <div class="firmware-down-banner">
+        <div class="label">pi-robot.service: ${escapeHtml(entry.heartbeat?.pi_robot || "down")}</div>
+        <div class="meta">Only the heartbeat plane is responding — capabilities (LED, motors, WiFi, OTA) are unavailable until the firmware comes back.</div>
+        ${entry.heartbeat?.ip ? `<div class="meta">SSH: <code>ssh robot@${escapeHtml(entry.heartbeat.ip)}</code></div>` : `<div class="meta">No IP — robot isn't on WiFi. Use the USB-C recovery console.</div>`}
+        <div class="row" style="margin-top:8px;">
+          <button class="secondary sm" data-action="open-recovery">Open recovery console</button>
+        </div>
+      </div>
+    ` : ""}
+    ${expanded && !firmwareDown ? `
       <div class="robot-body">
         ${telemetryHtml(entry)}
         ${enrollHtml}
@@ -654,6 +721,11 @@ function renderEntry(entry) {
   if (connectBtn) connectBtn.addEventListener("click", () => connect(id));
   const disconnectBtn = entry.node.querySelector('[data-action="disconnect"]');
   if (disconnectBtn) disconnectBtn.addEventListener("click", () => disconnect(id));
+  const recoveryBtn = entry.node.querySelector('[data-action="open-recovery"]');
+  if (recoveryBtn) recoveryBtn.addEventListener("click", async () => {
+    const mod = await import("./recovery.js");
+    mod.openRecoveryDialog();
+  });
   const menuBtn = entry.node.querySelector('[data-action="menu"]');
   if (menuBtn) menuBtn.addEventListener("click", () => openMenu(menuBtn, id));
   const toggleExpand = () => {

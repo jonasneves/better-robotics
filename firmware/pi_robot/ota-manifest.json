@@ -4,6 +4,8 @@
     { "src": "pi_robot.py", "dest": "$HOME/better-robotics/firmware/pi_robot/pi_robot.py", "mode": "644" },
     { "src": "version.py", "dest": "$HOME/better-robotics/firmware/pi_robot/version.py", "mode": "644" },
     { "src": "pi-robot.service", "dest": "/etc/systemd/system/pi-robot.service", "mode": "644" },
+    { "src": "heartbeat.py", "dest": "$HOME/better-robotics/firmware/pi_robot/heartbeat.py", "mode": "644" },
+    { "src": "pi-robot-heartbeat.service", "dest": "/etc/systemd/system/pi-robot-heartbeat.service", "mode": "644" },
     { "src": "usb-gadget-setup.sh", "dest": "/usr/local/bin/usb-gadget-setup.sh", "mode": "755" },
     { "src": "usb-gadget.service", "dest": "/etc/systemd/system/usb-gadget.service", "mode": "644" },
     { "src": "serial-getty-autologin.conf", "dest": "/etc/systemd/system/serial-getty@ttyGS0.service.d/autologin.conf", "mode": "644" },
@@ -13,6 +15,8 @@
     "systemctl daemon-reload",
     "systemctl enable usb-gadget.service",
     "systemctl enable serial-getty@ttyGS0.service",
+    "systemctl enable pi-robot-heartbeat.service",
+    "systemctl restart pi-robot-heartbeat.service",
     "sed -i 's/modules-load=dwc2,g_ether/modules-load=dwc2,libcomposite/' /boot/firmware/cmdline.txt",
     "/usr/local/bin/ensure-autologin-password.sh __USER__"
   ],
