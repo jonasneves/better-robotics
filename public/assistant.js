@@ -208,14 +208,14 @@ function scheduleAutoDismiss() {
 
 function close() {
   cancelAutoDismiss();
-  _panel.close();
+  if (_panel.matches(":popover-open")) _panel.hidePopover();
   setPanelOpen(false);
   setResponding(false);  // cancel any in-flight response indicator on close
 }
 
 function open({ autoDismiss = false } = {}) {
   cancelAutoDismiss();
-  if (!_panel.open) _panel.show();
+  if (!_panel.matches(":popover-open")) _panel.showPopover();
   setPanelOpen(true);
   if (autoDismiss) scheduleAutoDismiss();
 }
@@ -326,7 +326,7 @@ async function notify(dialogId) {
   const ctx = CONTEXTS[dialogId];
   if (!ctx) return;
   const now = Date.now();
-  if (_panel.open) return;                      // don't interrupt
+  if (_panel.matches(":popover-open")) return;  // don't interrupt
   if (now - _lastNotifyAt < MIN_GAP_MS) return; // don't spam
   _lastNotifyAt = now;
   const prompt = [
@@ -444,18 +444,41 @@ export async function handleRemoteChat(text, { source = "phone" } = {}) {
   return finalReply;
 }
 
-// Fire notify() when a dialog's `open` attribute is added. Cheap, and lets other
-// modules open dialogs however they want without knowing Pip exists.
+// Re-enter the top layer as the most-recently-shown popover. A dialog
+// opened via showModal() joins the top layer above the bubble; hide-then-
+// show here puts the bubble (and panel, if open) back on top so the user
+// can still reach Pip to ask about whatever just appeared. Hide+show in
+// the same task avoids a visible flicker.
+function rehoistPip() {
+  if (_bubble?.matches(":popover-open")) {
+    _bubble.hidePopover();
+    _bubble.showPopover();
+  }
+  // Order matters — the panel must land on top of the bubble, so hoist
+  // the panel last.
+  if (_panel?.matches(":popover-open")) {
+    _panel.hidePopover();
+    _panel.showPopover();
+  }
+}
+
+// Fire notify() when a dialog's `open` attribute is added (for dialogs with
+// Pip context), and rehoist the bubble for any dialog opening so it stays
+// clickable above modal dialogs. One observer per dialog; cheap, and lets
+// other modules open dialogs however they want without knowing Pip exists.
 function watchDialogs() {
-  for (const id of Object.keys(CONTEXTS)) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    let wasOpen = el.hasAttribute("open");
+  const contextual = new Set(Object.keys(CONTEXTS));
+  for (const dlg of document.querySelectorAll("dialog")) {
+    if (dlg === _panel) continue;  // Pip's own panel opens via popover, not [open]
+    let wasOpen = dlg.hasAttribute("open");
     new MutationObserver(() => {
-      const isOpen = el.hasAttribute("open");
-      if (isOpen && !wasOpen) notify(id);
+      const isOpen = dlg.hasAttribute("open");
+      if (isOpen && !wasOpen) {
+        if (contextual.has(dlg.id)) notify(dlg.id);
+        rehoistPip();
+      }
       wasOpen = isOpen;
-    }).observe(el, { attributes: true, attributeFilter: ["open"] });
+    }).observe(dlg, { attributes: true, attributeFilter: ["open"] });
   }
 }
 
@@ -469,7 +492,7 @@ export function initAssistant() {
 
   // User-initiated open stays until user closes — auto-dismiss only for bot-initiated.
   _bubble.addEventListener("click", () => {
-    if (_panel.open) close();
+    if (_panel.matches(":popover-open")) close();
     else { open(); _input.focus(); }
   });
   $("assistant-close").addEventListener("click", close);
@@ -488,4 +511,8 @@ export function initAssistant() {
     sum.closest(".pip-turn")?.classList.toggle("collapsed");
   });
   watchDialogs();
+  // Hoist the bubble into the top layer so it floats above any dialog the
+  // user opens — the user can then ask Pip about the content of a modal
+  // (e.g. "what do these GPIO pins do?") without closing it first.
+  _bubble.showPopover();
 }

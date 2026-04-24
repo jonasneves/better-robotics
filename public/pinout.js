@@ -36,6 +36,37 @@ const GPIO_TO_PHYS = new Map(
       .map(([phys, lbl]) => [parseInt(lbl.slice(4), 10), phys]),
 );
 
+// ESP32-CAM (AI-Thinker-compatible, including OV3660 variants) header pins.
+// Two 8-pin edges; the chip has ~34 GPIOs total but everything not on these
+// headers is permanently wired to the OV camera, µSD slot, or PSRAM and not
+// reusable without desoldering. Status field is "free" | "sd-shared" |
+// "reserved" — reserved covers bootstrap pins, UART programming pins, and
+// the camera XCLK tap. Notes surface on hover via <title>.
+const ESP32_PINS_TOP = [
+  { label: "IO4",  kind: "gpio", status: "sd-shared", note: "SD DATA1 + onboard flash LED on most AI-Thinker boards — free only if SD unmounted and LED unused" },
+  { label: "IO2",  kind: "gpio", status: "sd-shared", note: "SD DATA0; also a bootstrap pin (must float high at boot)" },
+  { label: "IO14", kind: "gpio", status: "sd-shared", note: "SD CLK — free only if µSD is unused" },
+  { label: "IO15", kind: "gpio", status: "sd-shared", note: "SD CMD; also bootstrap — free only if µSD is unused" },
+  { label: "IO13", kind: "gpio", status: "sd-shared", note: "SD DATA3 — free only if µSD is unused" },
+  { label: "IO12", kind: "gpio", status: "sd-shared", note: "SD DATA2; bootstrap pin (must be LOW at boot or flash voltage mis-detects) — use only with pull-down" },
+  { label: "GND",  kind: "gnd" },
+  { label: "5V",   kind: "5v" },
+];
+// Order mirrors the top row's spatial layout: positions 1-8 of the two 8-pin
+// headers are physically across from each other on the PCB (5V ↔ 3V3, IO4 ↔
+// GND, etc.), so rendering the bottom row in reversed header-order puts
+// 3V3 directly under 5V, matching what the user sees on the physical board.
+const ESP32_PINS_BOT = [
+  { label: "GND",  kind: "gnd" },
+  { label: "U0T",  kind: "gpio", status: "reserved", note: "GPIO1 — UART0 TX, used for USB-serial programming. Usable as GPIO only if you give up serial." },
+  { label: "U0R",  kind: "gpio", status: "reserved", note: "GPIO3 — UART0 RX, used for USB-serial programming. Usable as GPIO only if you give up serial." },
+  { label: "VCC",  kind: "5v",  note: "Jumper-selectable 3V3 or 5V on some boards" },
+  { label: "GND",  kind: "gnd" },
+  { label: "IO0",  kind: "gpio", status: "reserved", note: "Camera XCLK + boot-mode strap (hold LOW to enter flash mode). Do not reassign." },
+  { label: "IO16", kind: "gpio", status: "free",     note: "Free on ESP32 modules without PSRAM. WROVER modules with PSRAM use IO16 internally — check your module first." },
+  { label: "3V3",  kind: "3v3" },
+];
+
 // Supports both flat {role: gpio} and nested {left: {in1: 17, in2: 27}} shapes.
 function flattenPins(obj, prefix = "") {
   const out = [];
@@ -216,6 +247,55 @@ function renderBoardWithDriver(claims) {
         ${terminals}
         ${wires.join("")}
         ${supplyNote}
+      </svg>
+    </div>
+  `;
+}
+
+// ESP32-CAM header SVG — landscape layout that matches the physical board's
+// shape (two horizontal pin rows along the long edges). Read-only: the
+// firmware hardcodes camera / SD pins, and only the exposed headers remain
+// as "user-assignable," so this is a map, not an editor. Status colors
+// (green / amber / grey) override the kind-based gold for GPIO pins so the
+// "free vs. SD-shared vs. reserved" story reads at a glance.
+const ESP_W = 520;
+const ESP_H = 260;
+const ESP_PIN_R = 9;
+const ESP_PIN_SPACING = 56;
+const ESP_FIRST_PIN_X = 50;
+const ESP_TOP_ROW_Y = 50;
+const ESP_BOT_ROW_Y = 210;
+
+function espPinFragment(pin, cx, cy, labelAbove) {
+  const statusClass = pin.status ? `esp-${pin.status}` : "";
+  const title = pin.note ? `${pin.label} — ${pin.note}` : pin.label;
+  const labelY = labelAbove ? cy - 22 : cy + 26;
+  return `
+    <text class="pin-label" x="${cx}" y="${labelY}" text-anchor="middle">${escapeHtml(pin.label)}</text>
+    <circle class="pin-dot kind-${pin.kind} ${statusClass}" cx="${cx}" cy="${cy}" r="${ESP_PIN_R}">
+      <title>${escapeHtml(title)}</title>
+    </circle>
+  `;
+}
+
+function renderEsp32Board() {
+  const topPins = ESP32_PINS_TOP.map((p, i) =>
+    espPinFragment(p, ESP_FIRST_PIN_X + i * ESP_PIN_SPACING, ESP_TOP_ROW_Y, true),
+  ).join("");
+  const botPins = ESP32_PINS_BOT.map((p, i) =>
+    espPinFragment(p, ESP_FIRST_PIN_X + i * ESP_PIN_SPACING, ESP_BOT_ROW_Y, false),
+  ).join("");
+  const pcbY = ESP_TOP_ROW_Y + 18;
+  const pcbH = ESP_BOT_ROW_Y - ESP_TOP_ROW_Y - 36;
+  return `
+    <div class="pinout-svg-wrap esp32">
+      <svg class="pinout-svg esp32" viewBox="0 0 ${ESP_W} ${ESP_H}" preserveAspectRatio="xMidYMid meet"
+           xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="ESP32-CAM header pins and GPIO availability">
+        <rect class="esp-pcb" x="20" y="${pcbY}" width="${ESP_W - 40}" height="${pcbH}" rx="6"/>
+        <text class="esp-chip-label" x="${ESP_W / 2}" y="${(ESP_TOP_ROW_Y + ESP_BOT_ROW_Y) / 2}" text-anchor="middle" dominant-baseline="middle">ESP32 · camera · µSD</text>
+        ${topPins}
+        ${botPins}
       </svg>
     </div>
   `;
@@ -585,20 +665,40 @@ export function openPinoutDialog(id) {
   $("pinout-modal").showModal();
 }
 
-// Read-only view of the Pi 40-pin header, no robot context. Useful as a
-// wiring reference when you haven't paired anything yet — colors by pin
-// kind (3V3 / 5V / GND / GPIO / I²C ID EEPROM) with no claims overlaid.
+// Read-only view, no robot context. Two boards under one toggle: the Pi
+// 40-pin header (the canonical "which GPIO is where" reference) and the
+// ESP32-CAM header (status map — free / SD-shared / reserved — since the
+// camera board's pins aren't user-reassignable). Toggle choice persists
+// across reopens within the session.
+let refBoard = "pi";
+
+function renderReference() {
+  const tab = (id, label) =>
+    `<button class="sm ${refBoard === id ? "" : "secondary"}" data-board="${id}">${label}</button>`;
+  const toggle = `<div class="pinout-board-toggle">${tab("pi", "Raspberry Pi")}${tab("esp32", "ESP32-CAM")}</div>`;
+  const body = refBoard === "pi" ? renderBoard({}) : renderEsp32Board();
+  const caption = refBoard === "pi"
+    ? `Physical layout of the Raspberry Pi 40-pin header. Power rails in red / orange, grounds in gray, I²C ID EEPROM in purple, GPIO in gold. Pair a robot to edit its pin assignments — the same view then highlights claimed pins.`
+    : `Only these edge pins are exposed on the ESP32-CAM — everything else the chip has is permanently wired to the camera or PSRAM and can't be reused. <span class="esp-key free">Green</span> = free to wire. <span class="esp-key sd-shared">Amber</span> = shared with the µSD slot (OK if SD is unused). <span class="esp-key reserved">Grey</span> = reserved (boot strap, UART programming, or camera XCLK) — leave alone. Hover any pin for details.`;
+  $("pinout-body").innerHTML = `
+    ${toggle}
+    ${body}
+    <div class="meta" style="margin-top: 12px;">${caption}</div>
+  `;
+  $("pinout-body").querySelectorAll("[data-board]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      refBoard = btn.dataset.board;
+      renderReference();
+    });
+  });
+}
+
 export function openPinoutReference() {
   initOnce();
   currentId = null;
   editMode = false;
   editConfig = null;
   $("pinout-title").textContent = "GPIO reference";
-  $("pinout-body").innerHTML = `
-    ${renderBoard({})}
-    <div class="meta" style="margin-top: 12px;">
-      Physical layout of the Raspberry Pi 40-pin header. Power rails in red / orange, grounds in gray, I²C ID EEPROM in purple, GPIO in gold. Pair a robot to edit its pin assignments — the same view then highlights claimed pins.
-    </div>
-  `;
+  renderReference();
   $("pinout-modal").showModal();
 }

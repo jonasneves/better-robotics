@@ -1245,6 +1245,45 @@ details.tray.has-alert > summary::after {
   fill: #60a5fa;
   dominant-baseline: middle;
 }
+/* ESP32-CAM reference view. Board is physically black (not Pi green) so the
+   wrap switches background; status colors (free/sd-shared/reserved) override
+   the default kind-gpio gold for pins that are not power/ground, so the
+   availability story reads at a glance without a legend on the SVG itself. */
+.pinout-svg-wrap.esp32 { background: #0a0a0a; }
+.pinout-svg.esp32 { max-width: 520px; }
+.pinout-svg.esp32 .esp-pcb {
+  fill: #1a1a1a;
+  stroke: #2a2a2a;
+  stroke-width: 1;
+}
+.pinout-svg.esp32 .esp-chip-label {
+  font: 500 11px ui-monospace, "SF Mono", Menlo, monospace;
+  fill: #6b7280;
+  letter-spacing: 0.04em;
+}
+.pinout-svg.esp32 .pin-dot.esp-free     { fill: #22c55e; stroke: #14532d; }
+.pinout-svg.esp32 .pin-dot.esp-sd-shared { fill: #eab308; stroke: #713f12; }
+.pinout-svg.esp32 .pin-dot.esp-reserved  { fill: #6b7280; stroke: #1f2937; }
+/* Board picker tabs above the SVG. Pi | ESP32-CAM; state is the "secondary"
+   variant on inactive, flat primary on active. */
+.pinout-board-toggle {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+/* Inline swatches in the ESP32 caption prose so users can match a word to
+   the color they see in the SVG without a separate legend block. */
+.esp-key {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  color: #0a0a0a;
+}
+.esp-key.free      { background: #22c55e; }
+.esp-key.sd-shared { background: #eab308; }
+.esp-key.reserved  { background: #6b7280; color: #e5e5e5; }
 
 /* Recovery console — widened to fit 80 cols at 13px, flex-column so the
    term container has a measurable size for FitAddon to read. */
@@ -1387,8 +1426,16 @@ dialog[open]::backdrop { opacity: 1; }
    Mascot stays visible; panel appears above with a tail pointing down. */
 .assistant-bubble {
   position: fixed;
+  /* popover="manual" puts the bubble in the browser's top layer so it
+     floats above any <dialog>.showModal() (pinout, recovery, etc.). The
+     top layer ignores z-index; these inset overrides counter the default
+     [popover] { inset: 0; margin: auto; } user-agent rule so the bubble
+     sticks to the bottom-right corner rather than centering in the viewport. */
+  left: auto;
+  top: auto;
   right: 20px;
   bottom: 20px;
+  margin: 0;
   width: 44px;
   height: 44px;
   min-height: 44px;
@@ -1405,6 +1452,7 @@ dialog[open]::backdrop { opacity: 1; }
   cursor: pointer;
   z-index: 20;
   transition: transform 0.15s ease-out;
+  overflow: visible;  /* user-agent [popover] sets overflow:auto which clips the icon */
 }
 .assistant-bubble:hover { transform: translateY(-3px); }
 .assistant-bubble:active { transform: translateY(0); }
@@ -1552,6 +1600,12 @@ dialog[open]::backdrop { opacity: 1; }
   .assistant-panel.fading { transition: none; }
 }
 
+/* `<dialog popover="manual">` has two display-gating rules fighting: the
+   user-agent `dialog:not([open]) { display:none }` and the popover-shown
+   state. Since we drive visibility through showPopover()/hidePopover() (not
+   the dialog [open] attribute), the user-agent dialog rule would keep it
+   hidden. Force block when popover is open to settle the tie. */
+.assistant-panel:popover-open { display: block; }
 .assistant-panel {
   position: fixed;
   right: 20px;

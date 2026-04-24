@@ -105,7 +105,7 @@
 <div id="avatar-menu" class="menu" popover="manual">
   <div class="menu-header" id="avatar-menu-name">Not set</div>
   <button class="menu-item" id="menu-settings">Settings</button>
-  <button class="menu-item" id="menu-gpio-ref" title="View the Raspberry Pi 40-pin header layout (no robot required)">GPIO reference</button>
+  <button class="menu-item" id="menu-gpio-ref" title="View the Raspberry Pi 40-pin header or ESP32-CAM pin map (no robot required)">GPIO reference</button>
   <button class="menu-item" id="menu-recovery" title="USB-C serial recovery console — works when BLE is dead">Recovery console</button>
   <button class="menu-item" id="menu-esp-serial" title="ESP32 serial monitor — watch boot logs over USB">ESP32 serial</button>
   <button class="menu-item" id="menu-scripts" title="Write JS that drives connected robots — runs in this tab, no upload">Scripts</button>
@@ -428,7 +428,7 @@
   </div>
 </dialog>
 
-<button id="assistant-bubble" class="assistant-bubble" aria-label="Open Pip">
+<button id="assistant-bubble" class="assistant-bubble" popover="manual" aria-label="Open Pip">
   <!-- Inlined (not `<use>`) so CSS keyframes can target the .robot-eyes/.robot-antenna
        classes — external stylesheets can't cross the shadow boundary of a `<use>` ref. -->
   <svg class="icon-svg robot-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -450,7 +450,7 @@
     </g>
   </svg>
 </button>
-<dialog id="assistant-panel" class="assistant-panel">
+<dialog id="assistant-panel" class="assistant-panel" popover="manual">
   <!-- No "Pip" label — the bubble tail identifies whose voice this is, same
        way iMessage/WhatsApp don't label each bubble with a sender name. The
        user's last question takes the place the title used to occupy,
