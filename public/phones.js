@@ -13,7 +13,7 @@ import { log } from "./log.js";
 import { hostPairingRoom } from "./pairing.js";
 import { sendPairById, pickMotorsTarget } from "./capabilities/runtime/signed-pair.js";
 import { state } from "./state.js";
-import { getLaptopStream, onLaptopChange } from "./helpers.js";
+import { getLaptopStream, onLaptopChange, setPhoneStream } from "./helpers.js";
 import { discover } from "./discover.js";
 import { getMyPubkeyB64 } from "./peer-key.js";
 import { makeTrustStore } from "./trust.js";
@@ -324,8 +324,21 @@ function _registerPairedPhone(id, peer, defaultLabel) {
       p.resolve({ answer: null, timed_out: true });
     }
     _phones.delete(id);
+    setPhoneStream(id, null);  // clear any helper-list entry for this phone's camera
     log("phone disconnected", "phone");
     renderPhones();
+  });
+  // Phone camera comes in through peer.onTrack — user taps "Share camera"
+  // on phone.html, pairing.js renegotiates, track lands here. Stream
+  // flows to helpers.js and renders as a helper card with inline video.
+  peer.onTrack((e) => {
+    const stream = e.streams?.[0] || new MediaStream([e.track]);
+    setPhoneStream(id, stream);
+    e.track.addEventListener("ended", () => {
+      if (stream.getTracks().every(t => t.readyState === "ended")) {
+        setPhoneStream(id, null);
+      }
+    });
   });
   sendTargetInfo(peer);
   // Push the laptop's current camera stream if there is one so the

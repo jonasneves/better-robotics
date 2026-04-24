@@ -1896,6 +1896,43 @@ body.phone {
   object-fit: cover;
 }
 .phone-cam-label { padding-left: 4px; }
+
+/* Phone-camera-as-helper toggle (outgoing: phone → desktop). Sentence case
+   per a11y.md; 44pt tap target; focus-visible preserved. Preview is the
+   user's own camera feed so they can see what's being shared. */
+.phone-share {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.phone-share-btn {
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-default);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+.phone-share-btn.on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.phone-share-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.phone-share-preview {
+  width: 100%;
+  border-radius: 12px;
+  background: #000;
+  display: block;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
 /* Reconnect surface — visible only when not paired or after a drop. Hosts
    the QR scanner so the user can re-pair without going back to the desktop. */
 .phone-reconnect {

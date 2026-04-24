@@ -255,14 +255,77 @@ function wireJoypad() {
 }
 
 // Phone backgrounded (tab switch, screen lock, app switcher): emit a stop so
-// the robot doesn't keep driving while the user can't see it.
+// the robot doesn't keep driving while the user can't see it, and kill any
+// outgoing camera share (battery + privacy — don't keep streaming video
+// the user can't see).
 function wireBackgroundStop() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       _joypad?.reset();
       _peer?.send({ type: "drive", l: 0, r: 0 });
+      _stopSharing();
     }
   });
+}
+
+// ── Phone-camera-as-helper ────────────────────────────────────────
+//
+// Toggle the phone's back camera into the paired WebRTC connection as
+// an outgoing media stream. Desktop picks it up via peer.onTrack and
+// registers it in its helpers list (helpers.js). Pairing layer handles
+// renegotiation on addTrack — `negotiationneeded` fires, Peer
+// re-offers, desktop answers, track lands on the other side.
+let _shareStream = null;
+let _shareSenders = [];
+
+async function toggleShareCamera() {
+  if (_shareStream) { _stopSharing(); return; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false,
+    });
+  } catch (err) {
+    setMessage(`Camera unavailable: ${err.message || err}`);
+    return;
+  }
+  _shareStream = stream;
+  for (const t of stream.getVideoTracks()) {
+    const sender = _peer?.addTrack?.(t, stream);
+    if (sender) _shareSenders.push(sender);
+    t.addEventListener("ended", () => _stopSharing());
+  }
+  const preview = $("phone-share-preview");
+  if (preview) {
+    preview.srcObject = stream;
+    preview.hidden = false;
+    preview.play?.().catch(() => {});
+  }
+  const btn = $("phone-share-btn");
+  if (btn) { btn.textContent = "Stop sharing"; btn.classList.add("on"); }
+}
+
+function _stopSharing() {
+  if (!_shareStream) return;
+  for (const sender of _shareSenders) {
+    try { _peer?.removeTrack?.(sender); } catch {}
+  }
+  _shareSenders = [];
+  for (const t of _shareStream.getTracks()) { try { t.stop(); } catch {} }
+  _shareStream = null;
+  const preview = $("phone-share-preview");
+  if (preview) { preview.srcObject = null; preview.hidden = true; }
+  const btn = $("phone-share-btn");
+  if (btn) { btn.textContent = "Share camera"; btn.classList.remove("on"); }
+}
+
+function wireShareCamera() {
+  const section = $("phone-share");
+  const btn = $("phone-share-btn");
+  if (!section || !btn) return;
+  section.hidden = false;
+  btn.addEventListener("click", toggleShareCamera);
 }
 
 // Reconnect / QR-scan surface. Shown when there's no pair code, or after
@@ -571,6 +634,8 @@ async function init() {
       setMessage("Connection lost.");
       $("phone-input").disabled = true;
       $("phone-cam-section").hidden = true;
+      _stopSharing();
+      $("phone-share").hidden = true;
       showReconnect("Lost the desktop. Scan a fresh QR to reconnect.");
       startNearbyDiscovery();
     });
@@ -580,6 +645,7 @@ async function init() {
     wireJoypad();
     wireStopButton();
     wireBackgroundStop();
+    wireShareCamera();
   } catch (err) {
     setStatus("error", "Failed");
     setMessage(`Couldn't pair: ${err.message || err}`);

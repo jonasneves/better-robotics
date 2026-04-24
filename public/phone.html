@@ -37,6 +37,14 @@
     <video class="phone-cam" id="phone-cam" autoplay playsinline muted></video>
     <div class="hint phone-cam-label" id="phone-cam-label">Camera</div>
   </section>
+  <!-- Phone-camera-as-helper: user taps to stream their back camera to the
+       paired desktop. Desktop picks it up via peer.onTrack and surfaces it
+       in its helpers list the same way the laptop webcam is — Pip can
+       observe through it, snapshot it, feed VLM. Hidden until paired. -->
+  <section class="phone-share" id="phone-share" hidden>
+    <button type="button" id="phone-share-btn" class="phone-share-btn">Share camera</button>
+    <video id="phone-share-preview" class="phone-share-preview" playsinline muted hidden></video>
+  </section>
   <form id="phone-form" class="phone-form">
     <input id="phone-input" class="phone-input" type="text" autocomplete="off"
            placeholder="Ask Pip…" maxlength="4000" aria-label="Ask Pip" disabled>

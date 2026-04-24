@@ -20,7 +20,12 @@ const _laptop = {
   startedAt: null,
 };
 
-let _videoEls = new Map();  // helperId → <video> element (live laptop cam)
+// Phone cameras the user has toggled on from phone.html. phones.js pushes
+// into this via setPhoneStream when peer.onTrack fires. keyed by phoneId
+// (the pairing roomId) → { stream, trackSettings, startedAt }.
+const _phoneStreams = new Map();
+
+let _videoEls = new Map();  // helperId → <video> element (live video)
 
 // Subscribers fired whenever the laptop camera transitions (idle/starting/
 // live/error). phones.js uses this to push the live stream to paired phones.
@@ -46,9 +51,14 @@ export function initHelpers() {
 export function listHelpers() {
   const out = [];
   for (const p of listPhones()) {
+    const ps = _phoneStreams.get(p.id);
     out.push({
       id: `phone:${p.id}`, kind: "phone", label: p.label || "Phone",
       status: p.status, connectedAt: p.connectedAt,
+      live: !!ps,
+      resolution: ps?.trackSettings
+        ? { width: ps.trackSettings.width, height: ps.trackSettings.height }
+        : null,
     });
   }
   out.push({
@@ -61,10 +71,36 @@ export function listHelpers() {
   return out;
 }
 
+// Wire in from phones.js: peer.onTrack → setPhoneStream(phoneId, stream).
+// Null stream clears the entry (phone stopped sharing or disconnected).
+export function setPhoneStream(phoneId, stream) {
+  if (stream) {
+    const track = stream.getVideoTracks()[0];
+    _phoneStreams.set(phoneId, {
+      stream,
+      startedAt: Date.now(),
+      trackSettings: track ? track.getSettings() : null,
+    });
+  } else {
+    _phoneStreams.delete(phoneId);
+    _videoEls.delete(`phone:${phoneId}`);
+  }
+  render();
+}
+
+export function getPhoneStream(phoneId) {
+  return _phoneStreams.get(phoneId)?.stream || null;
+}
+
 export async function startHelperCamera(helperId) {
   if (helperId === LAPTOP_ID) return await startLaptopCam();
   if (helperId.startsWith("phone:")) {
-    return { error: "phones don't expose a video stream to the desktop yet — chat + joypad only" };
+    // MVP: desktop can't remotely flip the phone's camera on. User has to
+    // tap "Share camera" on phone.html. Surface that here so Pip's tool
+    // call returns a guidance message rather than a hard error.
+    const phoneId = helperId.slice("phone:".length);
+    if (_phoneStreams.has(phoneId)) return { ok: true, already: true };
+    return { error: "tap Share camera on the phone to start" };
   }
   return { error: `unknown helper: ${helperId}` };
 }
@@ -72,7 +108,9 @@ export async function startHelperCamera(helperId) {
 export async function stopHelperCamera(helperId) {
   if (helperId === LAPTOP_ID) { stopLaptopCam(); return { ok: true }; }
   if (helperId.startsWith("phone:")) {
-    return { error: "phones don't expose a video stream to the desktop yet" };
+    // Same constraint as start: phone owns its camera. Stop happens when
+    // the user taps the button on phone.html or when the track ends.
+    return { error: "tap Stop sharing on the phone to end the stream" };
   }
   return { error: `unknown helper: ${helperId}` };
 }
@@ -80,7 +118,8 @@ export async function stopHelperCamera(helperId) {
 export function takeHelperSnapshot(helperId) {
   if (helperId === LAPTOP_ID) return captureLaptopFrame();
   if (helperId.startsWith("phone:")) {
-    return { error: "phone snapshot unavailable — paired phones don't expose a video track to the desktop" };
+    const phoneId = helperId.slice("phone:".length);
+    return captureFromVideoEl(helperId, _phoneStreams.has(phoneId));
   }
   return { error: `unknown helper: ${helperId}` };
 }
@@ -125,12 +164,19 @@ function stopLaptopCam() {
 }
 
 function captureLaptopFrame(maxDim = 640, quality = 0.8) {
-  const v = _videoEls.get(LAPTOP_ID);
-  if (!v || _laptop.status !== "live") {
-    return { error: "laptop camera isn't live — call start_helper_camera first" };
+  return captureFromVideoEl(LAPTOP_ID, _laptop.status === "live", maxDim, quality);
+}
+
+// Shared between laptop + phone helpers. The videoEl is looked up from
+// _videoEls (populated in wire() after render); isLive guards against
+// stale video elements left over from a just-ended stream.
+function captureFromVideoEl(helperId, isLive, maxDim = 640, quality = 0.8) {
+  const v = _videoEls.get(helperId);
+  if (!v || !isLive) {
+    return { error: `${helperId}: no live stream — start the camera first` };
   }
   let w = v.videoWidth, h = v.videoHeight;
-  if (!w || !h) return { error: "laptop camera frame not ready yet" };
+  if (!w || !h) return { error: `${helperId}: frame not ready yet` };
   if (Math.max(w, h) > maxDim) {
     const s = maxDim / Math.max(w, h);
     w = Math.round(w * s); h = Math.round(h * s);
@@ -181,8 +227,17 @@ function renderPhoneCard(p) {
       : p.status === "error"
         ? "Offline"
         : escapeHtml(p.status);
+  const ps = _phoneStreams.get(p.id);
+  const live = !!ps;
+  const helperId = `phone:${p.id}`;
+  const meta = live
+    ? `Sharing camera · ${ps.trackSettings?.width || "?"}×${ps.trackSettings?.height || "?"}`
+    : escapeHtml(`id ${p.id.slice(0, 8)}…`);
+  const body = live
+    ? `<video class="helper-video" data-helper-video="${escapeHtml(helperId)}" autoplay playsinline muted></video>`
+    : "";
   return `
-    <section class="card robot helper ${cls}" data-helper-id="${escapeHtml(`phone:${p.id}`)}">
+    <section class="card robot helper ${cls}" data-helper-id="${escapeHtml(helperId)}">
       <div class="row">
         <div class="robot-identity">
           <div class="label-btn">
@@ -193,11 +248,12 @@ function renderPhoneCard(p) {
         </div>
       </div>
       <div class="robot-secondary">
-        <div class="robot-meta">${escapeHtml(`id ${p.id.slice(0, 8)}…`)}</div>
+        <div class="robot-meta">${meta}</div>
         <div class="robot-cta">
           <button class="secondary sm" data-action="phone-notice" data-phone-id="${escapeHtml(p.id)}">Send notice</button>
         </div>
       </div>
+      ${body ? `<div class="robot-body">${body}</div>` : ""}
     </section>
   `;
 }
@@ -259,13 +315,20 @@ function wire() {
       sendToPhone(phoneId, text.trim());
     });
   });
-  // Mount the live MediaStream into the freshly-rendered <video> element.
-  // Has to happen after innerHTML rebuild — assigning srcObject before the
-  // element is in the DOM is fine, but we re-render on every state change so
-  // we re-attach unconditionally to be safe.
-  const v = list.querySelector(`[data-helper-video="${LAPTOP_ID}"]`);
-  if (v && _laptop.stream) {
-    v.srcObject = _laptop.stream;
-    _videoEls.set(LAPTOP_ID, v);
+  // Mount the live MediaStream into the freshly-rendered <video> elements.
+  // Has to happen after innerHTML rebuild — srcObject before DOM attach is
+  // OK but we re-render on every state change so we re-attach unconditionally.
+  const lv = list.querySelector(`[data-helper-video="${LAPTOP_ID}"]`);
+  if (lv && _laptop.stream) {
+    lv.srcObject = _laptop.stream;
+    _videoEls.set(LAPTOP_ID, lv);
+  }
+  for (const [phoneId, entry] of _phoneStreams) {
+    const helperId = `phone:${phoneId}`;
+    const pv = list.querySelector(`[data-helper-video="${CSS.escape(helperId)}"]`);
+    if (pv && entry.stream) {
+      pv.srcObject = entry.stream;
+      _videoEls.set(helperId, pv);
+    }
   }
 }
