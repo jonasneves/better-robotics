@@ -194,6 +194,14 @@ export async function startWatching(entry, opts = {}) {
   // out of bounds" mid-inference. Cold-start hit on first Pip detection
   // call is the acceptable trade vs. crashing the VLM loop.
 
+  // ORT-web shares backend state across sessions — if the grounding
+  // detector wedges the runtime (e.g. dimension mismatch on a fixed-shape
+  // graph), every VLM tick afterwards throws the same OrtRun error.
+  // Without a backoff the poll loop spams the console every POLL_MS and
+  // wastes GPU. After MAX_CONSECUTIVE_ERRORS, stop the loop cleanly —
+  // user can re-toggle Live scene to get a fresh runtime.
+  const MAX_CONSECUTIVE_ERRORS = 3;
+  let consecutiveErrors = 0;
   const tick = async () => {
     if (loop.stopped) return;
     if (loop.running) { loop.timer = setTimeout(tick, POLL_MS); return; }
@@ -206,8 +214,16 @@ export async function startWatching(entry, opts = {}) {
         entry.vlmScene = { text, at: Date.now() };
         loop.onScene?.(text);
       }
+      consecutiveErrors = 0;
     } catch (err) {
+      consecutiveErrors += 1;
       loop.onError?.(err);
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        loop.stopped = true;
+        _loops.delete(entry.id);
+        loop.onError?.(new Error(`Live scene stopped after ${consecutiveErrors} consecutive errors — toggle Live scene off and on to reset`));
+        return;
+      }
     } finally {
       loop.running = false;
     }

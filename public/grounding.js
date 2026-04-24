@@ -106,9 +106,14 @@ export async function detectOnce(entry, queries, { threshold = DEFAULT_THRESHOLD
   const imageUrl = canvas.toDataURL("image/jpeg", 0.85);
   const normalized = queries.map(normalizeQuery).filter(Boolean);
   if (normalized.length === 0) return [];
+  // Grounding DINO's ONNX export pins input_ids to batch=1 — passing an
+  // array of N queries throws "invalid dimensions Got: N Expected: 1".
+  // The canonical input is one period-separated prompt ("a cat. a dog."),
+  // so concatenate. normalizeQuery already appended the periods.
+  const prompt = normalized.join(" ");
   let raw;
   try {
-    raw = await pipe(imageUrl, normalized, { threshold, topk });
+    raw = await pipe(imageUrl, prompt, { threshold, topk });
   } catch (err) {
     // Runtime inference failure (mid-session). Mark sticky so we stop
     // trying — otherwise Pip loops through failed calls and burns tokens.
