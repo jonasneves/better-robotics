@@ -6,6 +6,10 @@
   <meta name="theme-color" content="#1a1d20">
   <title>Pip · BetterRobotics</title>
   <link rel="stylesheet" href="styles.css">
+  <!-- jsQR for the QR-scan-to-reconnect flow. BarcodeDetector isn't on iOS
+       Safari yet (2025), so we use the same pure-JS decoder catwatcher uses
+       so the same code path covers iOS + Android + desktop browsers. -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script type="module" src="phone.js"></script>
 </head>
 <body class="phone">
@@ -44,9 +48,7 @@
       <div class="phone-scanner-frame"></div>
       <button id="phone-scanner-cancel" class="secondary sm">Cancel</button>
     </div>
-    <div class="hint phone-scanner-fallback" id="phone-scanner-fallback" hidden>
-      Live QR scanning isn't supported in this browser. Open your phone's Camera app, point it at the QR on the desktop, and tap the link it offers.
-    </div>
+    <div class="hint phone-scanner-fallback" id="phone-scanner-fallback" hidden></div>
   </section>
   <section class="phone-scene" id="phone-scene" hidden>
     <div class="phone-scene-label" id="phone-scene-source">Camera</div>

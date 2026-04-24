@@ -174,11 +174,11 @@ function wireBackgroundStop() {
 
 // Reconnect / QR-scan surface. Shown when there's no pair code, or after
 // a connection failure. Lets the user re-pair without bouncing back to the
-// desktop. BarcodeDetector path covers Chrome/Edge; iOS Safari falls back
-// to "use your Camera app" since BarcodeDetector isn't available there and
-// vendoring jsQR for that case isn't worth the bytes today.
+// desktop. Uses jsQR (loaded from CDN in phone.html) — BarcodeDetector
+// isn't on iOS Safari yet, and jsQR works everywhere.
 let _scanStream = null;
 let _scanRaf = 0;
+let _scanCanvas = null;
 
 function showReconnect(message) {
   $("phone-reconnect").hidden = false;
@@ -191,52 +191,72 @@ function hideReconnect() {
   $("phone-scanner").hidden = true;
 }
 
+function showScanError(text) {
+  const el = $("phone-scanner-fallback");
+  el.textContent = text;
+  el.hidden = false;
+}
+function clearScanError() {
+  $("phone-scanner-fallback").hidden = true;
+}
+
 async function startQrScan() {
-  const supported = "BarcodeDetector" in window;
-  if (!supported) {
-    $("phone-scanner-fallback").hidden = false;
+  if (typeof window.jsQR !== "function") {
+    showScanError("QR decoder didn't load. Reload the page or check your network.");
     return;
   }
+  clearScanError();
   try {
     _scanStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "environment" } },
       audio: false,
     });
   } catch (err) {
-    $("phone-scanner-fallback").hidden = false;
-    $("phone-scanner-fallback").textContent = `Couldn't open camera: ${err.message || err}. Use your phone's Camera app to scan the QR.`;
+    showScanError(`Couldn't open camera: ${err.message || err}.`);
     return;
   }
   $("phone-scanner").hidden = false;
   $("phone-scan-btn").hidden = true;
   const v = $("phone-scanner-video");
   v.srcObject = _scanStream;
+  // Required on iOS Safari: video must play before videoWidth is non-zero.
+  // Inline + muted attrs in the HTML cover the autoplay policy.
   await v.play().catch(() => {});
 
-  const detector = new BarcodeDetector({ formats: ["qr_code"] });
-  const tick = async () => {
+  _scanCanvas = _scanCanvas || document.createElement("canvas");
+  const ctx = _scanCanvas.getContext("2d", { willReadFrequently: true });
+
+  const tick = () => {
     if (!_scanStream) return;
-    try {
-      const codes = await detector.detect(v);
-      const url = codes.find(c => /^https?:/i.test(c.rawValue || ""))?.rawValue;
-      if (url) {
+    if (v.readyState >= v.HAVE_ENOUGH_DATA && v.videoWidth > 0) {
+      // Downscale to ~480 on the long edge — jsQR is O(pixels), full HD
+      // tanks fps on older phones, and 480 is plenty for a QR.
+      const scale = Math.min(1, 480 / Math.max(v.videoWidth, v.videoHeight));
+      const w = Math.round(v.videoWidth * scale);
+      const h = Math.round(v.videoHeight * scale);
+      if (_scanCanvas.width !== w) _scanCanvas.width = w;
+      if (_scanCanvas.height !== h) _scanCanvas.height = h;
+      ctx.drawImage(v, 0, 0, w, h);
+      const img = ctx.getImageData(0, 0, w, h);
+      const result = window.jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
+      if (result?.data) {
         stopQrScan();
-        // Same-origin pair URL → navigate (location.replace avoids a back-button
-        // trap on the broken state). Cross-origin → user picked the wrong QR;
-        // surface a hint rather than navigating away from this app.
+        // Same-origin pair URL → navigate (location.replace avoids a back-
+        // button trap on the broken state). Cross-origin → user picked the
+        // wrong QR; surface a hint rather than navigating away from this app.
         try {
-          const target = new URL(url);
+          const target = new URL(result.data, location.href);
           if (target.origin === location.origin && target.hash.startsWith("#pair=")) {
-            location.replace(url);
+            location.replace(target.toString());
             return;
           }
-          $("phone-reconnect-message").textContent = `That QR points to ${target.host}, not this dashboard. Scan the QR shown on the desktop running BetterRobotics.`;
+          showScanError(`That QR points to ${target.host}, not this dashboard.`);
         } catch {
-          $("phone-reconnect-message").textContent = "That QR isn't a pair link.";
+          showScanError("That QR isn't a pair link.");
         }
         return;
       }
-    } catch { /* per-frame errors happen during pause / track ends — ignore */ }
+    }
     _scanRaf = requestAnimationFrame(tick);
   };
   tick();
