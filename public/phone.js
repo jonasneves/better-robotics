@@ -3,7 +3,9 @@ import { joinPairingRoom } from "./pairing.js";
 import { attachJoypad } from "./joypad.js";
 import { discover } from "./discover.js";
 import { getMyPubkeyB64 } from "./peer-key.js";
-import { trust as trustDevice } from "./trust.js";
+import { makeTrustStore } from "./trust.js";
+import { pairRequestClient } from "./pair-request.js";
+const _trust = makeTrustStore("better-robotics:trust:v1");
 
 let _peer = null;
 let _pending = false;
@@ -354,8 +356,6 @@ function wireReconnect() {
 
 let _lobby = null;
 let _myPubkey = null;
-let _pendingRequestNonce = null;
-let _pendingRequestTimeout = null;
 
 function deviceLabel() {
   const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
@@ -374,60 +374,33 @@ function _setNearbyStatus(text, kind) {
   status.className = "phone-nearby-status" + (kind ? " " + kind : "");
 }
 
-async function _requestPairWith(macAd) {
-  if (!_myPubkey || !macAd.data._pubkey) return;
-  const targetPubkey = macAd.data._pubkey;
-  const macLabel = macAd.data.label || "this computer";
-  const nonce = (crypto.randomUUID?.() || Math.random().toString(36).slice(2));
-  _pendingRequestNonce = nonce;
-
-  _setNearbyStatus(`Asking ${macLabel} to pair…`);
-  try {
-    await _lobby.publish(`better-robotics-pair-request:${nonce}`, {
-      app: "better-robotics-pair-request",
-      target: targetPubkey,
-      nonce,
-      label: deviceLabel(),
-    }, 30000);
-  } catch (err) {
-    _pendingRequestNonce = null;
-    _setNearbyStatus(`Couldn't reach the lobby: ${err.message || err}`, "alert");
-    return;
-  }
-
-  // 30s deadline — Mac side may have shown a prompt and the user
-  // walked away. The request ad will TTL-expire on its own.
-  if (_pendingRequestTimeout) clearTimeout(_pendingRequestTimeout);
-  _pendingRequestTimeout = setTimeout(() => {
-    if (_pendingRequestNonce !== nonce) return;
-    _pendingRequestNonce = null;
-    _setNearbyStatus(`No response from ${macLabel}. They may have missed the prompt — try again.`, "alert");
-    try { _lobby.remove(`better-robotics-pair-request:${nonce}`); } catch {}
-  }, 30000);
+let _pairClient = null;
+function _getPairClient() {
+  if (!_pairClient) _pairClient = pairRequestClient({ app: 'better-robotics-pair', sign: true, lobby: _lobby });
+  return _pairClient;
 }
 
-function _processIncomingResponses(ads) {
-  if (!_pendingRequestNonce || !_myPubkey) return;
-  const response = ads.find(a =>
-    a.data
-    && a.data.app === "better-robotics-pair-response"
-    && a.data.target === _myPubkey
-    && a.data.nonce === _pendingRequestNonce
-  );
-  if (!response) return;
-  const nonce = _pendingRequestNonce;
-  _pendingRequestNonce = null;
-  if (_pendingRequestTimeout) { clearTimeout(_pendingRequestTimeout); _pendingRequestTimeout = null; }
-  try { _lobby.remove(`better-robotics-pair-request:${nonce}`); } catch {}
-
-  if (response.data.accepted && response.data.roomId) {
-    if (response.data._pubkey) trustDevice(response.data._pubkey, "Computer");
-    _setNearbyStatus("Accepted — connecting…");
-    location.replace(location.pathname + "#pair=" + response.data.roomId);
-    location.reload();
-  } else {
-    _setNearbyStatus("Pair declined.", "alert");
+async function _requestPairWith(macAd) {
+  if (!macAd.data._pubkey) return;
+  const macLabel = macAd.data.label || 'this computer';
+  _setNearbyStatus(`Asking ${macLabel} to pair…`);
+  const result = await _getPairClient().request({
+    payload: { target: macAd.data._pubkey, label: deviceLabel() },
+  });
+  if (result.timedOut) {
+    _setNearbyStatus(`No response from ${macLabel}. They may have missed the prompt — try again.`, 'alert');
+    return;
   }
+  if (result.accepted && result.data && result.data.roomId) {
+    _setNearbyStatus('Accepted — connecting…');
+    // Trust the Mac's pubkey for future sessions; label is whatever
+    // was on the ad we tapped.
+    _trust.trust(macAd.data._pubkey, macLabel);
+    location.replace(location.pathname + '#pair=' + result.data.roomId);
+    location.reload();
+    return;
+  }
+  _setNearbyStatus('Pair declined.', 'alert');
 }
 
 async function startNearbyDiscovery() {
@@ -448,8 +421,6 @@ async function startNearbyDiscovery() {
   const list = $("phone-nearby-list");
   if (!wrap || !list) return;
   _lobby.onChange((ads) => {
-    _processIncomingResponses(ads);
-
     const macs = ads.filter(a => a.data && a.data.app === "better-robotics-mac" && a.data._pubkey);
     list.innerHTML = "";
     if (!macs.length) { wrap.hidden = true; return; }
@@ -486,7 +457,7 @@ async function init() {
     // Label is unknown until the data channel exchanges it. "Computer"
     // is a placeholder; the pair-keys handshake replaces it with what
     // the desktop calls itself ("Mac", "Windows", …).
-    trustDevice(remotePk, "Computer");
+    _trust.trust(remotePk, "Computer");
   }
   try {
     setStatus("connecting", "Connecting…");
@@ -511,7 +482,7 @@ async function init() {
       // one (and re-trust the pubkey if the QR didn't carry pk for some
       // reason, e.g. a legacy QR from before signed mode).
       if (msg && msg.type === "pair-keys" && msg.pubkey) {
-        trustDevice(msg.pubkey, msg.label || "Computer");
+        _trust.trust(msg.pubkey, msg.label || "Computer");
         return;
       }
       onPeerMessage(msg);

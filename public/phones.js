@@ -15,7 +15,9 @@ import { sendPairById, pickMotorsTarget } from "./capabilities/runtime/signed-pa
 import { getLaptopStream, onLaptopChange } from "./helpers.js";
 import { discover } from "./discover.js";
 import { getMyPubkeyB64 } from "./peer-key.js";
-import { trust as trustDevice, isAutoAccept, classify as classifyAd } from "./trust.js";
+import { makeTrustStore } from "./trust.js";
+import { pairRequestClient } from "./pair-request.js";
+const _trust = makeTrustStore("better-robotics:trust:v1");
 
 // Single shared lobby in signed mode: ads carry our device pubkey so the
 // peer side knows "this is the Mac I trusted before" without re-prompting.
@@ -34,7 +36,6 @@ import { trust as trustDevice, isAutoAccept, classify as classifyAd } from "./tr
 // not the primary.
 let _lobby = null;
 let _myPubkey = null;
-const _handledRequestNonces = new Set();
 function getLobby() { return _lobby || (_lobby = discover({ sign: true })); }
 function deviceLabel() {
   const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
@@ -133,10 +134,8 @@ export async function initPhones() {
     label: deviceLabel(),
   }, 60000);
 
-  getLobby().onChange((ads) => {
-    renderPhonePresence(ads);
-    _processIncomingRequests(ads);
-  });
+  getLobby().onChange(renderPhonePresence);
+  _initPairListener();
 
   // Laptop camera → phone(s) bridge: whenever the laptop transitions, sync
   // every paired phone's media tracks. Phones connected later pick up the
@@ -192,55 +191,31 @@ function renderPhonePresence(ads) {
 
 // ── Incoming pair-requests ────────────────────────────────────────
 //
-// Phone publishes { app: "better-robotics-pair-request", target: <our-pk>,
-// nonce: <random> }. We see it via the lobby subscribe, prompt the user
-// (or auto-accept if they ticked Trust last time), publish a response
-// with a fresh roomId, and accept the WebRTC peer in the background.
-//
-// Nonces are tracked so we don't double-handle a request that the lobby
-// re-broadcasts on every change.
-
-function _processIncomingRequests(ads) {
-  if (!_myPubkey) return;
-  const requests = (ads || []).filter(a =>
-    a.data
-    && a.data.app === "better-robotics-pair-request"
-    && a.data.target === _myPubkey
-    && a.data.nonce
-    && !_handledRequestNonces.has(a.data.nonce)
-  );
-  for (const req of requests) {
-    _handledRequestNonces.add(req.data.nonce);
-    _handlePairRequest(req).catch(err => log("pair-request error: " + (err.message || err), "phone"));
-  }
-}
-
-async function _handlePairRequest(req) {
-  const senderPubkey = req.data._pubkey;
-  const senderLabel  = req.data.label || "Phone";
-  const nonce        = req.data.nonce;
-  if (!senderPubkey) return;
-
-  // Trusted = "Trust always" was ticked previously. Silently accept so
-  // the user doesn't see a prompt every time they open phone.html.
-  // Deliberate parallel to AirDrop's "Everyone" / "Contacts Only" model
-  // where contacts pair with no prompt.
-  if (isAutoAccept(senderPubkey)) {
-    log(`auto-accepting paired phone "${senderLabel}"`, "phone");
-    await _respondAndHostPair(true, senderPubkey, senderLabel, nonce, false);
-    return;
-  }
-
-  // Otherwise: prompt the user. The promise resolves when they tap a
-  // button (or the prompt times out).
-  const decision = await _showRequestPrompt(senderLabel, senderPubkey);
-  if (!decision) {
-    // Timed out / closed without choosing. Treat as deny but don't
-    // store a "deny memory" — the phone can request again.
-    await _publishResponse(false, senderPubkey, nonce, null);
-    return;
-  }
-  await _respondAndHostPair(decision.accepted, senderPubkey, senderLabel, nonce, decision.trust);
+// Protocol lives in signal/client/pair-request.js now — we supply
+// the match rule (ads targeted at our pubkey), the trust lookup,
+// and the UI (existing modal in this file). The library owns
+// nonce-dedup, subscribe filter, response publish, and timeout.
+let _pairClient = null;
+function _initPairListener() {
+  if (_pairClient) return;
+  _pairClient = pairRequestClient({ app: 'better-robotics-pair', sign: true, lobby: getLobby() });
+  _pairClient.onRequest(async (req) => {
+    const senderPubkey = req.senderPubkey;
+    const senderLabel  = req.payload.label || 'Phone';
+    if (!senderPubkey) return;
+    if (_trust.isAutoAccept(senderPubkey)) {
+      log(`auto-accepting paired phone "${senderLabel}"`, 'phone');
+      await _respondAndHostPair(true, senderPubkey, senderLabel, req, false);
+      return;
+    }
+    const decision = await _showRequestPrompt(senderLabel, senderPubkey);
+    if (!decision) { await req.deny(); return; }
+    await _respondAndHostPair(decision.accepted, senderPubkey, senderLabel, req, decision.trust);
+  }, {
+    // Pubkey-target match — attackers on the same wifi can publish to
+    // any address, but only ads addressed to our key fire the prompt.
+    match: (ad) => ad.data.target === _myPubkey,
+  });
 }
 
 // Modal prompt promise — single in-flight; if a second request comes
@@ -283,44 +258,22 @@ function _showRequestPrompt(label, pubkey) {
   });
 }
 
-async function _publishResponse(accepted, targetPubkey, nonce, roomId) {
-  // Response ad lives just long enough for the phone to see it, then
-  // expires. Keep TTL short so a stale "accepted" doesn't linger after
-  // the room is gone.
-  try {
-    await getLobby().publish(`better-robotics-pair-response:${nonce}`, {
-      app: "better-robotics-pair-response",
-      target: targetPubkey,
-      nonce,
-      accepted,
-      roomId: accepted ? roomId : null,
-    }, 30000);
-  } catch {}
-}
 
-async function _respondAndHostPair(accepted, senderPubkey, senderLabel, nonce, autoTrust) {
-  if (!accepted) {
-    await _publishResponse(false, senderPubkey, nonce, null);
-    return;
-  }
-  // Accept path: spin up a fresh pair room, publish accept+roomId, wait
-  // for the phone to join. _registerPairedPhone wires the data channel
-  // handlers identically to the QR flow.
+async function _respondAndHostPair(accepted, senderPubkey, senderLabel, req, autoTrust) {
+  if (!accepted) { await req.deny(); return; }
   let session;
   try {
     session = await hostPairingRoom({ onStatus: () => {} });
   } catch (err) {
     log("hostPairingRoom failed: " + (err.message || err), "phone");
-    await _publishResponse(false, senderPubkey, nonce, null);
+    await req.deny();
     return;
   }
-  await _publishResponse(true, senderPubkey, nonce, session.roomId);
-
+  await req.accept({ roomId: session.roomId });
   // Memorize trust BEFORE the WebRTC handshake — the user already
-  // consented in the prompt; if pairing fails, the trust still holds
-  // (next attempt won't re-prompt).
-  if (autoTrust) trustDevice(senderPubkey, senderLabel);
-
+  // consented; if pairing fails, the trust still holds (next attempt
+  // won't re-prompt).
+  if (autoTrust) _trust.trust(senderPubkey, senderLabel);
   try {
     const peer = await session.waitForPeer();
     _registerPairedPhone(session.roomId, peer, senderLabel);
@@ -341,7 +294,7 @@ function _registerPairedPhone(id, peer, defaultLabel) {
       // Phone returns its pubkey. We may already trust it (autoTrust
       // path), but this also catches the QR path where trust gets
       // bound here, and refreshes the label.
-      trustDevice(msg.pubkey, msg.label || "Phone");
+      _trust.trust(msg.pubkey, msg.label || "Phone");
       const phone = _phones.get(id);
       if (phone && msg.label) { phone.label = msg.label; renderPhones(); }
       return;
