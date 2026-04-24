@@ -6,7 +6,7 @@
     }
   </style>
   <rect class="bg" width="256" height="256" rx="56" ry="56"/>
-  <g transform="translate(32 32) scale(8)" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <g transform="translate(56 56) scale(6)" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M12 8V4H8"/>
     <rect x="4" y="8" width="16" height="12" rx="2"/>
     <path d="M2 14h2"/>
