@@ -387,10 +387,6 @@ async function _requestPairWith(macAd) {
   const result = await _getPairClient().request({
     payload: { target: macAd.data._pubkey, label: deviceLabel() },
   });
-  if (result.timedOut) {
-    _setNearbyStatus(`No response from ${macLabel}. They may have missed the prompt — try again.`, 'alert');
-    return;
-  }
   if (result.accepted && result.data && result.data.roomId) {
     _setNearbyStatus('Accepted — connecting…');
     // Trust the Mac's pubkey for future sessions; label is whatever
@@ -398,6 +394,17 @@ async function _requestPairWith(macAd) {
     _trust.trust(macAd.data._pubkey, macLabel);
     location.replace(location.pathname + '#pair=' + result.data.roomId);
     location.reload();
+    return;
+  }
+  // Distinguish the three failure paths so the user knows whether to
+  // try again (network), check on the other device (timeout), or stop
+  // trying (denied).
+  if (result.reason === 'error') {
+    _setNearbyStatus(`Couldn't reach the lobby. Check your wifi and try again.`, 'alert');
+    return;
+  }
+  if (result.reason === 'timeout') {
+    _setNearbyStatus(`No response from ${macLabel}. They may have missed the prompt — try again.`, 'alert');
     return;
   }
   _setNearbyStatus('Pair declined.', 'alert');

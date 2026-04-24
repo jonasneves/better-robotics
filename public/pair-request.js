@@ -34,8 +34,10 @@
 //     timeoutMs: 30000
 //   });
 //   // result: { accepted: true,  data: { ... response payload ... } }
-//   //       | { accepted: false, data: {} }
-//   //       | { accepted: false, timedOut: true }
+//   //       | { accepted: false, reason: 'denied',  data: { ... } }
+//   //       | { accepted: false, reason: 'timeout' }
+//   //       | { accepted: false, reason: 'error',   error: <Error> }
+//   // (back-compat: `timedOut: true` aliases reason === 'timeout' for one revision)
 //
 // Responder usage:
 //   const pr = pairRequestClient({ app: 'pip-pair' });
@@ -107,7 +109,8 @@ export function pairRequestClient({ app, sign = true, lobby = null } = {}) {
         clearTimeout(pending.timer);
         try { _getLobby().remove(REQUEST_APP + ':' + d.nonce); } catch {}
         const { accepted, target: _t, nonce: _n, app: _a, ...rest } = d;
-        pending.resolve({ accepted: !!accepted, data: rest });
+        if (accepted) pending.resolve({ accepted: true, data: rest });
+        else pending.resolve({ accepted: false, reason: 'denied', data: rest });
       }
     });
   }
@@ -125,14 +128,24 @@ export function pairRequestClient({ app, sign = true, lobby = null } = {}) {
         _handledInboundNonces.add(d.nonce);
         const senderPubkey = d._pubkey || null;  // from signed mode
         const { app: _a, nonce: _n, _pubkey: _p, _sig: _s, ...payload } = d;
-        handler({
+        const req = {
           senderPubkey,
           payload,
           accept: (responsePayload = {}) =>
             _publishResponse(true, senderPubkey, d.nonce, responsePayload),
           deny: (responsePayload = {}) =>
             _publishResponse(false, senderPubkey, d.nonce, responsePayload),
-        });
+        };
+        // Wrap the handler so a thrown/rejected error doesn't silently
+        // break the listener for subsequent requests, and so the
+        // initiator gets an explicit deny instead of hanging.
+        Promise.resolve()
+          .then(() => handler(req))
+          .catch((err) => {
+            try { _publishResponse(false, senderPubkey, d.nonce, { reason: 'error' }); } catch {}
+            // Re-raise so the browser's unhandledrejection telemetry sees it.
+            Promise.reject(err);
+          });
       }
     });
   }
@@ -163,7 +176,7 @@ export function pairRequestClient({ app, sign = true, lobby = null } = {}) {
         if (!_pendingInitiations.has(nonce)) return;
         _pendingInitiations.delete(nonce);
         try { _getLobby().remove(REQUEST_APP + ':' + nonce); } catch {}
-        resolve({ accepted: false, timedOut: true, data: {} });
+        resolve({ accepted: false, reason: 'timeout', timedOut: true });
       }, timeoutMs);
       _pendingInitiations.set(nonce, { resolve, timer });
     });
@@ -179,7 +192,7 @@ export function pairRequestClient({ app, sign = true, lobby = null } = {}) {
       if (pending) {
         _pendingInitiations.delete(nonce);
         clearTimeout(pending.timer);
-        pending.resolve({ accepted: false, timedOut: false, error: err, data: {} });
+        pending.resolve({ accepted: false, reason: 'error', error: err });
       }
     }
     return p;
