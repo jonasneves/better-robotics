@@ -1,4 +1,5 @@
 import { state } from "./state.js";
+import { settings } from "./settings.js";
 import { waitOpsResponse } from "./ops-response.js";
 import { getLog, getConfig, restartService } from "./capabilities/runtime/command.js";
 import { listPhones, sendToPhone, askHuman } from "./phones.js";
@@ -116,6 +117,18 @@ const ALL_TOOLS = [
       required: ["id", "question"],
     },
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  {
+    name: "view_robot_frame",
+    description: "Attaches the robot's current camera frame to your next reasoning step so you see the pixels directly — no VLM intermediary. USE SPARINGLY: each call sends an image to the backend (cost, network, images leave the device — the user opted in via Settings → Pip vision). Only in your tool list when the user enabled it AND the backend supports images. WHEN TO USE: (a) VLM text from get_robot_scene / ask_robot_scene is ambiguous or contradicts itself, (b) a decision depends on visual nuance the VLM can't convey (color shade, object identity among similar shapes, readable text in the frame), (c) the detector is unavailable and you'd otherwise guess. WHEN NOT TO USE: ambient situational awareness (VLM is cheaper and already runs), precise localization (prefer get_robot_detections — your visual bbox estimates are NOT pixel-accurate), high-frequency looping (same 3-calls-then-ask_human rule as the text scene tools). Requires Watch to be on for a frame to exist. Returns the frame as an image attached to the tool result; your next turn sees it natively.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Robot id" },
+      },
+      required: ["id"],
+    },
+    annotations: { readOnlyHint: true, idempotentHint: false, openWorldHint: true },
   },
   {
     name: "send_to_phone",
@@ -258,10 +271,24 @@ const ALL_TOOLS = [
 // that would fail. Keeping the executor case below (unreachable when the
 // tool isn't advertised) means re-enabling is a single flag flip in
 // grounding.js, not a re-plumb.
-export const TOOLS = ALL_TOOLS.filter(t => {
-  if (t.name === "get_robot_detections" && !GROUNDING_ENABLED) return false;
-  return true;
-});
+// Backends that accept image blocks in tool_result content. Local LFM has
+// no vision; OpenAI's tool-result image support is untested here so gated
+// out until verified end-to-end.
+const VISION_BACKENDS = new Set(["bridge", "anthropic"]);
+export function isVisionAvailable() {
+  return !!settings.pipVisionEnabled && VISION_BACKENDS.has(settings.pipBackend || "bridge");
+}
+
+// Dynamic per-call so runtime toggles (Settings → Pip vision) take effect
+// without a page reload. GROUNDING_ENABLED is still a module-load constant;
+// pipVisionEnabled comes from settings and can flip between asks.
+export function getTools() {
+  return ALL_TOOLS.filter(t => {
+    if (t.name === "get_robot_detections" && !GROUNDING_ENABLED) return false;
+    if (t.name === "view_robot_frame" && !isVisionAvailable()) return false;
+    return true;
+  });
+}
 
 async function dispatch(name, input) {
   switch (name) {
@@ -358,6 +385,28 @@ async function dispatch(name, input) {
       } catch (err) {
         return { error: err.message || String(err), recent_asks };
       }
+    }
+    case "view_robot_frame": {
+      if (!isVisionAvailable()) return { error: "vision is disabled or backend doesn't support images" };
+      const e = state.devices.get(input.id);
+      if (!e) return { error: `no robot with id ${input.id}` };
+      // 640px is larger than the 320 ask_human uses — Claude's vision wants
+      // detail, phone thumbnails don't. Quality bumped too (0.85 vs 0.75)
+      // for the same reason. JPEG stays the format; PNG would bloat the
+      // tool-result payload without a useful accuracy bump.
+      const dataUrl = captureFrameDataUrl(e, 640, 0.85);
+      if (!dataUrl) return { error: "no camera frame available — is Watch on?" };
+      const m = /^data:(image\/[\w.+-]+);base64,(.+)$/.exec(dataUrl);
+      if (!m) return { error: "failed to encode frame" };
+      // _pipContent sentinel tells claude.js to pass through as Anthropic
+      // content blocks instead of JSON.stringify — so the model sees the
+      // actual image, not a base64 string in a JSON blob.
+      return {
+        _pipContent: [
+          { type: "text", text: `Robot camera frame (captured now, ${m[1]}). Use your own eyes — do not ask the VLM to caption this.` },
+          { type: "image", source: { type: "base64", media_type: m[1], data: m[2] } },
+        ],
+      };
     }
     case "send_to_phone": {
       const text = String(input.text || "").slice(0, 300);

@@ -1,5 +1,5 @@
 import { ask, askWithTools } from "./claude.js";
-import { TOOLS, executor, setAskInChatHandler } from "./pip-tools.js";
+import { getTools, executor, setAskInChatHandler } from "./pip-tools.js";
 import { shorten, labelTool, summarizeTool } from "./format.js";
 import { createPip, renderMd } from "./pip-core.esm.js";
 
@@ -222,7 +222,7 @@ async function onSubmit(text, { turnEl }) {
     .map(m => ({ role: m.role, content: m.content }));
   const reply = await askWithTools(messages, {
     system: PIP_SYSTEM,
-    tools: TOOLS,
+    tools: getTools(),
     executor,
     maxTokens: 1024,
     onToolStart: ({ name }) => { pendingTraceLi = appendTraceLine(turnEl, name); },
@@ -259,7 +259,7 @@ export async function handleRemoteChat(text, { source = "phone" } = {}) {
     .map(m => ({ role: m.role, content: m.content }));
   const reply = await askWithTools(messages, {
     system: PIP_SYSTEM,
-    tools: TOOLS,
+    tools: getTools(),
     executor,
     maxTokens: 1024,
   });
