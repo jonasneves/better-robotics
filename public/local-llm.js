@@ -87,9 +87,24 @@ async function ensureLoaded() {
 
 // Strip <think>...</think> reasoning blocks from visible text. The Thinking
 // model uses these for chain-of-thought; surface only the final answer.
+// MAX_NEW_TOKENS can cut the model off mid-thought — an unclosed <think> has
+// no closing tag to match, so strip from the opening tag to end-of-string too.
 function stripThinking(text) {
-  return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+  let out = text.replace(/<think>[\s\S]*?<\/think>/g, "");
+  const open = out.indexOf("<think>");
+  if (open !== -1) out = out.slice(0, open);
+  return out.trim();
 }
+
+// True when the raw output opened a <think> that never closed — i.e. the model
+// spent its entire token budget reasoning and never emitted a user-facing
+// answer. Callers surface this as a specific fallback so the generic "no good
+// answer" branch doesn't mask a recoverable "try a shorter prompt" state.
+function thoughtRanLong(raw) {
+  return raw.includes("<think>") && !raw.includes("</think>");
+}
+const OUT_OF_TOKENS_FALLBACK =
+  "(local model used all 512 tokens reasoning — try a shorter / simpler prompt)";
 
 // Extract any tool-call JSON arrays from a generated string. May contain
 // multiple call blocks; each parses to an array of {name, arguments}. Returns
@@ -167,7 +182,9 @@ export async function localAsk(userText, { system, maxTokens } = {}) {
   convo.push({ role: "user", content: userText });
   try {
     const raw = await generate(convo);
-    return stripThinking(raw);
+    const visible = stripThinking(raw);
+    if (!visible && thoughtRanLong(raw)) return OUT_OF_TOKENS_FALLBACK;
+    return visible;
   } catch (err) {
     console.warn("[claude/local-llm] ask: generate failed", err);
     return null;
@@ -201,7 +218,10 @@ export async function localAskWithTools(messages, { system, tools, executor, max
     const { calls, visible } = parseToolCalls(raw);
     convo.push({ role: "assistant", content: raw });
 
-    if (!calls.length) return visible;
+    if (!calls.length) {
+      if (!visible && thoughtRanLong(raw)) return OUT_OF_TOKENS_FALLBACK;
+      return visible;
+    }
 
     for (const call of calls) {
       const name = call?.name;
