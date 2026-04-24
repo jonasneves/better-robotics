@@ -1445,13 +1445,19 @@ dialog[open]::backdrop { opacity: 1; }
   color: var(--ink);
   font-size: 36px;
   line-height: 1;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   z-index: 20;
   transition: transform 0.15s ease-out;
   overflow: visible;  /* UA [popover] sets overflow:auto; would clip the icon */
+}
+/* Scoped to :popover-open so the bubble stays hidden if init never runs
+   showPopover() — otherwise an author-origin `display: inline-flex` would
+   override the UA display:none and leak the bubble without top-layer
+   stacking. Same cascade trap as .assistant-panel above. */
+.assistant-bubble:popover-open {
+  display: inline-flex;
 }
 .assistant-bubble:hover { transform: translateY(-3px); }
 .assistant-bubble:active { transform: translateY(0); }
@@ -1612,11 +1618,8 @@ dialog[open]::backdrop { opacity: 1; }
      takes over. */
   max-height: calc(100vh - 96px);
   /* overflow:visible so the ::after speech-bubble tail (bottom:-7px) can
-     escape the panel's rounded border. Flex column lets the inner scroll
-     region flex-grow and the form pin to the bottom. */
+     escape the panel's rounded border. */
   overflow: visible;
-  display: flex;
-  flex-direction: column;
   margin: 0;
   /* Extra top padding reserves space for the floating close button without
      a dedicated header row. Matches the conversational-bubble pattern where
@@ -1628,6 +1631,14 @@ dialog[open]::backdrop { opacity: 1; }
   color: var(--ink);
   box-shadow: 0 10px 30px rgba(0,0,0,0.15);
   transform-origin: bottom right;
+}
+/* Must be scoped to :popover-open. Bare `.assistant-panel { display: flex }`
+   has author-origin specificity that overrides the UA rule `[popover]:not(
+   :popover-open):not(dialog[open]) { display: none }` — the panel would
+   stay visible even after hidePopover() flipped the state to closed. */
+.assistant-panel:popover-open {
+  display: flex;
+  flex-direction: column;
 }
 /* Floating close button — top-right corner, same visual weight as the icon-
    class buttons we use elsewhere but positioned rather than flexed into a

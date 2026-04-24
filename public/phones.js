@@ -215,6 +215,10 @@ function _initPairListener() {
     // Pubkey-target match — attackers on the same wifi can publish to
     // any address, but only ads addressed to our key fire the prompt.
     match: (ad) => ad.data.target === _myPubkey,
+    // Route library-level handler errors into the in-app debug log
+    // so hostPairingRoom failures (etc.) stay diagnosable from the
+    // floating panel instead of only the browser console.
+    onError: (err) => log("pair-request handler: " + (err && err.message || err), "phone"),
   });
 }
 

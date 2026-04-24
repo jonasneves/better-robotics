@@ -53,9 +53,12 @@
 //     // Optional predicate — which requests are "for me"? Consumers that
 //     // target by pubkey use `ad.data.target === myPubkey`; consumers
 //     // that target by room code use `ad.data.roomCode === myRoomCode`.
-//     // Default: pass-through (every ad is considered for you). In
-//     // practice consumers always pass a match fn.
 //     match: (ad) => ad.data.target === myPubkey,
+//     // Optional error sink — fires when a handler throws. The library
+//     // auto-denies the initiator so they don't hang, then calls this
+//     // and re-raises to unhandledrejection. Wire this to your in-app
+//     // log so handler errors don't vanish from the debug surface.
+//     onError: (err, req) => log('pair-request handler: ' + err.message),
 //   });
 
 import { discover } from './discover.js';
@@ -64,6 +67,11 @@ import { getMyPubkeyB64 } from './peer-key.js';
 const DEFAULT_REQUEST_TTL_MS = 30_000;
 const DEFAULT_RESPONSE_TTL_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
+// Upper bound on remembered-nonce set. Long-lived sessions (hours of
+// dashboard open) would otherwise accumulate every nonce ever seen.
+// When we hit the cap we drop the oldest half; dedup only needs to
+// outlive the server's ad TTL (~30s-60s), so anything older is safe.
+const MAX_HANDLED_NONCES = 1000;
 
 export function pairRequestClient({ app, sign = true, lobby = null } = {}) {
   if (!app || typeof app !== 'string') {
@@ -73,9 +81,6 @@ export function pairRequestClient({ app, sign = true, lobby = null } = {}) {
   const REQUEST_APP  = app + '-request';
   const RESPONSE_APP = app + '-response';
 
-  // Shared lobby across request and onRequest for this client. Consumer
-  // may pass an existing lobby (their singleton) to avoid doubling WS
-  // connections; otherwise we make our own.
   let _lobby = lobby;
   function _getLobby() { return _lobby || (_lobby = discover({ sign })); }
 
@@ -85,69 +90,90 @@ export function pairRequestClient({ app, sign = true, lobby = null } = {}) {
     return _myPubkey;
   }
 
-  // Pending requests we initiated, keyed by nonce. Resolver runs when the
-  // matching response lands (or on timeout).
+  // Pending requests we initiated, keyed by nonce.
   const _pendingInitiations = new Map();
 
-  // Nonces we've already handed to our onRequest handler, so the same
-  // lobby broadcast replay doesn't double-fire.
+  // Nonces we've already handed to our onRequest handler — the same
+  // lobby broadcast may replay on every change, so dedup by nonce. We
+  // track order separately so we can drop the oldest half when we hit
+  // MAX_HANDLED_NONCES.
   const _handledInboundNonces = new Set();
+  const _handledInboundOrder = [];
+  function _markHandled(nonce) {
+    if (_handledInboundNonces.has(nonce)) return;
+    _handledInboundNonces.add(nonce);
+    _handledInboundOrder.push(nonce);
+    if (_handledInboundOrder.length > MAX_HANDLED_NONCES) {
+      const drop = _handledInboundOrder.splice(0, MAX_HANDLED_NONCES / 2);
+      for (const n of drop) _handledInboundNonces.delete(n);
+    }
+  }
 
-  let _responseSubscriptionActive = false;
-  function _ensureResponseSubscription() {
-    if (_responseSubscriptionActive) return;
-    _responseSubscriptionActive = true;
+  // Request-listener state. onRequest can be called before we have our
+  // pubkey; the subscription is wired lazily via _ensureSubscription.
+  let _matchFn = null;
+  let _handlerFn = null;
+  let _errorFn = null;
+
+  // Single lobby subscription dispatches both outgoing-response matches
+  // (for pending initiations) and incoming-request matches (for the
+  // registered handler). Keeps the lobby's onChange load to 1 callback
+  // per client instead of 2.
+  let _subscriptionActive = false;
+  function _ensureSubscription() {
+    if (_subscriptionActive) return;
+    _subscriptionActive = true;
     _getLobby().onChange((ads) => {
-      if (!_myPubkey) return;  // can't match before we know our own pubkey
       for (const ad of ads || []) {
         const d = ad.data;
-        if (!d || d.app !== RESPONSE_APP) continue;
-        if (d.target !== _myPubkey) continue;
-        const pending = _pendingInitiations.get(d.nonce);
-        if (!pending) continue;
-        _pendingInitiations.delete(d.nonce);
-        clearTimeout(pending.timer);
-        try { _getLobby().remove(REQUEST_APP + ':' + d.nonce); } catch {}
-        const { accepted, target: _t, nonce: _n, app: _a, ...rest } = d;
-        if (accepted) pending.resolve({ accepted: true, data: rest });
-        else pending.resolve({ accepted: false, reason: 'denied', data: rest });
+        if (!d) continue;
+        if (d.app === RESPONSE_APP) _dispatchResponse(ad);
+        else if (d.app === REQUEST_APP) _dispatchRequest(ad);
       }
     });
   }
 
-  let _requestSubscriptionActive = false;
-  function _ensureRequestSubscription(match, handler) {
-    if (_requestSubscriptionActive) return;
-    _requestSubscriptionActive = true;
-    _getLobby().onChange((ads) => {
-      for (const ad of ads || []) {
-        const d = ad.data;
-        if (!d || d.app !== REQUEST_APP) continue;
-        if (!d.nonce || _handledInboundNonces.has(d.nonce)) continue;
-        if (match && !match(ad)) continue;
-        _handledInboundNonces.add(d.nonce);
-        const senderPubkey = d._pubkey || null;  // from signed mode
-        const { app: _a, nonce: _n, _pubkey: _p, _sig: _s, ...payload } = d;
-        const req = {
-          senderPubkey,
-          payload,
-          accept: (responsePayload = {}) =>
-            _publishResponse(true, senderPubkey, d.nonce, responsePayload),
-          deny: (responsePayload = {}) =>
-            _publishResponse(false, senderPubkey, d.nonce, responsePayload),
-        };
-        // Wrap the handler so a thrown/rejected error doesn't silently
-        // break the listener for subsequent requests, and so the
-        // initiator gets an explicit deny instead of hanging.
-        Promise.resolve()
-          .then(() => handler(req))
-          .catch((err) => {
-            try { _publishResponse(false, senderPubkey, d.nonce, { reason: 'error' }); } catch {}
-            // Re-raise so the browser's unhandledrejection telemetry sees it.
-            Promise.reject(err);
-          });
-      }
-    });
+  function _dispatchResponse(ad) {
+    const d = ad.data;
+    if (!_myPubkey) return;
+    if (d.target !== _myPubkey) return;
+    const pending = _pendingInitiations.get(d.nonce);
+    if (!pending) return;
+    _pendingInitiations.delete(d.nonce);
+    clearTimeout(pending.timer);
+    try { _getLobby().remove(REQUEST_APP + ':' + d.nonce); } catch {}
+    const { accepted, target: _t, nonce: _n, app: _a, ...rest } = d;
+    if (accepted) pending.resolve({ accepted: true, data: rest });
+    else pending.resolve({ accepted: false, reason: 'denied', data: rest });
+  }
+
+  function _dispatchRequest(ad) {
+    const d = ad.data;
+    if (!_handlerFn) return;
+    if (!d.nonce || _handledInboundNonces.has(d.nonce)) return;
+    if (_matchFn && !_matchFn(ad)) return;
+    _markHandled(d.nonce);
+    const senderPubkey = d._pubkey || null;
+    const { app: _a, nonce: _n, _pubkey: _p, _sig: _s, ...payload } = d;
+    const req = {
+      senderPubkey,
+      payload,
+      accept: (responsePayload = {}) =>
+        _publishResponse(true, senderPubkey, d.nonce, responsePayload),
+      deny: (responsePayload = {}) =>
+        _publishResponse(false, senderPubkey, d.nonce, responsePayload),
+    };
+    // Wrap so a thrown/rejected handler doesn't break the listener or
+    // leave the initiator hanging.
+    Promise.resolve()
+      .then(() => _handlerFn(req))
+      .catch((err) => {
+        try { _publishResponse(false, senderPubkey, d.nonce, { reason: 'error' }); } catch {}
+        // Surface to the consumer's log surface if they supplied one —
+        // unhandledrejection still fires below for browser telemetry.
+        if (_errorFn) { try { _errorFn(err, req); } catch {} }
+        Promise.reject(err);
+      });
   }
 
   function _publishResponse(accepted, targetPubkey, nonce, payload) {
@@ -163,10 +189,9 @@ export function pairRequestClient({ app, sign = true, lobby = null } = {}) {
 
   // ── Public API ────────────────────────────────────────────────
 
-  // Publish a request and wait for the matching response.
   async function request({ payload = {}, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     await _ensureMyPubkey();
-    _ensureResponseSubscription();
+    _ensureSubscription();
 
     const nonce = (crypto.randomUUID && crypto.randomUUID()) ||
                   Math.random().toString(36).slice(2);
@@ -198,12 +223,15 @@ export function pairRequestClient({ app, sign = true, lobby = null } = {}) {
     return p;
   }
 
-  // Subscribe to incoming requests. `handler` receives a req object with
-  // senderPubkey, payload, and accept/deny methods. `match(ad)` decides
-  // which requests are "for us" — default accepts all.
-  function onRequest(handler, { match = null } = {}) {
-    _ensureMyPubkey().catch(() => {});  // warm the pubkey cache
-    _ensureRequestSubscription(match, handler);
+  // Register the incoming-request handler. Calling twice replaces the
+  // handler (and its match/onError); intentional — consumers that rebuild
+  // their UI can re-wire without leaking subscriptions.
+  function onRequest(handler, { match = null, onError = null } = {}) {
+    _ensureMyPubkey().catch(() => {});
+    _matchFn = match;
+    _handlerFn = handler;
+    _errorFn = onError;
+    _ensureSubscription();
   }
 
   return { request, onRequest };
