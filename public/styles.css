@@ -337,6 +337,13 @@ a.menu-item { text-decoration: none; }
   color: var(--ink-muted);
 }
 .menu-meta-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.hard-refresh-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.hard-refresh-list li { margin-bottom: 2px; }
 
 .status {
   display: inline-flex;

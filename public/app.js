@@ -1282,6 +1282,63 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
   updateInstallMenuItem();
+
+  $("menu-check-updates").addEventListener("click", async () => {
+    const btn = $("menu-check-updates");
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Checking…";
+    let foundUpdate = false;
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      if (reg) {
+        const onFound = () => { foundUpdate = true; };
+        reg.addEventListener("updatefound", onFound, { once: true });
+        await reg.update();
+        reg.removeEventListener("updatefound", onFound);
+      }
+    } catch {}
+    // If a new worker installed, the existing statechange → showSwUpdateBanner
+    // flow surfaces the reload prompt. Here we only report the no-op case.
+    btn.textContent = foundUpdate ? "New version available" : "Up to date";
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2000);
+  });
+
+  $("menu-hard-refresh").addEventListener("click", () => {
+    $("app-menu").hidePopover();
+    $("hard-refresh-dialog").showModal();
+  });
+  $("hard-refresh-close").addEventListener("click", () => $("hard-refresh-dialog").close());
+  $("hard-refresh-cancel").addEventListener("click", () => $("hard-refresh-dialog").close());
+  $("hard-refresh-confirm").addEventListener("click", async () => {
+    const btn = $("hard-refresh-confirm");
+    btn.disabled = true;
+    btn.textContent = "Clearing…";
+    try {
+      // Best-effort: run each step independently so one failure doesn't block
+      // the others. The nuclear order is intentional — kill the SW first so
+      // the reload below can't be intercepted by a stale worker.
+      const regs = await navigator.serviceWorker?.getRegistrations?.() || [];
+      await Promise.allSettled(regs.map(r => r.unregister()));
+      if (self.caches) {
+        const names = await caches.keys();
+        await Promise.allSettled(names.map(n => caches.delete(n)));
+      }
+      if (indexedDB.databases) {
+        const dbs = await indexedDB.databases();
+        await Promise.allSettled(dbs.map(d => new Promise((res) => {
+          if (!d.name) return res();
+          const req = indexedDB.deleteDatabase(d.name);
+          req.onsuccess = req.onerror = req.onblocked = () => res();
+        })));
+      }
+      try { localStorage.clear(); } catch {}
+      try { sessionStorage.clear(); } catch {}
+    } finally {
+      location.reload();
+    }
+  });
+
   $("label-close").addEventListener("click", () => $("label-modal").close());
   $("label-copy").addEventListener("click", async () => {
     try {

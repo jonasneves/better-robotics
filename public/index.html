@@ -128,8 +128,33 @@
     <span class="menu-meta-value" id="app-menu-version">—</span>
   </div>
   <button class="menu-item" id="menu-install" hidden>Install app</button>
+  <button class="menu-item" id="menu-check-updates">Check for updates</button>
   <a class="menu-item" id="menu-repo" href="https://github.com/jonasneves/better-robotics" target="_blank" rel="noopener">GitHub repo</a>
+  <button class="menu-item destructive" id="menu-hard-refresh">Hard refresh…</button>
 </div>
+
+<dialog id="hard-refresh-dialog" class="prepare-dialog">
+  <div class="modal-header">
+    <div class="label">Hard refresh</div>
+    <button class="icon" id="hard-refresh-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
+  </div>
+  <p style="margin: 0 0 12px;">Clears everything stored by the dashboard in this browser and reloads. Use this when the app is stuck in a broken state that normal reload doesn't fix.</p>
+  <div class="label" style="margin-bottom: 4px;">This will erase:</div>
+  <ul class="hard-refresh-list">
+    <li>App cache and service worker (re-downloaded on reload)</li>
+    <li>Profile name, paired robots, settings</li>
+    <li>User scripts (the code in the Scripts editor)</li>
+    <li>Saved passwords, SSH keys, trust store</li>
+    <li>Pip replay history</li>
+    <li>Local Pip model weights (≈1.2&nbsp;GB re-download if you had it installed)</li>
+    <li>Auth tokens (you'll need to sign in again)</li>
+  </ul>
+  <p class="meta" style="margin: 0 0 16px;">Bluetooth pairing is controlled by the browser, not this app. If a robot won't reconnect after the refresh, revoke it at <code>chrome://settings/content/bluetoothDevices</code> and re-pair.</p>
+  <div class="modal-footer">
+    <button class="secondary" id="hard-refresh-cancel">Cancel</button>
+    <button class="danger" id="hard-refresh-confirm">Clear everything and reload</button>
+  </div>
+</dialog>
 
 <div id="install-ios-popover" class="help-popover" popover>
   <strong>Install on iPhone / iPad</strong><br>
