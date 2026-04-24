@@ -25,6 +25,12 @@ const CSS = `
   z-index: 20;
   transition: transform 0.15s ease-out;
   overflow: visible;
+  /* Icon, not text. A joypad drag that passes over the bubble would
+     otherwise grab the SVG as a selected image (persistent highlight
+     user can't clear). Keep the bubble inert to selection + long-press. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .pip-bubble:popover-open { display: inline-flex; }
 .pip-bubble:hover { transform: translateY(-3px); }

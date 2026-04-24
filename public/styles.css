@@ -1745,7 +1745,9 @@ body.phone {
   color: var(--ink-muted);
 }
 .phone-chat {
-  flex: 1;
+  /* Was `flex: 1` — grew to fill the 100dvh column and pushed Stop +
+     drive off-screen on shorter phones. Content-sized with a min-height
+     now; the column overflows naturally and body scrolls. */
   display: flex;
   flex-direction: column;
   gap: 10px;
