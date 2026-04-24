@@ -227,7 +227,9 @@
   </div>
 </dialog>
 
-<dialog id="pinout-modal" class="prepare-dialog">
+<dialog id="pinout-modal" class="prepare-dialog"
+  data-pip-context="User is looking at the Pi 40-pin header. Real-world gotchas: 5V sag under servo load (separate supply + common grounds), I2C needs pull-ups on pins 3/5 or nothing talks, SPI and I2C can't share the same pins, GPIO defaults are input with no pull."
+  data-pip-fallback="Servos twitching? Almost always 5V sag — put them on a separate supply and common the grounds.">
   <div class="modal-header">
     <div class="label" id="pinout-title">Pinout</div>
     <button class="icon" id="pinout-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
@@ -276,7 +278,9 @@
   <div id="esp-serial-console-host" class="esp-serial-console"></div>
 </dialog>
 
-<dialog id="recovery-modal" class="prepare-dialog">
+<dialog id="recovery-modal" class="prepare-dialog"
+  data-pip-context="USB serial console to a Pi, used when BLE is dead or pi-robot.service has crashed. Typical rescue flow: check `journalctl -u pi-robot -n 50`, reset a stuck wifi (rfkill unblock), kill wedged capture processes."
+  data-pip-fallback="First thing to check on a broken Pi: `journalctl -u pi-robot -n 50` — tells you if the service crashed.">
   <div class="modal-header">
     <div class="label">Recovery console</div>
     <button class="icon" id="recovery-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
@@ -304,7 +308,9 @@
   </div>
 </dialog>
 
-<dialog id="prepare-dialog" class="prepare-dialog">
+<dialog id="prepare-dialog" class="prepare-dialog"
+  data-pip-context="User is about to stage firmware/runtime onto a Pi SD card. Known gotchas in this codebase: PEP-668 'externally-managed' marker blocks pip installs on recent Pi OS, Spotlight indexing silently stalls SD writes on macOS, rfkill blocks WiFi on fresh Trixie until unblocked."
+  data-pip-fallback="If the stage stalls, Spotlight is probably indexing the SD — wait for Finder's indicator to stop.">
   <div class="modal-header">
     <div class="label">Set up a Pi robot</div>
     <button class="icon" id="prepare-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
@@ -367,7 +373,9 @@
   <div class="progress-log" id="prep-progress" hidden style="margin-top: 16px;"></div>
 </dialog>
 
-<dialog id="setup-dialog" class="prepare-dialog setup-dialog">
+<dialog id="setup-dialog" class="prepare-dialog setup-dialog"
+  data-pip-context="User is choosing between ESP32 (USB flash in ~30s, no camera) and Pi (camera-capable, longer setup, needs SD prep). Decision usually hinges on whether they want onboard video or heavy compute."
+  data-pip-fallback="ESP32 flashes in ~30s if you don't need video. Pi's the path if you want a camera or onboard compute.">
   <div class="modal-header">
     <div class="label">Set up a robot</div>
     <button class="icon" id="setup-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>

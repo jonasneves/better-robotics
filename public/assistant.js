@@ -53,28 +53,6 @@ const PIP_SYSTEM = [
   // rather than add a 'don't volunteer advice' negation.
 ].join("\n");
 
-// Dialog id → { context Claude can reason from, fallback when Claude is unreachable }
-// The context field is intentionally rich with real codebase gotchas so Claude has
-// substrate to say something useful rather than paraphrase the panel label.
-const CONTEXTS = {
-  "setup-dialog": {
-    context: "User is choosing between ESP32 (USB flash in ~30s, no camera) and Pi (camera-capable, longer setup, needs SD prep). Decision usually hinges on whether they want onboard video or heavy compute.",
-    fallback: "ESP32 flashes in ~30s if you don't need video. Pi's the path if you want a camera or onboard compute.",
-  },
-  "prepare-dialog": {
-    context: "User is about to stage firmware/runtime onto a Pi SD card. Known gotchas in this codebase: PEP-668 'externally-managed' marker blocks pip installs on recent Pi OS, Spotlight indexing silently stalls SD writes on macOS, rfkill blocks WiFi on fresh Trixie until unblocked.",
-    fallback: "If the stage stalls, Spotlight is probably indexing the SD — wait for Finder's indicator to stop.",
-  },
-  "pinout-modal": {
-    context: "User is looking at the Pi 40-pin header. Real-world gotchas: 5V sag under servo load (separate supply + common grounds), I2C needs pull-ups on pins 3/5 or nothing talks, SPI and I2C can't share the same pins, GPIO defaults are input with no pull.",
-    fallback: "Servos twitching? Almost always 5V sag — put them on a separate supply and common the grounds.",
-  },
-  "recovery-modal": {
-    context: "USB serial console to a Pi, used when BLE is dead or pi-robot.service has crashed. Typical rescue flow: check `journalctl -u pi-robot -n 50`, reset a stuck wifi (rfkill unblock), kill wedged capture processes.",
-    fallback: "First thing to check on a broken Pi: `journalctl -u pi-robot -n 50` — tells you if the service crashed.",
-  },
-};
-
 let _bubble, _panel, _notify, _turns, _input, _form;
 let _fadeTimer = null, _closeTimer = null, _resumeTimer = null;
 let _lastNotifyAt = 0;
@@ -353,9 +331,10 @@ export function speakMessage(text, { autoDismiss = true, fromAI = false } = {}) 
   open({ autoDismiss });
 }
 
-async function notify(dialogId) {
-  const ctx = CONTEXTS[dialogId];
-  if (!ctx) return;
+async function notify(dialogEl) {
+  const context = dialogEl.dataset.pipContext;
+  if (!context) return;
+  const fallback = dialogEl.dataset.pipFallback;
   const now = Date.now();
   if (_panel.matches(":popover-open")) return;  // don't interrupt
   if (now - _lastNotifyAt < MIN_GAP_MS) return; // don't spam
@@ -363,7 +342,7 @@ async function notify(dialogId) {
   const prompt = [
     "The user just opened a dashboard panel.",
     "",
-    `Panel context:\n${ctx.context}`,
+    `Panel context:\n${context}`,
     "",
     "Reply with ONE specific tip, gotcha, or symptom→cause the user wouldn't learn",
     "by reading this panel. If nothing genuinely useful comes to mind, reply with",
@@ -376,7 +355,7 @@ async function notify(dialogId) {
   // Proactive notify tips are app voice even when Claude generated them —
   // user didn't ask anything, this is Pip volunteering context on the side.
   // Only chat replies get the amber 'live reply' tint (see setReplyText).
-  speakMessage(reply ?? ctx.fallback);
+  speakMessage(reply ?? fallback);
 }
 
 async function handleSubmit(e) {
@@ -491,17 +470,17 @@ function rehoistPip() {
   }
 }
 
-// Fire notify() for dialogs with Pip context, and rehoist the bubble on any
-// dialog opening so it stays reachable above modal content. Single observer
-// per dialog; other modules don't need to know Pip exists.
+// Fire notify() for dialogs declaring data-pip-context, and rehoist the bubble
+// on any dialog opening so it stays reachable above modal content. Each dialog
+// owns its own Pip context inline (data-pip-context / data-pip-fallback) so
+// renaming an id can't silently break the prompt.
 function watchDialogs() {
-  const contextual = new Set(Object.keys(CONTEXTS));
   for (const dlg of document.querySelectorAll("dialog")) {
     let wasOpen = dlg.hasAttribute("open");
     new MutationObserver(() => {
       const isOpen = dlg.hasAttribute("open");
       if (isOpen && !wasOpen) {
-        if (contextual.has(dlg.id)) notify(dlg.id);
+        if (dlg.dataset.pipContext) notify(dlg);
         rehoistPip();
       }
       wasOpen = isOpen;
