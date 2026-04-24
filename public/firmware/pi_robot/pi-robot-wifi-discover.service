@@ -1,0 +1,14 @@
+[Unit]
+Description=Better Robotics — wifi discovery (publishes to signal /discover)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__HOME__/better-robotics/firmware/pi_robot
+ExecStart=__HOME__/better-robotics/firmware/pi_robot/.venv/bin/python wifi_discover.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
