@@ -295,7 +295,9 @@ function injectCss() {
   const style = document.createElement("style");
   style.setAttribute("data-pip-core", "");
   style.textContent = CSS;
-  document.head.appendChild(style);
+  // Prepend to <head> so host stylesheets (loaded later in document order)
+  // cascade-win over the module's defaults on equal specificity.
+  document.head.insertBefore(style, document.head.firstChild);
   _cssInjected = true;
 }
 
