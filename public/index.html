@@ -442,7 +442,7 @@
   </div>
 </dialog>
 
-<button id="assistant-bubble" class="assistant-bubble" aria-label="Open Pip">
+<button id="assistant-bubble" class="assistant-bubble" popover="manual" aria-label="Open Pip">
   <!-- Inlined (not `<use>`) so CSS keyframes can target the .robot-eyes/.robot-antenna
        classes — external stylesheets can't cross the shadow boundary of a `<use>` ref. -->
   <svg class="icon-svg robot-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -464,11 +464,11 @@
     </g>
   </svg>
 </button>
-<dialog id="assistant-panel" class="assistant-panel">
-  <!-- No "Pip" label — the bubble tail identifies whose voice this is, same
-       way iMessage/WhatsApp don't label each bubble with a sender name. The
-       user's last question takes the place the title used to occupy,
-       contextualizing Pip's reply. Close button floats in the corner. -->
+<div id="assistant-panel" class="assistant-panel" popover="manual">
+  <!-- <div popover> not <dialog popover>: the dialog+popover combo has two
+       UA display rules fighting (dialog:not([open]) vs popover-shown) and
+       breaks unpredictably after cache turnover. A plain div-as-popover
+       has no such conflict. -->
   <button class="icon assistant-close" id="assistant-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   <!-- Ambient notify slot: Pip volunteering ("hey, I noticed X"). One slot,
        latest replaces previous, no history. Distinct from the chat-turn stack
@@ -479,6 +479,6 @@
     <input id="assistant-input" class="assistant-input" type="text" autocomplete="off"
            placeholder="Ask Pip…" maxlength="4000" aria-label="Ask Pip">
   </form>
-</dialog>
+</div>
 </body>
 </html>
