@@ -65,6 +65,7 @@
   <div class="robots-heading" id="helpers-heading">
     <div class="label">Your helpers</div>
     <div class="heading-actions">
+      <span id="phone-presence" class="presence-badge" hidden></span>
       <button id="pair-phone-btn" class="secondary sm">Pair phone</button>
     </div>
   </div>
@@ -378,7 +379,14 @@
     <div class="label">Pair a phone</div>
     <button class="icon" id="pair-dialog-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
-  <p class="hint">Scan the QR with your phone's camera, or open the URL below on the phone. From there you can see the robot's camera, drive it, and talk to Pip. Everything routes through this desktop, so there's no extra setup on the phone side.</p>
+  <!-- Shown when phone-ready ads are present on the lobby. The phone(s)
+       on this wifi will see the room appear automatically and can tap
+       it to pair — no QR scan needed. Hidden by default; phones.js
+       toggles it based on lobby state. -->
+  <div id="pair-presence" class="pair-presence" hidden>
+    <span id="pair-presence-text">Phone ready — tap "Pair with this computer" on it.</span>
+  </div>
+  <p class="hint" id="pair-hint">Scan the QR with your phone's camera, or open the URL below on the phone. From there you can see the robot's camera, drive it, and talk to Pip.</p>
   <div id="pair-qr" class="pair-qr"></div>
   <div class="pair-meta">
     <div class="hint" id="pair-status">Generating room…</div>

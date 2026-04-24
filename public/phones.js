@@ -103,6 +103,10 @@ export function initPhones() {
   if (closeBtn) closeBtn.addEventListener("click", closePairing);
   const cancelBtn = $("pair-cancel-btn");
   if (cancelBtn) cancelBtn.addEventListener("click", closePairing);
+  // Live presence: subscribe to phone-ready ads on the same wifi so the
+  // user sees discovery is healthy before opening the pair dialog. Same
+  // lobby instance the dialog uses for publishing — getLobby is shared.
+  getLobby().onChange(renderPhonePresence);
   // Laptop camera → phone(s) bridge: whenever the laptop transitions, sync
   // every paired phone's media tracks. Goes both ways — going live adds
   // tracks, stopping removes them. Phones connected later pick up the live
@@ -136,7 +140,46 @@ function closePairing() {
   }
   _pendingSession?.cancel();
   _pendingSession = null;
+  $("pair-dialog").classList.remove("has-ready-phones");
   $("pair-dialog").close();
+}
+
+// Count of phones currently broadcasting "ready to pair" on this wifi.
+// Drives both the helpers-heading presence badge and the pair-dialog
+// switch from "QR primary" to "phone is right there, just tap it on
+// the phone screen" mode.
+function renderPhonePresence(ads) {
+  const phones = (ads || []).filter(a => a.data && a.data.app === "better-robotics-phone-ready");
+  const count = phones.length;
+  // Helpers heading badge — passive indicator, visible whenever at least
+  // one unpaired phone is on the wifi.
+  const badge = $("phone-presence");
+  if (badge) {
+    if (count > 0) {
+      badge.hidden = false;
+      const label = phones[0].data.label || "Phone";
+      badge.textContent = count === 1 ? `${label} on wifi` : `${count} phones on wifi`;
+    } else {
+      badge.hidden = true;
+    }
+  }
+  // Pair dialog: when phone-ready peers exist, surface that and de-emphasize
+  // the QR. The room is already advertised on the lobby — the phone just
+  // needs to tap "Pair with this computer" on its own screen.
+  const dialog = $("pair-dialog");
+  const hint = $("pair-presence-text");
+  if (dialog) {
+    const presence = $("pair-presence");
+    if (presence) {
+      presence.hidden = count === 0;
+      if (count > 0 && hint) {
+        hint.textContent = count === 1
+          ? `${phones[0].data.label || "Phone"} ready — tap "Pair with this computer" on it.`
+          : `${count} phones ready — tap "Pair with this computer" on the one you want.`;
+      }
+    }
+    dialog.classList.toggle("has-ready-phones", count > 0);
+  }
 }
 
 async function beginPairing() {

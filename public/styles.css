@@ -2055,6 +2055,64 @@ body.phone {
   cursor: pointer;
 }
 .phone-nearby-btn:hover { background: var(--surface-raised, var(--surface)); }
+
+/* Presence — desktop subscribes to "phone-ready" ads on the same wifi
+   and surfaces this small badge so the user can see discovery is live
+   even before they open the pair dialog. */
+.presence-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.presence-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 currentColor;
+  animation: presence-pulse 2s ease-out infinite;
+}
+@keyframes presence-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* Pair dialog: phone-ready hint appears above the QR. When set, the
+   QR collapses to a small "Show QR" disclosure since the phone on the
+   wifi can pair without it. */
+.pair-presence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--ink);
+  font-size: 14px;
+}
+.pair-presence::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: presence-pulse 2s ease-out infinite;
+}
+.pair-dialog.has-ready-phones .pair-qr,
+.pair-dialog.has-ready-phones #pair-hint { display: none; }
+.pair-dialog.has-ready-phones .pair-meta { opacity: 0.6; }
 .phone-input {
   width: 100%;
   box-sizing: border-box;

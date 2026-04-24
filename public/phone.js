@@ -288,12 +288,34 @@ function wireReconnect() {
 // LAN discovery — desktops with an open Pair dialog on the same wifi
 // broadcast a pair room. Render each as a one-tap join button so the
 // reconnect surface offers "skip the QR" before the camera scan.
+//
+// We also PUBLISH a "phone-ready" ad while we're in this state so
+// dashboards on the same wifi can surface "iPhone on wifi" without the
+// user having to open a pair dialog first. Symmetric presence: each side
+// knows the other is around without anyone clicking anything.
 let _lobby = null;
+function deviceLabel() {
+  const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+  if (/iPhone/i.test(ua)) return "iPhone";
+  if (/iPad/i.test(ua)) return "iPad";
+  if (/Android/i.test(ua)) return "Android";
+  return "Phone";
+}
 function startNearbyDiscovery() {
   if (_lobby) return;  // idempotent — init might call us twice across reconnects
   _lobby = discover();
   const wrap = $("phone-nearby");
   const list = $("phone-nearby-list");
+
+  // Publish "I'm a phone, ready to pair." Random per page-load is fine —
+  // server TTL clears stale ads from prior tabs/reloads. Dashboards on
+  // the same wifi pick this up and show a passive presence indicator.
+  const phoneAdId = "better-robotics-phone-ready:" + (crypto.randomUUID?.() || Math.random().toString(36).slice(2));
+  _lobby.publish(phoneAdId, {
+    app: "better-robotics-phone-ready",
+    label: deviceLabel(),
+  }, 60000);
+
   if (!wrap || !list) return;
   _lobby.onChange((ads) => {
     const desktops = ads.filter(a => a.data && a.data.app === "better-robotics-pair" && a.data.roomId);
