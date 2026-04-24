@@ -1393,11 +1393,6 @@ document.addEventListener("DOMContentLoaded", () => {
   if (new URLSearchParams(location.search).get("prepare") !== null) {
     import("./prepare.js").then(m => m.openDialog());
   }
-  // Empty-state duplicate trigger so fresh dashboards without robots can still
-  // pair a phone. Same handler as the one in robots-heading.
-  const emptyPairBtn = $("empty-pair-phone-btn");
-  if (emptyPairBtn) emptyPairBtn.addEventListener("click", () => $("pair-phone-btn")?.click());
-
   loadPaired().then(() => {
     highlightKnownRobotFromUrl();
   });

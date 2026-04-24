@@ -42,35 +42,33 @@
 
   <div class="robots-heading" id="robots-heading" hidden>
     <div class="label">Your robots</div>
-    <div style="display: flex; gap: 8px;">
+    <div class="heading-actions">
       <button id="add-robot-btn" class="secondary sm">Set up</button>
       <button id="connect-all-btn" class="secondary sm" hidden>Connect all</button>
       <button id="scan-btn" class="secondary sm">Scan for new</button>
-      <button id="pair-phone-btn" class="secondary sm">Pair phone</button>
     </div>
   </div>
 
   <div id="robot-list"></div>
 
-  <div class="robots-heading" id="helpers-heading">
-    <div class="label">Your helpers</div>
-    <div style="display: flex; gap: 8px;">
-      <button id="helpers-pair-phone-btn" class="secondary sm">Pair phone</button>
-    </div>
-  </div>
-  <div id="helpers-list"></div>
-
   <section class="card" id="discovered" hidden></section>
 
   <section class="card empty-state" id="empty-state" hidden>
     <div class="empty-title">No robots yet</div>
-    <div class="empty-sub">Set up a new robot, scan for one nearby, or pair a phone.</div>
+    <div class="empty-sub">Set up a new robot, or scan for one nearby.</div>
     <div class="empty-actions">
       <button id="empty-add-robot-btn">Set up a robot</button>
       <button id="empty-scan-btn" class="secondary">Scan</button>
-      <button id="empty-pair-phone-btn" class="secondary">Pair phone</button>
     </div>
   </section>
+
+  <div class="robots-heading" id="helpers-heading">
+    <div class="label">Your helpers</div>
+    <div class="heading-actions">
+      <button id="pair-phone-btn" class="secondary sm">Pair phone</button>
+    </div>
+  </div>
+  <div id="helpers-list"></div>
 
   <details class="tray">
     <summary class="label">

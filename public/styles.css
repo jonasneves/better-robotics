@@ -479,6 +479,7 @@ button.icon:hover { background: var(--line); color: var(--ink); }
   padding: 0 4px;
   margin: 24px 0 8px;
 }
+.heading-actions { display: flex; gap: 8px; }
 /* Collapsible tray — generic details pattern. Log uses this; reusable for any accordion surface.
    Stands alone without .card: reads as bottom-strip chrome, not a data panel. */
 details.tray {
@@ -1566,6 +1567,10 @@ dialog[open]::backdrop { opacity: 1; }
   /* Reserve gutter so the scrollbar appearing/disappearing doesn't reflow
      the message width as Pip types. */
   scrollbar-gutter: stable;
+  /* Thin, low-contrast scrollbar. Firefox reads these two props; WebKit uses
+     the ::-webkit-scrollbar rules below. Both resolve to the same visual. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
   margin: 0;
   /* Extra top padding reserves space for the floating close button without
      a dedicated header row. Matches the conversational-bubble pattern where
@@ -1597,6 +1602,15 @@ dialog[open]::backdrop { opacity: 1; }
   border-radius: 6px;
 }
 .assistant-panel .assistant-close:hover { color: var(--ink); }
+/* WebKit (Chrome, Safari) equivalents of the Firefox scrollbar-* props above.
+   Track fades into the panel; thumb is the same muted hairline as the border. */
+.assistant-panel::-webkit-scrollbar { width: 6px; }
+.assistant-panel::-webkit-scrollbar-track { background: transparent; }
+.assistant-panel::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 3px;
+}
+.assistant-panel::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
 /* Ambient notify slot — Pip volunteering ("hey, I noticed X"). One slot,
    replaced (not stacked) on each new notify. Sits above the chat-turn stack
    so it's the first thing the user sees but never accumulates as fake history. */
@@ -1927,18 +1941,24 @@ dialog[open]::backdrop { opacity: 1; }
 }
 
 /* ── Helpers list (paired phones + this laptop's webcam) ──────────────── */
-/* Helpers reuse the .robot card visual language (status stripe, identity row,
-   secondary row, expandable body). Distinct semantics — observers/operators
-   the operator brings into a session — but the eye-shape stays consistent. */
+/* Helpers borrow the .robot card layout but read as supplementary, not
+   peer to robots — they're operator-side accessories (extra eyes, extra
+   hands), not controllable agents. Distinction is carried by a softer
+   type-badge (no accent color) + tighter card padding + a gentler card
+   surface so the eye finds robots first when both are present. */
 #helpers-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
+  gap: 12px;
   align-items: start;
   margin-bottom: 16px;
 }
 #helpers-list > .card { margin-bottom: 0; max-width: 440px; }
-.helper .type-badge { background: var(--border-subtle); color: var(--accent); }
+.card.helper {
+  background: color-mix(in srgb, var(--card) 60%, transparent);
+  padding: 10px 16px 10px 19px;
+}
+.helper .label-btn { font-size: 14px; }
 .helper-video {
   width: 100%;
   border-radius: 8px;

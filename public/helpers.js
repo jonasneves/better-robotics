@@ -24,9 +24,6 @@ let _videoEls = new Map();  // helperId → <video> element (live laptop cam)
 
 export function initHelpers() {
   setPhonesChangeHandler(() => render());
-  $("helpers-pair-phone-btn")?.addEventListener("click", () => {
-    $("pair-phone-btn")?.click();
-  });
   render();
 }
 
@@ -140,11 +137,9 @@ function render() {
   cards.push(renderLaptopCard());
 
   if (phones.length === 0 && _laptop.status === "idle") {
-    // Empty-ish state: only the laptop card is here, in idle. We still show
-    // the laptop card (it's the operator's affordance) but add a thin hint.
     list.innerHTML = `
       ${cards.join("")}
-      <div class="helpers-empty meta">No phones paired yet — tap "Pair phone" to add one.</div>
+      <div class="helpers-empty hint">No phones paired yet — tap "Pair phone" to add one.</div>
     `;
   } else {
     list.innerHTML = cards.join("");
@@ -168,16 +163,14 @@ function renderPhoneCard(p) {
       : p.status === "error"
         ? "Offline"
         : escapeHtml(p.status);
-  const when = p.connectedAt ? new Date(p.connectedAt).toLocaleTimeString() : "—";
   return `
     <section class="card robot helper ${cls}" data-helper-id="${escapeHtml(`phone:${p.id}`)}">
       <div class="row">
         <div class="robot-identity">
-          <button class="label-btn" data-action="toggle-expand" aria-expanded="false">
-            <svg class="icon-svg disclosure-chevron" aria-hidden="true"><use href="icons.svg#icon-chevron-down"/></svg>
+          <div class="label-btn">
             ${escapeHtml(p.label || "Phone")}
             <span class="type-badge">PHONE</span>
-          </button>
+          </div>
           ${statusText ? `<div class="status">${statusText}</div>` : ""}
         </div>
       </div>
@@ -186,10 +179,6 @@ function renderPhoneCard(p) {
         <div class="robot-cta">
           <button class="secondary sm" data-action="phone-notice" data-phone-id="${escapeHtml(p.id)}">Send notice</button>
         </div>
-      </div>
-      <div class="robot-body" hidden>
-        <div class="meta">Connected at ${escapeHtml(when)}</div>
-        <div class="meta">Phones currently support chat + joypad. Camera passthrough not yet wired.</div>
       </div>
     </section>
   `;
@@ -208,20 +197,20 @@ function renderLaptopCard() {
   const action = live
     ? `<button class="secondary sm" data-action="laptop-stop">Stop</button>`
     : `<button class="sm" data-action="laptop-start" ${starting ? "disabled" : ""}>${starting ? "Starting…" : "Start"}</button>`;
-  const body = live
-    ? `<video class="helper-video" data-helper-video="${LAPTOP_ID}" autoplay playsinline muted></video>`
-    : errored
-      ? `<div class="meta">${escapeHtml(_laptop.error || "Camera unavailable")}</div>`
-      : `<div class="meta">Click Start to share this laptop's webcam with the dashboard. The browser will ask for permission once.</div>`;
+  // Body only renders when there's something to show: live video or an error.
+  // Idle state is fully described by the Start button — no instruction prose
+  // needed (the verb does the work).
+  let body = "";
+  if (live) body = `<video class="helper-video" data-helper-video="${LAPTOP_ID}" autoplay playsinline muted></video>`;
+  else if (errored) body = `<div class="hint">${escapeHtml(_laptop.error || "Camera unavailable")}</div>`;
   return `
-    <section class="card robot helper expanded ${cls}" data-helper-id="${LAPTOP_ID}">
+    <section class="card robot helper ${cls}" data-helper-id="${LAPTOP_ID}">
       <div class="row">
         <div class="robot-identity">
-          <button class="label-btn" data-action="toggle-expand" aria-expanded="true">
-            <svg class="icon-svg disclosure-chevron" aria-hidden="true"><use href="icons.svg#icon-chevron-down"/></svg>
+          <div class="label-btn">
             ${escapeHtml(_laptop.label)}
             <span class="type-badge">CAM</span>
-          </button>
+          </div>
           ${statusText ? `<div class="status">${statusText}</div>` : ""}
         </div>
       </div>
@@ -229,9 +218,7 @@ function renderLaptopCard() {
         <div class="robot-meta">${meta}</div>
         <div class="robot-cta">${action}</div>
       </div>
-      <div class="robot-body">
-        ${body}
-      </div>
+      ${body ? `<div class="robot-body">${body}</div>` : ""}
     </section>
   `;
 }
@@ -254,19 +241,6 @@ function wire() {
       sendToPhone(phoneId, text.trim());
     });
   });
-  list.querySelectorAll('[data-action="toggle-expand"]').forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const card = btn.closest(".helper");
-      const body = card?.querySelector(".robot-body");
-      if (!body) return;
-      const willOpen = body.hasAttribute("hidden");
-      body.toggleAttribute("hidden", !willOpen);
-      btn.setAttribute("aria-expanded", String(willOpen));
-      card.classList.toggle("expanded", willOpen);
-    });
-  });
-
   // Mount the live MediaStream into the freshly-rendered <video> element.
   // Has to happen after innerHTML rebuild — assigning srcObject before the
   // element is in the DOM is fine, but we re-render on every state change so
