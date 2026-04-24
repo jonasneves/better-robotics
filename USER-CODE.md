@@ -104,8 +104,8 @@ the firmware enforces those caps regardless of dashboard-side clamps.
 
 What we DON'T need (and don't build):
 
-- **Code signing.** The dashboard's TOFU pairing is the trust. Browser
-  code is already inside that trust boundary.
+- **Code signing.** The dashboard's pubkey-pinned pairing is the trust.
+  Browser code is already inside that trust boundary.
 - **Sandbox.** The browser's same-origin model is the sandbox. The
   firmware's capability boundary is the *real* sandbox — it's what stops
   a runaway script from spinning the wheels at full power for 10 minutes.

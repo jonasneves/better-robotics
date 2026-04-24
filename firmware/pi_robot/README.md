@@ -4,12 +4,23 @@ Python robot firmware for the Raspberry Pi. Mirrors `firmware/esp32_robot/` — 
 
 ## BLE service
 
-Four characteristics under one service UUID:
+Core characteristics under one service UUID (others — motors, ops, telemetry, camera-signal/-status — are advertised dynamically via `fw-info` per the device's configured capabilities):
 
 - `led` — read/write/notify. 1 byte: 0 or 1.
 - `wifi-scan` — read/notify. JSON array of `{s, r, p}` (ssid, 0..100 strength, 1 if secured). Reading triggers a rescan; results arrive via notify.
 - `wifi-join` — write. JSON `{s, p}` (ssid, password). Empty password for open networks.
 - `wifi-status` — read/notify. JSON `{st, ssid, err}`. `st` ∈ `idle|joining|joined|failed`.
+
+## Device identity
+
+Generated at `firstrun.sh` if absent; survives SD re-imaging if preserved. Stored at `/var/lib/pi-robot/peer-key.json` (mode `0600`, directory `0700`, owner `pi`):
+
+```json
+{ "priv_b64": "<Ed25519 raw seed, 32 bytes, base64>",
+  "pub_b64":  "<Ed25519 raw public key, 32 bytes, base64>" }
+```
+
+`wifi_discover.py` reads `pub_b64` at startup and publishes it in each ad as `data.pubkey`. Deleting the file and re-running `firstrun.sh` rotates the identity (breaks any dashboard trust pinned to the old key); don't do that unless you mean it.
 
 ## SD-card first boot
 

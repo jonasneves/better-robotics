@@ -69,14 +69,7 @@ Commit + push when ready. CI rebuilds firmware artifacts on every change under `
 
 - `firmware/esp32_robot/` — ESP32 firmware (LED, WiFi onboarding, OTA, motors).
 - `firmware/pi_robot/` — Raspberry Pi firmware (Python + `bless`). Same service UUID and characteristic UUIDs as the ESP32 — indistinguishable from the dashboard's side. [Details + troubleshooting](firmware/pi_robot/README.md).
-- `public/` — the dashboard. ES modules:
-  - `app.js` — orchestration
-  - `capabilities/` — one file per BLE-backed capability (led, motors, wifi, ota, camera, admin)
-  - `ble.js`, `state.js`, `log.js`, `settings.js`, `dom.js` — shared infrastructure
-  - `gamepad.js`, `voice.js` — browser-input modules
-  - `prepare.js` — SD card customization dialog
-  - `recovery.js` — xterm.js USB serial console
-  - `scripts.js` — user code lives here, not on the Pi (see [USER-CODE.md](USER-CODE.md))
+- `public/` — the dashboard (static ES modules, no build step). Subsystem map + where new files belong: `.claude/CLAUDE.md` → "Subsystem map".
 
 ## Further reading
 

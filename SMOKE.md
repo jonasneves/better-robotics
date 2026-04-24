@@ -29,7 +29,9 @@ parts that don't need a robot. Everything below needs hardware.
 ## Capabilities
 
 - [ ] **LED** toggle from header without expanding → state updates without card flash.
-- [ ] **Motors** joypad drives the robot; releasing → watchdog stops within 500 ms.
+- [ ] **Motors — human joypad:** drag drives the robot; releasing → watchdog stops within 500 ms.
+- [ ] **Motors — pulse-bounded LLM path:** a Pip-issued motor command with `duration_ms` stops at the end of that window WITHOUT a separate stop call (firmware auto-stop). This is the control-loop invariant — regression means planner-layer code can leave the robot moving between decisions.
+- [ ] **Phone Stop button:** from a paired phone, tapping Stop relays through the desktop's BLE session and halts a moving robot. With no robot connected, the button surfaces "no robot connected" inline (no silent no-op — the safety primitive must be legible).
 - [ ] **WiFi** Scan returns networks (or empty if none); Join succeeds → status shows "WiFi <ip>" in meta.
 - [ ] **Camera (ESP32, MJPEG)** renders when WiFi joined; profile dropdown changes profile + restarts robot.
 - [ ] **Snapshot** completes in <5 s on standard profile; stalls trigger watchdog with retry.

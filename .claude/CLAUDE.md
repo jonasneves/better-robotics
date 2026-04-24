@@ -41,7 +41,7 @@ This is an AI-edited codebase. Every line of comment is context cost. The global
 
 # Dialog vs menu dismiss behavior
 
-- **Menus + popovers** (`robot-menu`, `avatar-menu`, help popovers): dismiss on both outside-click and Escape. Users reach for "click away" to close a menu; that's the expected affordance.
+- **Menus + popovers** (`robot-menu`, `avatar-menu`, help popovers, the `assistant-panel`): dismiss on both outside-click and Escape. Users reach for "click away" to close a menu; that's the expected affordance. Pip's panel is a `<div popover>` for a reason — it follows this rule, not the dialog rule, so proactive surfacing over modals works without a re-modal regression.
 - **Dialogs (all of them)**: close only via the explicit × button or Escape (native `<dialog>` default). Outside-click dismiss is NOT wired — same rule for quick-views and session dialogs alike, because the cost of accidentally nuking a session dialog (recovery terminal, SD prep) outweighs the tiny convenience win for reopening a quick-view. `wireDialogOutsideClick()` exists in `dom.js` but isn't used; keep it out unless there's a clear reason.
 
 # Control-loop invariants
@@ -51,6 +51,7 @@ Three design rules for anything that couples an LLM / VLM to the robot's motion.
 - **Safety below the planner.** Firmware-side limits (pulse duration cap, max LLM-driven speed, watchdog auto-stop) are the hard floor. Claude and Pip cannot bypass them — not even with a malformed or malicious tool call. Max LLM-issued motor speed is separately capped from max user-joystick speed; only the human can command "fast."
 - **Pulse-bounded motion under LLM control.** LLM-issued motor commands always carry `duration_ms` and the firmware auto-stops at the end. Persistent speed ("set and hold") is reserved for user joystick control, where a human is in the decision loop at 20Hz+. Between Pip decisions the robot is at rest — not cruising blindly while Claude thinks for 3 seconds.
 - **Confidence-based handoff is core policy, not a tool.** `ask_human_via_phone` isn't an escape hatch, it's the terminal rung of the decision cascade. The model should ask to be overridden rather than wait to be overridden. Any new planner-layer feature that doesn't have a "defer upward" path is incomplete.
+- **Pip reachability has a silent fallback.** `ask()` / `askWithTools()` retry via the local LFM model when the primary backend returns null AND `settings.pipLocalInstalled` is true (user opted in once; weights live in IndexedDB). A null Pip reply means BOTH the primary and the local retry returned null — not just the primary. Diagnose accordingly.
 
 # Connection-first init
 
