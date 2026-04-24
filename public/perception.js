@@ -133,6 +133,19 @@ async function runInference(entry, prompt) {
   return decoded[0]?.trim() || null;
 }
 
+// Bound any await that talks to the GPU — without this, a single slow
+// inference freezes every downstream tool call. We can't cancel the GPU
+// work from JS (transformers.js has no abort), but we can unblock the
+// caller so Pip's turn ends and it can decide what to do next.
+const OBSERVE_TIMEOUT_MS = 20000;
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 // On-demand one-shot inference with a caller-specified prompt. Used by Pip
 // (via pip-tools' ask_robot_scene) for cross-examination — asking the VLM
 // the same thing different ways to beat confirmation bias. Serializes
@@ -141,16 +154,17 @@ export async function observeOnce(entry, prompt) {
   if (!_model) throw new Error("perception model not loaded — user needs to enable Watch on this robot first");
   const loop = _loops.get(entry.id);
   // If the poll loop is mid-inference, wait for it to finish. One inference
-  // at a time on the GPU keeps things predictable.
+  // at a time on the GPU keeps things predictable. Bounded so a wedged loop
+  // tick can't keep observeOnce polling forever.
   if (loop?.running) {
-    await new Promise((r) => {
+    await withTimeout(new Promise((r) => {
       const check = () => (!loop.running ? r() : setTimeout(check, 100));
       check();
-    });
+    }), OBSERVE_TIMEOUT_MS, "waiting for poll-loop inference");
   }
   if (loop) loop.running = true;
   try {
-    return await runInference(entry, prompt);
+    return await withTimeout(runInference(entry, prompt), OBSERVE_TIMEOUT_MS, "VLM inference");
   } finally {
     if (loop) loop.running = false;
   }
