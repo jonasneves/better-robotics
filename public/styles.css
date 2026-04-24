@@ -1426,16 +1426,8 @@ dialog[open]::backdrop { opacity: 1; }
    Mascot stays visible; panel appears above with a tail pointing down. */
 .assistant-bubble {
   position: fixed;
-  /* popover="manual" puts the bubble in the browser's top layer so it
-     floats above any <dialog>.showModal() (pinout, recovery, etc.). The
-     top layer ignores z-index; these inset overrides counter the default
-     [popover] { inset: 0; margin: auto; } user-agent rule so the bubble
-     sticks to the bottom-right corner rather than centering in the viewport. */
-  left: auto;
-  top: auto;
   right: 20px;
   bottom: 20px;
-  margin: 0;
   width: 44px;
   height: 44px;
   min-height: 44px;
@@ -1452,7 +1444,6 @@ dialog[open]::backdrop { opacity: 1; }
   cursor: pointer;
   z-index: 20;
   transition: transform 0.15s ease-out;
-  overflow: visible;  /* user-agent [popover] sets overflow:auto which clips the icon */
 }
 .assistant-bubble:hover { transform: translateY(-3px); }
 .assistant-bubble:active { transform: translateY(0); }
@@ -1600,12 +1591,6 @@ dialog[open]::backdrop { opacity: 1; }
   .assistant-panel.fading { transition: none; }
 }
 
-/* `<dialog popover="manual">` has two display-gating rules fighting: the
-   user-agent `dialog:not([open]) { display:none }` and the popover-shown
-   state. Since we drive visibility through showPopover()/hidePopover() (not
-   the dialog [open] attribute), the user-agent dialog rule would keep it
-   hidden. Force block when popover is open to settle the tie. */
-.assistant-panel:popover-open { display: block; }
 .assistant-panel {
   position: fixed;
   right: 20px;

@@ -442,7 +442,7 @@
   </div>
 </dialog>
 
-<button id="assistant-bubble" class="assistant-bubble" popover="manual" aria-label="Open Pip">
+<button id="assistant-bubble" class="assistant-bubble" aria-label="Open Pip">
   <!-- Inlined (not `<use>`) so CSS keyframes can target the .robot-eyes/.robot-antenna
        classes — external stylesheets can't cross the shadow boundary of a `<use>` ref. -->
   <svg class="icon-svg robot-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -464,7 +464,7 @@
     </g>
   </svg>
 </button>
-<dialog id="assistant-panel" class="assistant-panel" popover="manual">
+<dialog id="assistant-panel" class="assistant-panel">
   <!-- No "Pip" label — the bubble tail identifies whose voice this is, same
        way iMessage/WhatsApp don't label each bubble with a sender name. The
        user's last question takes the place the title used to occupy,
