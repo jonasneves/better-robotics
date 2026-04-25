@@ -27,6 +27,7 @@ import { initPhones, setPhoneChatHandler, broadcastTargetInfo } from "./phones.j
 import { discover } from "./discover.js";
 import { getLoadState as getLocalLoadState, onLoadStateChange as onLocalLoadStateChange, loadModel as loadLocalModel } from "./local-llm.js";
 import { initHelpers, setHelpersRobotRenderer, renderHelpers } from "./helpers.js";
+import { startTracking as startArucoTracking, stopTracking as stopArucoTracking } from "./aruco.js";
 
 setLogRenderer((entry) => renderEntry(entry));
 setDisconnectHandler((id) => onDisconnected(id));
@@ -55,7 +56,9 @@ function telemetryHtml(entry) {
 // A phone helper's camera mounted on this robot (phone-as-eye). The video
 // element is discoverable by perception.js's findCameraElement enumerator
 // via [data-attached-camera-id]. srcObject is bound by renderEntry after
-// innerHTML rebuild.
+// innerHTML rebuild. The SVG sibling is the ArUco debug overlay — sized
+// to match the video's natural dims via patchArucoOverlay so corner
+// coords from aruco.js (image-pixel) don't need re-scaling per render.
 function attachedCameraHtml(entry) {
   if (!entry.attachedCameraStream) return "";
   return `
@@ -64,10 +67,57 @@ function attachedCameraHtml(entry) {
         <div class="label">Phone camera (mounted)</div>
       </div>
       <div class="cap-body">
-        <video class="robot-camera" data-attached-camera-id="${escapeHtml(entry.id)}" autoplay playsinline muted></video>
+        <div class="attached-camera-frame">
+          <video class="robot-camera" data-attached-camera-id="${escapeHtml(entry.id)}" autoplay playsinline muted></video>
+          <svg class="aruco-overlay" data-aruco-overlay-id="${escapeHtml(entry.id)}"></svg>
+        </div>
+        <div class="meta aruco-status" data-aruco-status-id="${escapeHtml(entry.id)}">
+          Aiming for an ArUco marker on the robot.
+          <a href="https://chev.me/arucogen/" target="_blank" rel="noopener">Print one</a>
+          (Original ArUco, id 0).
+        </div>
       </div>
     </div>
   `;
+}
+
+// Surgical patcher for the ArUco debug overlay. Called from the tracker
+// each tick — mutates the SVG in place so a 10 Hz detection rhythm
+// doesn't trigger full-card re-renders that would destroy other
+// in-flight UI (perception prompt, hover state, etc).
+function patchArucoOverlay(entry, markers) {
+  const node = entry.node;
+  if (!node) return;
+  const svg = node.querySelector(`svg[data-aruco-overlay-id="${entry.id}"]`);
+  if (!svg) return;
+  const status = node.querySelector(`[data-aruco-status-id="${entry.id}"]`);
+  if (markers.length === 0) {
+    svg.innerHTML = "";
+    if (status) status.classList.remove("aruco-locked");
+    return;
+  }
+  const { frameW, frameH } = markers[0];
+  svg.setAttribute("viewBox", `0 0 ${frameW} ${frameH}`);
+  // preserveAspectRatio default ("xMidYMid meet") matches how the video
+  // is letterboxed in its container — corners line up.
+  const pieces = [];
+  for (const m of markers) {
+    const pts = m.corners.map(c => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
+    // Heading line from center along the marker's "top edge" direction.
+    const len = Math.min(frameW, frameH) * 0.08;
+    const hx = m.cx + Math.cos(m.headingRad) * len;
+    const hy = m.cy + Math.sin(m.headingRad) * len;
+    pieces.push(`<polygon points="${pts}" />`);
+    pieces.push(`<line x1="${m.cx.toFixed(1)}" y1="${m.cy.toFixed(1)}" x2="${hx.toFixed(1)}" y2="${hy.toFixed(1)}" class="heading" />`);
+    pieces.push(`<text x="${m.cx.toFixed(1)}" y="${m.cy.toFixed(1)}" dy="-8">id ${m.id}</text>`);
+  }
+  svg.innerHTML = pieces.join("");
+  if (status) {
+    status.classList.add("aruco-locked");
+    status.textContent = markers.length === 1
+      ? `Tracking marker id ${markers[0].id}`
+      : `Tracking ${markers.length} markers`;
+  }
 }
 
 // The header meta line ("WiFi … · up …h · reset: …"). Reused by renderEntry
@@ -915,6 +965,16 @@ function renderEntry(entry) {
   if (entry.attachedCameraStream) {
     const v = entry.node.querySelector(`video[data-attached-camera-id="${entry.id}"]`);
     if (v) v.srcObject = entry.attachedCameraStream;
+    // Lazy-start ArUco tracking. The tracker is idempotent (returns if
+    // already running) — sourceFn re-resolves the <video> each tick so a
+    // re-render that swaps the element doesn't strand the loop.
+    startArucoTracking(
+      entry.id,
+      () => entry.node?.querySelector(`video[data-attached-camera-id="${entry.id}"]`),
+      (markers) => patchArucoOverlay(entry, markers),
+    );
+  } else {
+    stopArucoTracking(entry.id);
   }
   // Per-cap try/catch: one cap's wireActions throwing shouldn't silently
   // break wiring for every cap that comes after it. Surface the error so

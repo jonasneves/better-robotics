@@ -1357,6 +1357,48 @@ details.tray.has-alert > summary::after {
   object-fit: contain;
 }
 
+/* Attached-camera frame — wraps the <video> and the ArUco SVG overlay so
+   the overlay can absolute-position over the video without touching the
+   broader card layout. The video's object-fit:contain letterboxes inside
+   the 4:3 frame; preserveAspectRatio="xMidYMid meet" on the SVG matches
+   that letterboxing so detected corners line up. */
+.attached-camera-frame {
+  position: relative;
+  margin-top: 12px;
+}
+.attached-camera-frame .robot-camera { margin-top: 0; }
+.aruco-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  border-radius: 8px;
+}
+.aruco-overlay polygon {
+  fill: color-mix(in srgb, var(--success) 22%, transparent);
+  stroke: var(--success);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.aruco-overlay line.heading {
+  stroke: var(--success);
+  stroke-width: 3;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.aruco-overlay text {
+  fill: var(--success);
+  font-size: 14px;
+  font-weight: 600;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 3;
+}
+.aruco-status { margin-top: 8px; }
+.aruco-status.aruco-locked { color: var(--success); }
+
 /* Flex column with gap is immune to margin-collapse + specificity edge cases —
    spacing stays right whether the .empty-sub is present or not. */
 .empty-state { text-align: center; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
