@@ -1684,45 +1684,14 @@ dialog[open]::backdrop { opacity: 1; }
 /* Helpers are operator-side leftovers (laptop cam, paired phones not yet
    mounted on a robot) — the eye should land on the empty-state / robot
    cards first, then notice helpers as a quiet list. Card chrome would
-   make them compete; rows separated by a divider read subordinate.
-
-   The section header is iOS-Settings-quiet (small uppercase muted), not
-   the bold "Your robots" register — that parallelism implied equal
-   weight, but helpers are supporting cast. The "Pair phone" action lives
-   below the list as an inline `+ Pair phone` so the action attaches to
-   the section it adds to instead of competing with the section title. */
-.helpers-section { max-width: 440px; }
-.helpers-label {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: var(--ink-muted);
-  margin: 24px 0 8px;
-  padding: 0 4px;
-}
-.helpers-add {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 0 4px;
-}
-.link-btn {
-  background: transparent;
-  border: none;
-  padding: 4px 6px;
-  color: var(--ink-muted);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  border-radius: 4px;
-}
-.link-btn:not(:disabled):hover { color: var(--ink); background: var(--border-subtle); }
+   make them compete; rows separated by a divider read subordinate. */
 #helpers-list {
   display: block;
-  margin-bottom: 0;
+  /* Cap matches the robot-card cap so the row's right-aligned action sits
+     close to its identity instead of flying out to the page edge — without
+     card chrome, the full-page-width geometry reads as disconnected. */
+  max-width: 440px;
+  margin-bottom: 16px;
 }
 #helpers-list > .card {
   margin-bottom: 0;
