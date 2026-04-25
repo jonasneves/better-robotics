@@ -1157,6 +1157,9 @@ details.tray.has-alert > summary::after {
   align-items: center;
   margin-top: 12px;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .joypad {
   width: 180px;
@@ -1832,6 +1835,28 @@ body.phone {
      overflows naturally — see .phone-chat comment below), so override. */
   overflow: auto;
   -webkit-overflow-scrolling: touch;
+  /* Phone is a touch surface — drags that incidentally cross labels/
+     headings shouldn't trigger text selection, and the iOS tap-highlight
+     rectangle + long-press callout read as bugs when the user is trying
+     to drive a robot. Suppress globally; re-enabled below on the few
+     elements where text selection actually serves the user. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Re-enable text selection on content the user genuinely reads / copies:
+   Pip's chat replies, the scene caption, and any text inputs. The carve-
+   out is narrow on purpose — adding more here means losing the drag-
+   safety on the rest of the page. */
+body.phone .phone-chat,
+body.phone .phone-message,
+body.phone .phone-echo,
+body.phone .phone-scene-text,
+body.phone input,
+body.phone textarea {
+  user-select: text;
+  -webkit-user-select: text;
 }
 .phone-main {
   display: flex;
