@@ -561,7 +561,7 @@ details.tray.has-alert > summary::after {
   vertical-align: middle;
 }
 
-.empty-state .empty-actions { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
+.empty-state .empty-actions { display: flex; gap: 8px; justify-content: center; }
 .gamepad-dot { font-size: 12px; margin-left: 4px; vertical-align: middle; }
 
 #robot-list {
@@ -1357,9 +1357,11 @@ details.tray.has-alert > summary::after {
   object-fit: contain;
 }
 
-.empty-state { text-align: center; padding: 32px 24px; }
-.empty-state .empty-title { font-size: 15px; font-weight: 500; margin-bottom: 20px; }
-.empty-state .empty-sub { color: var(--ink-muted); font-size: 13px; margin-bottom: 20px; }
+/* Flex column with gap is immune to margin-collapse + specificity edge cases —
+   spacing stays right whether the .empty-sub is present or not. */
+.empty-state { text-align: center; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+.empty-state .empty-title { font-size: 15px; font-weight: 500; }
+.empty-state .empty-sub { color: var(--ink-muted); font-size: 13px; }
 .empty-state button { padding: 10px 20px; }  /* more breathing room for the primary CTA */
 
 .log {
