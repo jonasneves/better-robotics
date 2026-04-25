@@ -633,6 +633,11 @@ def _drive(motor: Motor | None, value: int) -> None:
 
 def _apply_motors(left: int, right: int) -> None:
     global _motor_left, _motor_right
+    # Held joystick at constant speed re-publishes at full rate (~60 Hz from
+    # the dashboard); skip the BLE notify and PWM re-issue when nothing
+    # changed. Watchdog still resets on every char-write upstream.
+    if left == _motor_left and right == _motor_right:
+        return
     _motor_left, _motor_right = left, right
     _drive(_motor_left_drv, left)
     _drive(_motor_right_drv, right)

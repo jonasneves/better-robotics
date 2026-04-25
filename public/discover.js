@@ -1,32 +1,8 @@
-// LAN-scoped peer discovery client.
-//
-// Subscribes to /discover/ws on the signal server. Every connected client
-// behind the same public IP shares one Lobby DO and sees the same set of
-// advertisements. Use it to surface "there's a peer on your network — tap
-// to connect" UI without the user scanning a QR.
-//
-// Privacy: ads are visible to anyone behind the same NAT. Treat them as
-// hints, not credentials. The actual room ID inside an ad is still a
-// capability — defense-in-depth comes from your room-level auth, not from
-// the discovery layer.
-//
-// Usage (anonymous mode):
-//   import { discover } from './discover.js';
-//   const lobby = discover();
-//   const stop = lobby.onChange(ads => render(ads));
-//   lobby.publish('my-id', { app: 'foo', roomId: 'abc' }, 60_000);
-//   lobby.remove('my-id');
-//   lobby.close();
-//
-// Usage (signed mode — opt-in):
-//   const lobby = discover({ sign: true });
-//   await lobby.publish(...);  // ad gets _pubkey + _sig fields auto-attached
-//   lobby.onChange(ads => ...);  // unsigned + invalid-sig ads are dropped
-// Consumers build trust on top: the verified _pubkey is the "is this the
-// device I paired before" continuity primitive. peer-key.js manages the
-// device key. Consumers bind trust via an out-of-band channel:
-// a QR scan (encoding the publisher pubkey) or an explicit
-// accept/deny prompt carrying the user real-time consent.
+// Every connected client behind the same public IP shares one Lobby DO on
+// the signal server and sees the same set of ads. Privacy: ads are visible
+// to anyone behind the same NAT — treat them as hints, not credentials.
+// Room IDs inside ads are still capabilities; trust comes from room-level
+// auth, not from the discovery layer.
 
 import { getMyPubkeyB64, signBytes, verifyBytes, canonical } from './peer-key.js';
 

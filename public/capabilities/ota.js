@@ -3,7 +3,7 @@
 // otherwise BLE stream with flow-controlled WithoutResponse chunk writes.
 import {
   OTA_DATA_CHAR_UUID, OTA_STATUS_CHAR_UUID,
-  decodeJson,
+  decodeJson, encodeJson,
 } from "../ble.js";
 import { freshUrl, escapeHtml, fetchWithTimeout } from "../dom.js";
 import { logFor, log } from "../log.js";
@@ -26,7 +26,7 @@ export async function uploadFile(id, filename, destPath, contentBytes, { restart
   const manifest = { files: [{ src: filename, dest: destPath, mode }] };
   if (restart) manifest.restart = restart;
   const bundle = { manifest, files: { [filename]: btoa(bin) } };
-  const payload = new TextEncoder().encode(JSON.stringify(bundle));
+  const payload = encodeJson(bundle);
   await acquireWakeLock();
   try {
     logFor(entry, `uploading ${filename} → ${destPath} (${contentBytes.length} B)`);
@@ -133,8 +133,9 @@ async function streamOtaBytes(entry, bytes) {
 async function buildBundle(entry, manifestUrl) {
   manifestUrl = manifestUrl || entry.fwInfo?.bundle_url;
   const manifest = await (await fetchWithTimeout(freshUrl(manifestUrl), { cache: "no-cache" })).json();
-  const files = {};
-  for (const spec of manifest.files || []) {
+  // Files are independent — fetch in parallel. Order in `files` object is
+  // preserved (Promise.all + map) so the firmware sees them in manifest order.
+  const entries = await Promise.all((manifest.files || []).map(async (spec) => {
     const src = spec.src;
     // 60s per file — bundle binaries can be a few MB on a slow connection.
     const buf = await (await fetchWithTimeout(freshUrl(`firmware/pi_robot/${src}`), { cache: "no-cache" }, 60000)).arrayBuffer();
@@ -144,9 +145,9 @@ async function buildBundle(entry, manifestUrl) {
     for (let i = 0; i < bytes.length; i += 0x8000) {
       bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     }
-    files[src] = btoa(bin);
-  }
-  return { manifest, files };
+    return [src, btoa(bin)];
+  }));
+  return { manifest, files: Object.fromEntries(entries) };
 }
 
 // Direct HTTP POST to the ESP32's /ota endpoint over the local network. First
@@ -157,18 +158,14 @@ async function pnaOtaUpload(entry, bytes) {
   const ip = entry.wifiStatus?.ip;
   if (!ip) return false;
   const url = `http://${ip}/ota`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30000);
   try {
     logFor(entry, `PNA direct OTA → ${url} (${bytes.length} B)`);
-    const resp = await fetch(url, {
+    const resp = await fetchWithTimeout(url, {
       method: "POST",
       mode: "cors",
       body: bytes,
       headers: { "Content-Type": "application/octet-stream" },
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
+    }, 30000);
     if (!resp.ok) {
       logFor(entry, `PNA returned ${resp.status}`);
       return false;
@@ -176,7 +173,6 @@ async function pnaOtaUpload(entry, bytes) {
     logFor(entry, "PNA OTA committed — robot restarting");
     return true;
   } catch (err) {
-    clearTimeout(timer);
     logFor(entry, `PNA failed: ${err.message}`);
     return false;
   }
@@ -199,7 +195,7 @@ export async function updateFirmware(id) {
     let bytes, bundle;
     try {
       bundle = await buildBundle(entry, bundleUrl);
-      bytes = new TextEncoder().encode(JSON.stringify(bundle));
+      bytes = encodeJson(bundle);
       const stamp = bundle.manifest.commit ? ` · commit ${bundle.manifest.commit}` : "";
       logFor(entry, `bundle ready: ${bundle.manifest.files.length} files, ${bytes.length} B${stamp}`);
     } catch (err) {

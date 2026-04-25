@@ -4,7 +4,7 @@
 //     install?: { pkg: "camera", confirm: "..." } }
 // Chunked opcode protocol used on both directions (browser→robot via signal,
 // robot→browser via status notify). Install routes through the `command` cap.
-import { UUIDS_BY_CAP } from "../../ble.js";
+import { UUIDS_BY_CAP, encodeJson, decodeJson } from "../../ble.js";
 import { escapeHtml } from "../../dom.js";
 import { logFor } from "../../log.js";
 import { state } from "../../state.js";
@@ -48,7 +48,7 @@ export function makeWebrtcInstallableCap(schema) {
   async function sendSignal(entry, msg) {
     const ch = entry[signalField];
     if (!ch) return;
-    const bytes = new TextEncoder().encode(JSON.stringify(msg));
+    const bytes = encodeJson(msg);
     const begin = new Uint8Array(5);
     begin[0] = OP_BEGIN;
     new DataView(begin.buffer).setUint32(1, bytes.length, false);
@@ -94,9 +94,8 @@ export function makeWebrtcInstallableCap(schema) {
       let off = 0;
       for (const c of entry[bufField]) { merged.set(c, off); off += c.length; }
       entry[bufField] = null;
-      let msg;
-      try { msg = JSON.parse(new TextDecoder().decode(merged)); }
-      catch { return; }
+      const msg = decodeJson(merged);
+      if (!msg) return;
       handleMessage(entry, msg);
     }
   }

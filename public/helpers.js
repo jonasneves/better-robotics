@@ -88,10 +88,6 @@ export function setPhoneStream(phoneId, stream) {
   render();
 }
 
-export function getPhoneStream(phoneId) {
-  return _phoneStreams.get(phoneId)?.stream || null;
-}
-
 export async function startHelperCamera(helperId) {
   if (helperId === LAPTOP_ID) return await startLaptopCam();
   if (helperId.startsWith("phone:")) {

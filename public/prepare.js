@@ -105,10 +105,10 @@ async function runPrepare() {
 
     prepLog("Fetching firmware files…");
     const betterpi = await ensureDir(dirHandle, "betterpi");
-    for (const f of FIRMWARE_FILES) {
+    await Promise.all(FIRMWARE_FILES.map(async (f) => {
       await writeFile(betterpi, f, await fetchBlob(`${FIRMWARE_URL}/${f}`));
       prepLog(`  ✓ ${f}`, "ok");
-    }
+    }));
 
     prepLog("Fetching wheels manifest…");
     const manifest = await (await fetchWithTimeout(freshUrl(`${FIRMWARE_URL}/wheels/manifest.json`), { cache: "no-cache" })).json();
@@ -116,10 +116,10 @@ async function runPrepare() {
     for await (const entry of wheels.values()) {
       if (entry.kind === "file") await wheels.removeEntry(entry.name).catch(() => {});
     }
-    for (const filename of manifest.wheels) {
+    await Promise.all(manifest.wheels.map(async (filename) => {
       await writeFile(wheels, filename, await fetchBlob(`${FIRMWARE_URL}/wheels/${filename}`));
       prepLog(`  ✓ ${filename}`, "ok");
-    }
+    }));
 
     prepLog("Rendering firstrun.sh…");
     const firstrun = renderFirstrun(template, {

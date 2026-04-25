@@ -1,19 +1,15 @@
 // Expected schema shape:
 //   { name: "ops", char: "…d9c", type: "command" }
 // Op-name vocabulary must match the Pi's `_ops_handle_write` dispatcher.
-import { UUIDS_BY_CAP } from "../../ble.js";
+import { UUIDS_BY_CAP, encodeJson } from "../../ble.js";
 import { logFor } from "../../log.js";
 import { state } from "../../state.js";
-
-let renderEntry = () => {};
-export function setRender(fn) { renderEntry = fn; }
 
 export async function sendCommand(entry, capName, msg) {
   const ch = entry?.[`${capName}Char`];
   if (!ch) return false;
-  const bytes = new TextEncoder().encode(JSON.stringify(msg));
   try {
-    await ch.writeValueWithResponse(bytes);
+    await ch.writeValueWithResponse(encodeJson(msg));
     return true;
   } catch (err) {
     logFor(entry, `${capName} write failed: ${err.message}`);

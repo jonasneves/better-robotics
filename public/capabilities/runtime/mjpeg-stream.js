@@ -7,7 +7,7 @@
 // only when the dashboard's browser and the robot share a network.
 // Profile picker is rendered when the schema carries a `profiles` list;
 // writes go to CAMERA_PROFILE_CHAR_UUID, firmware persists + restarts.
-import { CAMERA_PROFILE_CHAR_UUID } from "../../ble.js";
+import { CAMERA_PROFILE_CHAR_UUID, encodeJson } from "../../ble.js";
 import { escapeHtml } from "../../dom.js";
 import { logFor } from "../../log.js";
 import {
@@ -152,9 +152,7 @@ export function makeMjpegStreamCap(schema) {
           return;
         }
         try {
-          await entry[profileField].writeValueWithResponse(
-            new TextEncoder().encode(JSON.stringify({ profile: next })),
-          );
+          await entry[profileField].writeValueWithResponse(encodeJson({ profile: next }));
           logFor(entry, `camera profile → ${next} (robot restarting)`);
         } catch (err) {
           logFor(entry, `profile write failed: ${err.message}`);

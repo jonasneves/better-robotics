@@ -117,15 +117,25 @@ export async function getRecentActions(sessionId, n = 10) {
   if (!sessionId) return [];
   const limit = Math.min(Math.max(Number(n) || 10, 1), 50);
   const db = await openDb();
+  // Cursor the sessionId index in "prev" direction so the iterator yields
+  // newest-first (records are inserted in chronological order, and "prev"
+  // within an equal-key range orders by descending primary key). Break at
+  // limit instead of getAll → sort → slice — long sessions with image-
+  // bearing records would otherwise serialize many MB just to drop them.
   const records = await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readonly");
     const idx = tx.objectStore(STORE).index("sessionId");
-    const req = idx.getAll(IDBKeyRange.only(sessionId));
-    req.onsuccess = () => resolve(req.result || []);
+    const out = [];
+    const req = idx.openCursor(IDBKeyRange.only(sessionId), "prev");
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor || out.length >= limit) { resolve(out); return; }
+      out.push(cursor.value);
+      cursor.continue();
+    };
     req.onerror = () => reject(req.error);
   });
-  records.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
-  return records.slice(0, limit).map(sanitizeRecord);
+  return records.map(sanitizeRecord);
 }
 
 function sanitizeRecord(r) {

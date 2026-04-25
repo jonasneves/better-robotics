@@ -472,9 +472,8 @@ async function connect(id) {
           let o = 0;
           for (const c of entry.opsRespBuf) { merged.set(c, o); o += c.length; }
           entry.opsRespBuf = null;
-          let msg;
-          try { msg = JSON.parse(new TextDecoder().decode(merged)); }
-          catch { return; }
+          const msg = decodeJson(merged);
+          if (!msg) return;
           dispatchOpsResponse(entry, msg);
         }
       });

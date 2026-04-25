@@ -7,6 +7,7 @@ import { sendPairById } from "./capabilities/runtime/signed-pair.js";
 const GAMEPAD_DEADZONE = 0.10;
 let _gamepadTargetId = null;
 let _gamepadRafHandle = null;
+let _lastSent = { id: null, l: 0, r: 0 };
 
 function pickGamepadTarget() {
   if (_gamepadTargetId) {
@@ -44,7 +45,18 @@ function gamepadTick() {
       const dz = Math.abs(v) < GAMEPAD_DEADZONE ? 0 : v;
       return Math.round(-dz * 100);  // invert so stick-up = forward
     };
-    sendPairById(id, "motors", toMotor(ly), toMotor(ry));
+    const l = toMotor(ly);
+    const r = toMotor(ry);
+    // Pi has a 500 ms motor watchdog — held-stick must keep refreshing it,
+    // so only skip when both current and last frame are at-rest (0,0).
+    // The transition to (0,0) still writes once so motors stop immediately
+    // rather than waiting for the watchdog.
+    const atRest = l === 0 && r === 0 && _lastSent.l === 0 && _lastSent.r === 0
+      && id === _lastSent.id;
+    if (!atRest) {
+      sendPairById(id, "motors", l, r);
+      _lastSent = { id, l, r };
+    }
   }
   renderGamepadBadge(id, pad.id);
   _gamepadRafHandle = requestAnimationFrame(gamepadTick);
