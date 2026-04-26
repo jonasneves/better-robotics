@@ -18,9 +18,8 @@ from bless import (
 
 # Distinct UUID family from pi-robot's main service — dashboard scans for
 # either, so the robot appears whether or not the main firmware is alive.
-# Must match public/ble.js HEARTBEAT_*_UUID exactly.
-HEARTBEAT_SVC_UUID  = "b6e8d5f3-2c9d-4bba-ae5e-6f9b8c7d5eb0"
-HEARTBEAT_CHAR_UUID = "b6e8d5f3-2c9d-4bba-ae5e-6f9b8c7d5eb1"
+# Constants generated from protocol/uuids.json (see tools/gen-uuids.py).
+from uuids import HEARTBEAT_SVC_UUID, HEARTBEAT_CHAR_UUID  # noqa: F401
 
 REFRESH_S = 10
 _started_at = time.monotonic()

@@ -41,32 +41,29 @@ from bless import (
 )
 from gpiozero import LED, Motor
 
-# UUIDs — must match firmware/esp32_robot/esp32_robot.ino exactly.
-SERVICE_UUID          = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d91"
-LED_CHAR_UUID         = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d92"
-WIFI_SCAN_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d93"
-WIFI_JOIN_CHAR_UUID   = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d94"
-WIFI_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d95"
-OTA_DATA_CHAR_UUID    = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d96"
-OTA_STATUS_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d97"
-FW_INFO_CHAR_UUID     = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d98"
-MOTOR_CHAR_UUID       = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d99"
-# Camera signaling chars use the same chunked protocol as OTA:
-#   camera-signal (write)   — SDP offer / ICE candidate / stop from the browser
-#   camera-status (notify)  — status + outbound SDP answer / ICE back to browser
-CAMERA_SIGNAL_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9a"
-CAMERA_STATUS_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9b"
-# Ops channel — JSON-command surface. Format: single write of utf-8 JSON like
-# {"op": "restart-service"} or {"op": "install-pkg", "args": {"name":"camera"}}.
-OPS_CHAR_UUID           = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9c"
-# Robot-status: top-level "what is this robot doing right now" channel,
-# complementing per-capability statuses. JSON {st, msg?}. Notify + read.
-ROBOT_STATUS_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9d"
-# ops-response: chunked JSON responses to ops requests that need a payload
-# back (get-log, get-config…). Same chunked protocol as OTA/camera.
-OPS_RESPONSE_CHAR_UUID  = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9e"
-# Telemetry: periodic robot vitals — uptime/mem/temp. Small JSON, notify.
-TELEMETRY_CHAR_UUID     = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9f"
+# UUIDs are generated from protocol/uuids.json — see tools/gen-uuids.py.
+# Edit the JSON + run `make gen-uuids` to add a characteristic; both the
+# ESP32 firmware AND the dashboard pull from the same source so a typo in
+# one place can't silently desync the protocol. Channel role-comments now
+# live next to their handlers below; the constants themselves are pure
+# name → uuid bindings in the generated file.
+from uuids import (  # noqa: F401 — re-exported for clarity / import sites elsewhere
+    SERVICE_UUID,
+    LED_CHAR_UUID,
+    WIFI_SCAN_CHAR_UUID,
+    WIFI_JOIN_CHAR_UUID,
+    WIFI_STATUS_CHAR_UUID,
+    OTA_DATA_CHAR_UUID,
+    OTA_STATUS_CHAR_UUID,
+    FW_INFO_CHAR_UUID,
+    MOTOR_CHAR_UUID,
+    CAMERA_SIGNAL_CHAR_UUID,
+    CAMERA_STATUS_CHAR_UUID,
+    OPS_CHAR_UUID,
+    ROBOT_STATUS_CHAR_UUID,
+    OPS_RESPONSE_CHAR_UUID,
+    TELEMETRY_CHAR_UUID,
+)
 
 # Capability schema — built at startup from config. Types name a UI/data
 # shape (toggle, signed-pair, wifi-scan, bundle-ota, webrtc-installable,
