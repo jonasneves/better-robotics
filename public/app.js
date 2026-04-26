@@ -1117,14 +1117,19 @@ function openMenu(triggerBtn, id) {
     header.hidden = true;
   }
   // Gate ops-dependent items on the presence of the ops channel. ESP32 has
-  // no opsChar, so restart/reboot/log/pinout would be no-ops and the log
-  // dialog would sit forever on "Loading…" waiting for a response that
-  // can't come. Hide them instead of letting the user click into a dead end.
+  // no opsChar, so restart/reboot/log would be no-ops and the log dialog
+  // would sit forever on "Loading…" waiting for a response that can't
+  // come. Hide them instead of letting the user click into a dead end.
   const hasOps = !!entry?.opsChar;
   $("menu-restart").hidden = !hasOps;
   $("menu-reboot").hidden  = !hasOps;
   $("menu-log").hidden     = !hasOps;
-  $("menu-pinout").hidden  = !hasOps;
+  // Pinout dialog handles both platforms: Pi via get-config + bundle OTA
+  // (needs opsChar + otaDataChar — gated inside renderView's edit button);
+  // ESP32 reads pins from fw-info and writes via PIN_CONFIG_CHAR (no ops
+  // dependency). Gate on "connected and has fw-info" so either path can
+  // render whatever it's capable of, and the menu is reachable for ESP32.
+  $("menu-pinout").hidden  = !(entry?.status === "connected" && entry?.fwInfo);
   const rect = triggerBtn.getBoundingClientRect();
   // Position below-right of trigger, nudging left if it would overflow viewport.
   const menuWidth = 220;
