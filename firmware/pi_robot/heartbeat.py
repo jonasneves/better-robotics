@@ -39,7 +39,7 @@ def _device_name() -> str:
         pass
     if not suffix:
         suffix = socket.gethostname()[-4:].upper().ljust(4, "0")
-    return f"BetterRobot-{suffix}"
+    return f"BR-{suffix}"
 
 
 def _ip() -> str | None:

@@ -323,7 +323,7 @@ _cam_installing: bool = False
 
 
 def device_name() -> str:
-    """BetterRobot-XXXX with a stable per-chip suffix, matching ESP32 naming."""
+    """BR-XXXX with a stable per-chip suffix, matching ESP32 naming."""
     suffix = None
     try:
         with open("/proc/cpuinfo") as f:
@@ -335,7 +335,7 @@ def device_name() -> str:
         pass
     if not suffix:
         suffix = socket.gethostname()[-4:].upper().ljust(4, "0")
-    return f"BetterRobot-{suffix}"
+    return f"BR-{suffix}"
 
 
 def _json_bytes(obj) -> bytearray:

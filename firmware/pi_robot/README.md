@@ -45,7 +45,7 @@ pip install -r requirements.txt
 python3 pi_robot.py
 ```
 
-Needs `bluetoothd` running and (usually) the user in the `bluetooth` group. The robot advertises as `BetterRobot-XXXX` (suffix derived from the Pi's chip serial). Scan for it from the dashboard at [neevs.io/better-robotics](https://neevs.io/better-robotics/).
+Needs `bluetoothd` running and (usually) the user in the `bluetooth` group. The robot advertises as `BR-XXXX` (suffix derived from the Pi's chip serial). Scan for it from the dashboard at [neevs.io/better-robotics](https://neevs.io/better-robotics/).
 
 ## LED wiring
 

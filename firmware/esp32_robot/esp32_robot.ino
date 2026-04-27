@@ -128,9 +128,9 @@ static bool _motors_attached = false;
 const size_t SCAN_MAX = 10;
 
 // Set in setup() once the chip-id-derived name is built; used by BLE
-// advertising, the wifi-discover ad, and serial diagnostics. File-scope
-// so the discover task can read it without a parameter wedge.
-static char robotName[32] = "BetterRobot-XXXX";
+// advertising, mDNS service publishing, and serial diagnostics. File-scope
+// so the mDNS startup can read it without a parameter wedge.
+static char robotName[32] = "BR-XXXX";
 
 BLECharacteristic* ledChar        = nullptr;
 BLECharacteristic* wifiScanChar   = nullptr;
@@ -1277,9 +1277,13 @@ void setup() {
   // to need the Classic BT memory during init even when only BLE is used.
   // Do not re-add without also switching the controller mode explicitly.
 
-  // Stable per-chip suffix — low 16 bits of the WiFi MAC.
+  // Stable per-chip suffix — low 16 bits of the WiFi MAC. "BR-" prefix
+  // (was "BetterRobot-") shortens the BLE-advertised name + the mDNS
+  // hostname (br-e9d4.local vs betterrobot-e9d4.local) so it fits cleanly
+  // in narrow card widths and on the Web Bluetooth chooser. The dashboard's
+  // split-on-last-hyphen prefix-dimming logic is prefix-agnostic.
   uint64_t chipid = ESP.getEfuseMac();
-  snprintf(robotName, sizeof(robotName), "BetterRobot-%04X", (uint16_t)(chipid & 0xFFFF));
+  snprintf(robotName, sizeof(robotName), "BR-%04X", (uint16_t)(chipid & 0xFFFF));
   const char* name = robotName;  // local alias keeps the rest of setup unchanged
 
   // Allocation order on classic ESP32-CAM where BLE + WiFi + esp32-camera
