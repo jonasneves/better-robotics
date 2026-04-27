@@ -9,17 +9,18 @@
 // "always show motors" preference is the same across all their robots.
 import { escapeHtml } from "../../dom.js";
 
-const STORE_KEY = "better-robotics:cap-open:v1";
+// v2 — bumped when the default-open shape changed: previously motors
+// defaulted to open (it's the verb); the new shape is "all collapsed,
+// user expands what they need." The bump invalidates pre-v2 prefs so
+// existing operators get the cleaner default instead of carrying their
+// old "every cap I ever opened stays open forever" state.
+const STORE_KEY = "better-robotics:cap-open:v2";
 
-// Sensible defaults: motors is the verb, others are situational.
-const DEFAULTS = {
-  motors: true,
-  led: false,
-  wifi: false,
-  camera: false,
-  snapshot: false,
-  ops: false,
-};
+// All collapsed by default. Hick's law: 7+ equally-weighted controls
+// visible at once slows decisions; progressive disclosure puts each one
+// behind a single tap and lets the user open the 1-2 they're using
+// right now. Override per-cap via setOpen (persisted in localStorage).
+const DEFAULTS = {};
 
 let _state = null;
 function load() {

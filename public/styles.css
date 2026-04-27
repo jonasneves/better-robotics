@@ -506,7 +506,29 @@ a.menu-item { text-decoration: none; }
   transition: transform 0.2s ease-out;
 }
 .robot.expanded .disclosure-chevron { transform: rotate(0); }
-.robot-actions { display: flex; gap: 4px; align-items: center; }
+.robot-actions { display: flex; gap: 6px; align-items: center; }
+
+/* Active-ops chips — at-a-glance "what's happening" without expanding
+   each cap row. Sits next to the meta line in the secondary row. Each
+   chip is small and unobtrusive; the LACK of chips is the steady state. */
+.robot-ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 8px;
+}
+.robot-ops .op-chip {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (prefers-color-scheme: dark) {
+  .robot-ops .op-chip { color: #5aa9d6; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .disclosure-chevron { transition: none; }

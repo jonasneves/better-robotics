@@ -998,6 +998,31 @@ function renderEntry(entry) {
   // Always emit the wrapper (even empty) so patchSecondaryRow can fill it on
   // telemetry/wifi notify without a full re-render. CSS :empty hides it.
   const metaRow = `<div class="robot-meta">${escapeHtml(metaParts.join(" · "))}</div>`;
+
+  // Active-ops chips: at-a-glance "what's happening right now" without
+  // having to expand each capability section. Each cap surfaces its
+  // running-state in its own row; this strip aggregates them so a list
+  // of robots reads "this one is streaming + this one is OTAing"
+  // without per-card eye-walks.
+  const activeOps = [];
+  if (connected) {
+    if (entry.cameraRunning || entry.cameraStream) activeOps.push("streaming");
+    if ((entry.motorLeft || 0) !== 0 || (entry.motorRight || 0) !== 0) {
+      activeOps.push(`motors L:${entry.motorLeft || 0} R:${entry.motorRight || 0}`);
+    }
+    if ((entry.flashLevel || 0) > 0) activeOps.push(`flash ${entry.flashLevel}%`);
+    const oSt = entry.otaStatus?.st;
+    if (oSt && oSt !== "idle") {
+      const total = entry.otaStatus.total || 0;
+      const n = entry.otaStatus.n || entry.otaSent || 0;
+      const pct = total ? Math.round(100 * n / total) : 0;
+      activeOps.push(total ? `OTA ${oSt} ${pct}%` : `OTA ${oSt}`);
+    }
+    if (entry.snapshotBusy) activeOps.push("snapshotting…");
+  }
+  const opsRow = activeOps.length
+    ? `<div class="robot-ops">${activeOps.map(o => `<span class="op-chip">${escapeHtml(o)}</span>`).join("")}</div>`
+    : "";
   // Split on the last hyphen so the common "BetterRobot-" prefix dims and the
   // distinguishing suffix ("E9D4") carries the visual weight. Names without a
   // hyphen render plainly.
@@ -1018,12 +1043,6 @@ function renderEntry(entry) {
         ${statusText ? `<div class="status">${statusText}</div>` : ""}
       </div>
       <div class="robot-actions">
-        <button class="icon" data-action="menu" aria-label="More actions"><svg class="icon-svg"><use href="icons.svg#icon-more"/></svg></button>
-      </div>
-    </div>
-    <div class="robot-secondary">
-      ${metaRow}
-      <div class="robot-cta">
         ${connected
           ? `<button class="secondary sm" data-action="disconnect">Disconnect</button>`
           : `<button class="sm" data-action="connect" ${connecting ? "disabled" : ""}>${
@@ -1032,7 +1051,12 @@ function renderEntry(entry) {
               : entry.device ? "Connect"
               : "Pair"
             }</button>`}
+        <button class="icon" data-action="menu" aria-label="More actions"><svg class="icon-svg"><use href="icons.svg#icon-more"/></svg></button>
       </div>
+    </div>
+    <div class="robot-secondary">
+      ${metaRow}
+      ${opsRow}
     </div>
     ${entry.staleHandle && !connected && !connecting ? `
       <div class="meta robot-stale-hint">
