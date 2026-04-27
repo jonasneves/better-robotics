@@ -48,21 +48,30 @@ jobs:
       - name: Publish Pi firmware + wheels
         run: make publish-pi-firmware
 
-      - name: Commit published artifacts
+      - name: Commit + push published artifacts
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add public/firmware/
-          if git diff --staged --quiet; then
-            echo 'No artifact changes — nothing to publish.'
-            exit 0
-          fi
-          git commit -m 'CI: publish firmware [skip ci]'
-          # main may have moved while we were building; rebase-and-push
-          # with a few retries so a concurrent human push doesn't kill us.
+          # main may have moved while we were building. Soft-reset to the
+          # latest main on each retry and recommit our staged artifacts
+          # on top — avoids rebase merge-conflicts on binary outputs
+          # (esp32_robot.bin, version.py, ota-manifest.json) when two CI
+          # runs race. Outputs are deterministic from source, so "ours"
+          # is always correct: we don't merge two builds, we replace.
           for attempt in 1 2 3 4 5; do
-            git pull --rebase origin main || true
-            if git push; then
+            git fetch origin main
+            # Drop any prior attempt's commit; keep the artifact files
+            # only as a working-tree change. This is a no-op on attempt 1
+            # (we're already at HEAD), but on retries it parks our
+            # generated files for re-staging on top of fresh origin/main.
+            git reset --mixed origin/main
+            git add public/firmware/
+            if git diff --staged --quiet; then
+              echo 'No artifact changes — nothing to publish.'
+              exit 0
+            fi
+            git commit -m 'CI: publish firmware [skip ci]'
+            if git push origin HEAD:main; then
               exit 0
             fi
             echo "Push attempt $attempt failed; retrying after sleep…"
