@@ -551,10 +551,27 @@ static void streamTask(void* param) {
         camera_fb_t *fb = esp_camera_fb_get();
         if (!fb) break;
         client.printf("\r\n--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
-        size_t written = client.write(fb->buf, fb->len);
+        // Chunk the JPEG body into 1 KB writes with a yield between each.
+        // Single-shot client.write of a full ~10-15 KB JPEG can block long
+        // enough on degraded WiFi (1 of 4 RX buffers under BLE coexistence)
+        // for the IDLE-task watchdog to fire and reset the chip mid-stream.
+        size_t total = 0;
+        const size_t WRITE_CHUNK = 1024;
+        bool ok = true;
+        while (total < fb->len) {
+          size_t take = fb->len - total;
+          if (take > WRITE_CHUNK) take = WRITE_CHUNK;
+          size_t w = client.write(fb->buf + total, take);
+          if (w != take) { ok = false; break; }
+          total += w;
+          vTaskDelay(1);
+        }
         esp_camera_fb_return(fb);
-        if (written != fb->len) break;  // client disconnected mid-frame
-        vTaskDelay(1 / portTICK_PERIOD_MS);  // yield the core briefly
+        if (!ok) break;
+        // Cap at ~20 fps. With 1-of-4 RX buffers the link can't sustain
+        // higher cleanly anyway; pushing harder just blocks longer per
+        // chunked write and risks the watchdog.
+        vTaskDelay(50 / portTICK_PERIOD_MS);
       }
       client.stop();
       continue;
@@ -571,7 +588,10 @@ static void streamTask(void* param) {
 static void startCameraServer() {
   if (streamTaskHandle) return;
   // Pin to core 1 — core 0 runs WiFi + BLE stacks; keep them uncontested.
-  xTaskCreatePinnedToCore(streamTask, "mjpeg", 4096, nullptr, 1, &streamTaskHandle, 1);
+  // 8 KB stack — 4 KB was bumping into watchdog territory under sustained
+  // streaming. lwIP's TCP send eats stack from the calling task; headroom
+  // prevents a canary smash dovetailing with the watchdog case.
+  xTaskCreatePinnedToCore(streamTask, "mjpeg", 8192, nullptr, 1, &streamTaskHandle, 1);
 }
 
 static void publishFwInfo() {
