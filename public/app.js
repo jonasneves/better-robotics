@@ -6,6 +6,7 @@ import { log, logFor } from "./log.js";
 import { settings, saveSettings } from "./settings.js";
 import {
   state, persist, loadKnown, loadRobots, robotFor, mergeRobots, splitMember,
+  setCapSourcePref,
   makeEntry, entryFor, attachDevice, setDisconnectHandler,
 } from "./state.js";
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
@@ -1025,27 +1026,45 @@ function renderEntry(entryArg) {
   // Render-tree groups them under their parent so the card mirrors the model
   // instead of the wire shape. Mapping is dashboard-side, no firmware change.
   const PARENT_MAP = { flash: "camera", snapshot: "camera" };
-  // Fan out across members — each cap is anchored to the member that owns
-  // its BLE characteristic, so the cap module's renderSection / wireActions
-  // operate on that member's entry without needing to learn about robot
-  // composition. Dedupe by cap name within runtime caps: when two members
-  // both report e.g. "motors", the FIRST member wins (member order = the
-  // order at pair / merge time, user-controllable). This (a) keeps the
-  // card from showing two of every overlap-cap and (b) avoids action-name
-  // collisions like both members' Camera sections both wiring
-  // data-action="camera-start" to a button only one of them owns.
-  // OTA stays un-deduped because each member's firmware OTA is its own
-  // operation; the two progress bars during a multi-member update are
-  // genuinely independent and want separate display.
+  // First pass: index runtime caps by name so we can detect conflicts
+  // (multiple members declaring the same cap). The user picks a winner
+  // via robot.capSourcePrefs (set by the cap-section's swap button); the
+  // default is first-member-wins. The other members' versions become
+  // "alternatives" that surface a swap affordance on the rendered section.
+  const capContributors = new Map();  // capName -> [{cap, member}, ...]
+  for (const m of members) {
+    for (const c of m.runtimeCaps || []) {
+      if (!capContributors.has(c.name)) capContributors.set(c.name, []);
+      capContributors.get(c.name).push({ cap: c, member: m });
+    }
+  }
+  const prefs = robot?.capSourcePrefs || {};
+  // Pick the active contributor for each cap: explicit pref wins; else
+  // member order (which equals pair / merge order, user-controllable).
+  // Build allCaps: OTA per-member (independent operations), runtime caps
+  // deduped to the chosen contributor.
   const allCaps = [];
-  const seenRuntimeCaps = new Set();
   for (const m of members) {
     for (const c of CAPABILITIES) allCaps.push({ cap: c, member: m });
-    for (const c of m.runtimeCaps || []) {
-      if (seenRuntimeCaps.has(c.name)) continue;
-      seenRuntimeCaps.add(c.name);
-      allCaps.push({ cap: c, member: m });
-    }
+  }
+  for (const [capName, contributors] of capContributors) {
+    const preferred = prefs[capName]
+      ? contributors.find(x => x.member.id === prefs[capName])
+      : null;
+    const chosen = preferred || contributors[0];
+    const alternatives = contributors
+      .filter(x => x.member.id !== chosen.member.id)
+      .map(x => x.member.id);
+    // Pass source attribution + alternatives through to the cap's
+    // renderSection so capSection can render a source chip + swap button.
+    // Single-source caps see alternatives = [] and render with just the
+    // chip; conflicts get the swap icon. Single-member robots see
+    // sourceMember = null (no chip — type is in the header).
+    allCaps.push({
+      cap: chosen.cap, member: chosen.member,
+      sourceMember: isComposite ? chosen.member : null,
+      alternativeMemberIds: alternatives,
+    });
   }
   const childrenOf = new Map();
   const topCaps = [];
@@ -1062,10 +1081,14 @@ function renderEntry(entryArg) {
   const sections = topCaps
     .slice()
     .sort(capByOrder)
-    .map(({ cap, member }) => {
+    .map(({ cap, member, sourceMember, alternativeMemberIds }) => {
       const kids = (childrenOf.get(cap.name) || []).slice().sort(capByOrder);
-      const childHtml = kids.map(k => k.cap.renderSection(k.member)).join("");
-      return cap.renderSection(member, { childHtml });
+      const childHtml = kids.map(k => k.cap.renderSection(k.member, {
+        sourceMember: k.sourceMember, alternativeMemberIds: k.alternativeMemberIds,
+      })).join("");
+      return cap.renderSection(member, {
+        childHtml, sourceMember, alternativeMemberIds,
+      });
     })
     .join("");
   const liveStatus = entry.robotStatus;
@@ -1322,6 +1345,35 @@ function renderEntry(entryArg) {
       body.toggleAttribute("hidden", !willOpen);
       btn.setAttribute("aria-expanded", String(willOpen));
       capSetOpen(capName, willOpen);
+    });
+  });
+  // Cap-source swap. Only present on .cap-section when this cap has more
+  // than one contributing member. Cycles through alternatives by setting
+  // the robot's capSourcePref → next member; the next render picks that
+  // member's cap instance instead of first-member-wins.
+  entry.node.querySelectorAll("[data-action^='cap-swap-']").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const capName = btn.dataset.action.replace(/^cap-swap-/, "");
+      const myRobot = robotFor(entry.id);
+      if (!myRobot) return;
+      // Build the cycle: every member that declared this cap, in member
+      // order. The currently-active one comes from prefs (or first).
+      const contributors = [];
+      for (const mid of myRobot.members) {
+        const m = state.devices.get(mid);
+        if (!m) continue;
+        if ((m.runtimeCaps || []).some(c => c.name === capName)) contributors.push(mid);
+      }
+      if (contributors.length < 2) return;
+      const currentId = myRobot.capSourcePrefs?.[capName] || contributors[0];
+      const nextIdx = (contributors.indexOf(currentId) + 1) % contributors.length;
+      const nextId = contributors[nextIdx];
+      // First entry of the cycle == default (first-member-wins) — clear
+      // the pref instead of pinning, so the model stays "user has only
+      // explicitly chosen if there's a pref."
+      setCapSourcePref(myRobot.id, capName, nextId === contributors[0] ? null : nextId);
+      renderEntry(entry);
     });
   });
 

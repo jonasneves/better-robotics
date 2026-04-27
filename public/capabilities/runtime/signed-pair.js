@@ -107,7 +107,7 @@ export function makeSignedPairCap(schema) {
       entry[leftField] = entry[rightField] = 0;
     },
 
-    renderSection(entry) {
+    renderSection(entry, { sourceMember = null, alternativeMemberIds = [] } = {}) {
       if (entry.status !== "connected" || !entry[charField]) return "";
       const stateText = `${labels.left}: ${entry[leftField]} · ${labels.right}: ${entry[rightField]}`;
       const action = `<button class="secondary sm" data-action="${actionStop}">Stop</button>`;
@@ -119,7 +119,7 @@ export function makeSignedPairCap(schema) {
              <label>${escapeHtml(labels.left)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[leftField]}" data-action="${actionLeft}"></label>
              <label>${escapeHtml(labels.right)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[rightField]}" data-action="${actionRight}"></label>
            </div>`;
-      return capSection({ name, label, state: stateText, action, body });
+      return capSection({ name, label, state: stateText, action, body, sourceMember, alternativeMemberIds });
     },
 
     wireActions(entry, node) {

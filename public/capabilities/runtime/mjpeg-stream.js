@@ -60,7 +60,7 @@ export function makeMjpegStreamCap(schema) {
       entry[profileField] = null;
     },
 
-    renderSection(entry, { childHtml = "" } = {}) {
+    renderSection(entry, { childHtml = "", sourceMember = null, alternativeMemberIds = [] } = {}) {
       if (entry.status !== "connected") return "";
       const url = streamUrl(entry, schema);
       const running = entry[runningField];
@@ -113,6 +113,7 @@ export function makeMjpegStreamCap(schema) {
         // sub-controls) render here so the operator sees one Camera section
         // hosting everything camera-shaped instead of three peers in a flat list.
         body: `${body}${watchRow}${promptField}${profileRow}${childHtml}`,
+        sourceMember, alternativeMemberIds,
       });
     },
 

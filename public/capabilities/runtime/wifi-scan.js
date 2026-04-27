@@ -179,7 +179,7 @@ export function makeWifiScanCap(schema) {
       clearScanTimer(entry);
     },
 
-    renderSection(entry) {
+    renderSection(entry, { sourceMember = null, alternativeMemberIds = [] } = {}) {
       if (entry.status !== "connected" || !entry[scanField]) return "";
       const networks = entry[networksField];
       const scanning = entry[scanningField];
@@ -230,6 +230,7 @@ export function makeWifiScanCap(schema) {
           <button class="secondary sm" data-action="${actionManualJoin}">Join other…</button>
         </div>`,
         body: nets,
+        sourceMember, alternativeMemberIds,
       });
     },
 

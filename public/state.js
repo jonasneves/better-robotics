@@ -37,7 +37,14 @@ export function persist() {
 function persistRobots() {
   const out = [];
   for (const r of state.robots.values()) {
-    out.push({ id: r.id, name: r.name, members: r.members.slice() });
+    out.push({
+      id: r.id, name: r.name, members: r.members.slice(),
+      // capSourcePrefs: when both members of a composite robot declare the
+      // same cap (e.g., both have "motors"), this map's deviceId for that
+      // cap name wins over the default first-member-wins. Empty for the
+      // common case (no overlap, or default is fine).
+      capSourcePrefs: { ...(r.capSourcePrefs || {}) },
+    });
   }
   localStorage.setItem(ROBOTS_KEY, JSON.stringify(out));
 }
@@ -59,7 +66,9 @@ export function loadRobots() {
   const claimed = new Set();
   for (const r of raw) {
     const members = (r.members || []).filter(m => typeof m === "string");
-    state.robots.set(r.id, { id: r.id, name: r.name || r.id, members });
+    const capSourcePrefs = (r.capSourcePrefs && typeof r.capSourcePrefs === "object")
+      ? { ...r.capSourcePrefs } : {};
+    state.robots.set(r.id, { id: r.id, name: r.name || r.id, members, capSourcePrefs });
     for (const m of members) claimed.add(m);
   }
   // Wrap any unclaimed paired devices as one-member robots. Uses the device
@@ -67,9 +76,22 @@ export function loadRobots() {
   // records (anything keyed by id) keep resolving without a fixup pass.
   for (const d of loadKnown()) {
     if (claimed.has(d.id)) continue;
-    state.robots.set(d.id, { id: d.id, name: d.name || d.id, members: [d.id] });
+    state.robots.set(d.id, { id: d.id, name: d.name || d.id, members: [d.id], capSourcePrefs: {} });
   }
   persistRobots();
+}
+
+// Set or clear the preferred member for a given cap on a robot. Used by
+// the cap-section's swap action when a composite robot has overlap caps
+// and the user picked a non-default source.
+export function setCapSourcePref(robotId, capName, deviceId) {
+  const r = state.robots.get(robotId);
+  if (!r) return null;
+  if (!r.capSourcePrefs) r.capSourcePrefs = {};
+  if (deviceId == null) delete r.capSourcePrefs[capName];
+  else r.capSourcePrefs[capName] = deviceId;
+  persistRobots();
+  return r;
 }
 
 // Look up the robot a given device belongs to. Used by the renderer to
@@ -82,9 +104,11 @@ export function robotFor(deviceId) {
   return null;
 }
 
-// Combine two robots into one. The destination keeps its id + name; the
-// source's members merge into destination's members[]; the source robot
-// is removed. Idempotent on no-op (same robot, or already-merged members).
+// Combine two robots into one. The destination keeps its id + name + any
+// capSourcePrefs it had; the source's members merge into destination's
+// members[]; the source robot is removed. Source's capSourcePrefs are
+// dropped (they referenced a robot that no longer exists; the user can
+// re-pick any conflicts post-merge via the cap-section swap action).
 export function mergeRobots(srcId, destId) {
   if (srcId === destId) return state.robots.get(destId) || null;
   const src  = state.robots.get(srcId);
@@ -203,6 +227,7 @@ export function entryFor(device) {
   if (!robotFor(device.id)) {
     state.robots.set(device.id, {
       id: device.id, name: device.name || device.id, members: [device.id],
+      capSourcePrefs: {},
     });
   }
   persist();

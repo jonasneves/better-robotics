@@ -69,7 +69,7 @@ export function makeToggleCap(schema) {
 
     cleanup(entry) { entry[charField] = null; },
 
-    renderSection(entry) {
+    renderSection(entry, { sourceMember = null, alternativeMemberIds = [] } = {}) {
       if (entry.status !== "connected" || !entry[charField]) return "";
       const on = entry[onField];
       return capSection({
@@ -77,6 +77,7 @@ export function makeToggleCap(schema) {
         label,
         state: on ? "on" : "off",
         action: `<button class="secondary sm" data-action="${action}">${on ? "Turn off" : "Turn on"}</button>`,
+        sourceMember, alternativeMemberIds,
       });
     },
 

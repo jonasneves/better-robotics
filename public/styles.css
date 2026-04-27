@@ -749,6 +749,28 @@ details.tray.has-alert > summary::after {
 }
 .cap-body { margin-top: 10px; }
 
+/* Source chip on a cap section — composite robots only. Inherits .type-badge
+   look so it matches the per-member chips below the meta row; smaller font
+   keeps it from competing with the cap label. */
+.cap-source.type-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  margin-left: 2px;
+}
+
+/* Swap button — appears next to the cap header's primary action when a
+   composite robot has more than one member contributing the same cap.
+   Compact icon button; clicking cycles to the next contributor. */
+.cap-swap {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex-shrink: 0;
+  color: var(--ink-muted);
+}
+.cap-swap:hover { color: var(--ink); }
+.cap-swap .icon-svg { width: 14px; height: 14px; }
+
 /* Nested caps (Flash + Snapshot inside Camera) — render as sub-controls,
    not stacked cards. Drop the dashed top-border + reduced spacing so the
    visual hierarchy reads "these belong inside Camera" instead of "three

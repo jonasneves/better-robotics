@@ -52,11 +52,30 @@ export function setOpen(name, open) {
 // When body is empty, the chevron is dropped — there's nothing to expand,
 // so a disclosure toggle would lie. The header renders as plain (label +
 // state + action) without the cap-toggle button.
-export function capSection({ name, label, state = "", action = "", body = "" }) {
+//
+// Source attribution (composite robots):
+//   sourceMember = { id, name, fwType }
+//     When set, a small chip after the label says "from <name>" colored
+//     by fwType. Tells the operator which member contributed this cap.
+//   alternativeMemberIds = [deviceId, ...]
+//     Other members that ALSO declare this cap name. When non-empty, a ⇄
+//     swap button appears in the header — clicking it sets the
+//     capSourcePref to the next member in the cycle. Empty (the common
+//     case, no overlap) = no swap button rendered.
+export function capSection({
+  name, label, state = "", action = "", body = "",
+  sourceMember = null, alternativeMemberIds = [],
+}) {
   const hasBody = !!body && body.trim().length > 0;
   const open = isOpen(name);
+  const sourceChip = sourceMember
+    ? `<span class="cap-source type-badge type-${escapeHtml(sourceMember.fwType || "")}" title="from ${escapeHtml(sourceMember.name)}">${
+        escapeHtml(sourceMember.fwType === "esp32" ? "ESP32" : (sourceMember.fwType || "").toUpperCase())
+      }</span>`
+    : "";
   const labelHtml = `
     <span class="cap-label">${escapeHtml(label)}</span>
+    ${sourceChip}
     ${state ? `<span class="cap-state">${escapeHtml(state)}</span>` : ""}
   `;
   const head = hasBody
@@ -65,10 +84,18 @@ export function capSection({ name, label, state = "", action = "", body = "" }) 
          ${labelHtml}
        </button>`
     : `<div class="cap-static">${labelHtml}</div>`;
+  // Swap button appears only when another member also declares this cap —
+  // gives the user a one-click way to override first-member-wins for THIS
+  // cap without splitting the whole robot. Disappears when there's nothing
+  // to swap to, so single-source caps stay clean.
+  const swapBtn = alternativeMemberIds.length > 0
+    ? `<button class="icon sm cap-swap" data-action="cap-swap-${escapeHtml(name)}" title="Use a different device for this capability" aria-label="Swap source"><svg class="icon-svg"><use href="icons.svg#icon-swap"/></svg></button>`
+    : "";
   return `
     <div class="cap-section" data-cap-name="${escapeHtml(name)}">
       <div class="cap-header">
         ${head}
+        ${swapBtn}
         ${action}
       </div>
       ${hasBody ? `<div class="cap-body" ${open ? "" : "hidden"}>${body}</div>` : ""}
