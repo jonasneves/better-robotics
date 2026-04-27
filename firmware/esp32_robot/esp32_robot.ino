@@ -569,12 +569,15 @@ static void streamTask(void* param) {
         camera_fb_t *fb = esp_camera_fb_get();
         if (!fb) break;
         client.printf("\r\n--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
-        // Chunk the JPEG body into 1 KB writes with a yield between each.
-        // Single-shot client.write of a full ~10-15 KB JPEG can block long
-        // enough on degraded WiFi (1 of 4 RX buffers under BLE coexistence)
-        // for the IDLE-task watchdog to fire and reset the chip mid-stream.
+        // Chunked write feeds the IDLE task so the watchdog doesn't trip
+        // during a long write on degraded WiFi (1-of-4 RX buffers under BLE
+        // coexistence). One yield per frame is enough on FreeRTOS's 10 ms
+        // tick — vTaskDelay(1) is *at least* 10 ms, so per-1KB-chunk yields
+        // capped framerate at ~10 fps for typical 10 KB JPEGs (10 chunks ×
+        // 10 ms = 100 ms/frame). 4 KB chunks fit the lwIP TX buffer and
+        // keep the cooperative-yield budget bounded.
         size_t total = 0;
-        const size_t WRITE_CHUNK = 1024;
+        const size_t WRITE_CHUNK = 4096;
         bool ok = true;
         while (total < fb->len) {
           size_t take = fb->len - total;
@@ -582,18 +585,14 @@ static void streamTask(void* param) {
           size_t w = client.write(fb->buf + total, take);
           if (w != take) { ok = false; break; }
           total += w;
-          vTaskDelay(1);
         }
         esp_camera_fb_return(fb);
         if (!ok) break;
-        // 16 ms = 60 fps cap. The chunked-write vTaskDelay(1) above is what
-        // actually keeps the IDLE task fed and prevents the watchdog from
-        // tripping; the per-frame yield used to be 50 ms (20 fps cap)
-        // before chunked-write landed, and it stuck around as belt-and-
-        // suspenders. WiFi (1-of-4 RX buffers) is the real throughput
-        // limiter at maybe ~10-15 fps in practice; this just stops the
-        // streamTask from busy-spinning between camera grabs.
-        vTaskDelay(16 / portTICK_PERIOD_MS);
+        // Single yield per frame — covers IDLE-feed (preventing IDLE-WDT)
+        // and inter-frame pacing in one call. vTaskDelay(1) on ESP32's
+        // 10 ms tick rate yields ~10 ms, comfortably under WiFi's
+        // throughput-bound ~10-15 fps practical limit.
+        vTaskDelay(1);
       }
       client.stop();
       continue;
