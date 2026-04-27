@@ -451,18 +451,28 @@ static void streamTask(void* param) {
       }
     }
 
+    // Modern Chrome (M130+) tightened PNA: when the page is on
+    // https://<github-pages-or-similar> and the target is http://<private-IP>,
+    // the preflight expects Access-Control-Allow-Origin to *echo the
+    // requesting Origin* rather than `*`. With `*` the browser rejects the
+    // preflight and the POST never reaches us — symptom: "Failed to fetch"
+    // in the dashboard log, with no entry in the /ota handler. Echoing the
+    // origin (and adding Vary: Origin so caches don't blow up) restores it.
+    String acOrigin = origin.length() ? ("Access-Control-Allow-Origin: " + origin + "\r\nVary: Origin\r\n")
+                                      : "Access-Control-Allow-Origin: *\r\n";
+
     if (method == "OPTIONS" && path == "/ota") {
       // PNA preflight — Chrome sends this before cross-origin → private-IP
       // POSTs. Max-Age=86400 caches it for a day so repeat OTAs skip it.
-      client.print("HTTP/1.1 204 No Content\r\n"
-                   "Access-Control-Allow-Origin: *\r\n"
-                   "Access-Control-Allow-Methods: POST, OPTIONS\r\n"
+      client.print("HTTP/1.1 204 No Content\r\n");
+      client.print(acOrigin);
+      client.print("Access-Control-Allow-Methods: POST, OPTIONS\r\n"
                    "Access-Control-Allow-Headers: Content-Type\r\n"
                    "Access-Control-Allow-Private-Network: true\r\n"
                    "Access-Control-Max-Age: 86400\r\n"
                    "Content-Length: 0\r\n"
                    "Connection: close\r\n\r\n");
-      (void)origin; (void)pnaRequested;  // reserved for stricter replies
+      (void)pnaRequested;  // reserved for stricter replies
       client.stop();
       continue;
     }
@@ -471,18 +481,16 @@ static void streamTask(void* param) {
       // Guard both bad (missing/negative) and oversized uploads — 4 MB cap
       // matches the app0 partition ceiling on min_spiffs.
       if (contentLength <= 0 || contentLength > 4 * 1024 * 1024) {
-        client.print("HTTP/1.1 400 Bad Request\r\n"
-                     "Access-Control-Allow-Origin: *\r\n"
-                     "Content-Length: 0\r\n"
-                     "Connection: close\r\n\r\n");
+        client.print("HTTP/1.1 400 Bad Request\r\n");
+        client.print(acOrigin);
+        client.print("Content-Length: 0\r\nConnection: close\r\n\r\n");
         client.stop();
         continue;
       }
       if (!Update.begin((size_t)contentLength)) {
-        client.print("HTTP/1.1 500 Internal Server Error\r\n"
-                     "Access-Control-Allow-Origin: *\r\n"
-                     "Content-Length: 0\r\n"
-                     "Connection: close\r\n\r\n");
+        client.print("HTTP/1.1 500 Internal Server Error\r\n");
+        client.print(acOrigin);
+        client.print("Content-Length: 0\r\nConnection: close\r\n\r\n");
         client.stop();
         continue;
       }
@@ -513,24 +521,22 @@ static void streamTask(void* param) {
       }
       if (failed) {
         Update.abort();
-        client.print("HTTP/1.1 500 Internal Server Error\r\n"
-                     "Access-Control-Allow-Origin: *\r\n"
-                     "Content-Length: 0\r\n"
-                     "Connection: close\r\n\r\n");
+        client.print("HTTP/1.1 500 Internal Server Error\r\n");
+        client.print(acOrigin);
+        client.print("Content-Length: 0\r\nConnection: close\r\n\r\n");
         client.stop();
         continue;
       }
       if (!Update.end(true)) {
-        client.print("HTTP/1.1 500 Internal Server Error\r\n"
-                     "Access-Control-Allow-Origin: *\r\n"
-                     "Content-Length: 0\r\n"
-                     "Connection: close\r\n\r\n");
+        client.print("HTTP/1.1 500 Internal Server Error\r\n");
+        client.print(acOrigin);
+        client.print("Content-Length: 0\r\nConnection: close\r\n\r\n");
         client.stop();
         continue;
       }
-      client.print("HTTP/1.1 200 OK\r\n"
-                   "Access-Control-Allow-Origin: *\r\n"
-                   "Content-Type: text/plain\r\n"
+      client.print("HTTP/1.1 200 OK\r\n");
+      client.print(acOrigin);
+      client.print("Content-Type: text/plain\r\n"
                    "Content-Length: 2\r\n"
                    "Connection: close\r\n\r\n"
                    "OK");
