@@ -126,6 +126,11 @@ static bool _motors_attached = false;
 
 const size_t SCAN_MAX = 10;
 
+// Set in setup() once the chip-id-derived name is built; used by BLE
+// advertising, the wifi-discover ad, and serial diagnostics. File-scope
+// so the discover task can read it without a parameter wedge.
+static char robotName[32] = "BetterRobot-XXXX";
+
 BLECharacteristic* ledChar        = nullptr;
 BLECharacteristic* wifiScanChar   = nullptr;
 BLECharacteristic* wifiJoinChar   = nullptr;
@@ -1236,8 +1241,8 @@ void setup() {
 
   // Stable per-chip suffix — low 16 bits of the WiFi MAC.
   uint64_t chipid = ESP.getEfuseMac();
-  char name[32];
-  snprintf(name, sizeof(name), "BetterRobot-%04X", (uint16_t)(chipid & 0xFFFF));
+  snprintf(robotName, sizeof(robotName), "BetterRobot-%04X", (uint16_t)(chipid & 0xFFFF));
+  const char* name = robotName;  // local alias keeps the rest of setup unchanged
 
   // Allocation order on classic ESP32-CAM where BLE + WiFi + esp32-camera
   // compete for ~250 KB of DRAM. BLE before WiFi — Bluedroid AND NimBLE
@@ -1454,6 +1459,105 @@ void setup() {
   if (savedSsid.length()) {
     startJoin(savedSsid, savedPass);
   }
+
+  // Presence ad to signal.neevs.io — task is idempotent and starts before
+  // WiFi is necessarily joined; it sleeps + retries until WL_CONNECTED.
+  startWifiDiscover();
+}
+
+// === WiFi-discover presence plane ===========================================
+// Mirrors firmware/pi_robot/wifi_discover.py. PUTs a signed-shape JSON ad
+// to https://signal.neevs.io/discover every 25 s while WiFi is up; the
+// dashboard's DiscoveryClient (public/discover.js) sees the same lobby
+// over its WebSocket and shows the robot in "Your robots" without a BLE
+// scan. data.app == "better-robotics-robot" is the dashboard's filter.
+// Server-side TTL = 60 s auto-expires the ad if the chip crashes or
+// drops off WiFi.
+//
+// HTTPS is mandatory (signal.neevs.io rejects plain HTTP). WiFiClientSecure
+// + setInsecure() is the lightest path on arduino-esp32 — pulls in mbedTLS
+// but avoids HTTPClient's wrapper. Cert validation is skipped because the
+// ad isn't trust-bearing; trust comes from BLE pair + per-room auth, not
+// the discovery layer.
+#include <WiFiClientSecure.h>
+
+static const char*  DISCOVER_HOST       = "signal.neevs.io";
+static const uint16_t DISCOVER_PORT     = 443;
+static const char*  DISCOVER_PATH       = "/discover";
+static const unsigned long DISCOVER_INTERVAL_MS = 25000;
+static const unsigned long DISCOVER_TTL_MS      = 60000;
+static TaskHandle_t discoverTaskHandle = nullptr;
+
+static void publishDiscoverAd() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  String ip = WiFi.localIP().toString();
+  unsigned long uptimeS = millis() / 1000;
+
+  // JSON shape mirrors firmware/pi_robot/wifi_discover.py exactly. Drop the
+  // pi_robot field, add esp32: "active" so the dashboard can distinguish
+  // hardware lanes if it wants. data.app stays the shared discriminator.
+  String body;
+  body.reserve(256);
+  body += "{\"id\":\"better-robotics-robot:";
+  body += robotName;
+  body += "\",\"data\":{\"app\":\"better-robotics-robot\",\"robotId\":\"";
+  body += robotName;
+  body += "\",\"label\":\"";
+  body += robotName;
+  body += "\",\"ip\":\"";
+  body += ip;
+  body += "\",\"host\":\"";
+  body += robotName;
+  body += "\",\"uptime_s\":";
+  body += uptimeS;
+  body += ",\"esp32\":\"active\"},\"ttl\":";
+  body += DISCOVER_TTL_MS;
+  body += "}";
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(8);  // seconds
+  if (!client.connect(DISCOVER_HOST, DISCOVER_PORT)) {
+    Serial.println("discover: connect failed");
+    return;
+  }
+  client.printf("PUT %s HTTP/1.1\r\n", DISCOVER_PATH);
+  client.printf("Host: %s\r\n", DISCOVER_HOST);
+  client.print("Content-Type: application/json\r\n");
+  client.printf("Content-Length: %u\r\n", body.length());
+  client.print("Connection: close\r\n\r\n");
+  client.print(body);
+
+  // Drain the response so the socket closes cleanly. Status code is
+  // informational — even a 5xx leaves the local state untouched and we
+  // republish next cycle.
+  unsigned long deadline = millis() + 5000;
+  while (client.connected() && millis() < deadline) {
+    while (client.available()) client.read();
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  client.stop();
+}
+
+static void discoverTask(void* /*param*/) {
+  // Brief startup grace so WiFi has a chance to come up before the first
+  // attempt. After that, just sleep DISCOVER_INTERVAL_MS between publishes
+  // — publishDiscoverAd is a no-op when WiFi is down.
+  vTaskDelay(pdMS_TO_TICKS(15000));
+  while (true) {
+    publishDiscoverAd();
+    vTaskDelay(pdMS_TO_TICKS(DISCOVER_INTERVAL_MS));
+  }
+}
+
+static void startWifiDiscover() {
+  if (discoverTaskHandle) return;
+  // 8 KB stack — TLS handshake stack-eats from the calling task; arduino
+  // examples that drop below 6 KB hit canary smashes during cert chain
+  // walks. Pinned to core 0 (BLE/WiFi) so it doesn't compete with the
+  // streamTask on core 1.
+  xTaskCreatePinnedToCore(discoverTask, "discover", 8192, nullptr, 1,
+                          &discoverTaskHandle, 0);
 }
 
 // Map esp_reset_reason() to a short human label. Useful when the dashboard
