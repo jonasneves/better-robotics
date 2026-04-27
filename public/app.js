@@ -1207,7 +1207,7 @@ function renderEntry(entryArg) {
       <div class="robot-identity">
         <button class="label-btn" data-action="toggle-expand" aria-expanded="${expanded}">
           <svg class="icon-svg disclosure-chevron" aria-hidden="true"><use href="icons.svg#icon-chevron-down"/></svg>
-          ${nameHtml}${typeBadge}
+          ${typeBadge}${nameHtml}
         </button>
         ${statusText ? `<div class="status">${statusText}</div>` : ""}
       </div>
