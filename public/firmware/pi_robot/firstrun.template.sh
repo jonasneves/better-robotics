@@ -95,36 +95,6 @@ if [ -f "$BOOTFS/dashboard.pub" ]; then
   note dashboard_key_staged
 fi
 
-# Robot peer identity. Ed25519 keypair written once and preserved across
-# re-images (delete peer-key.json manually to rotate). Stored as raw
-# 32-byte seed / 32-byte pubkey, base64-encoded, JSON schema:
-#   { "priv_b64": "...", "pub_b64": "..." }
-# Extraction relies on RFC 8410 DER layout — OpenSSL emits a fixed 16-byte
-# PKCS#8 prefix then the 32-byte seed (private), and a fixed 12-byte SPKI
-# prefix then the 32-byte pubkey. `tail -c 32` peels off the raw bytes
-# without pulling in a PEM parser.
-PEER_KEY_DIR=/var/lib/pi-robot
-PEER_KEY_FILE=$PEER_KEY_DIR/peer-key.json
-install -d -m 700 -o "$USER_NAME" -g "$USER_NAME" "$PEER_KEY_DIR"
-if [ ! -f "$PEER_KEY_FILE" ]; then
-    TMP_PRIV=$(mktemp) && TMP_PUB=$(mktemp)
-    if openssl genpkey -algorithm ed25519 -outform DER -out "$TMP_PRIV" 2>/dev/null \
-       && openssl pkey -in "$TMP_PRIV" -inform DER -pubout -outform DER -out "$TMP_PUB" 2>/dev/null; then
-        PRIV_B64=$(tail -c 32 "$TMP_PRIV" | base64 | tr -d '\n')
-        PUB_B64=$(tail -c 32 "$TMP_PUB"  | base64 | tr -d '\n')
-        umask 077
-        printf '{"priv_b64":"%s","pub_b64":"%s"}\n' "$PRIV_B64" "$PUB_B64" > "$PEER_KEY_FILE"
-        chown "$USER_NAME:$USER_NAME" "$PEER_KEY_FILE"
-        chmod 600 "$PEER_KEY_FILE"
-        note peer_key_generated
-    else
-        note peer_key_failed "openssl ed25519 generation failed — wifi ads will omit pubkey"
-    fi
-    rm -f "$TMP_PRIV" "$TMP_PUB"
-else
-    note peer_key_present "preserving existing identity"
-fi
-
 # USB composite gadget (ECM ethernet + ACM serial). Independent of
 # pi-robot: a crashed firmware still exposes `ssh pi@10.55.0.1` over usb0
 # AND a raw serial login at /dev/ttyGS0 reachable via the dashboard's
@@ -187,7 +157,7 @@ note usb_gadget_configured
 INSTALL_OK=0
 DEST="/home/$USER_NAME/better-robotics/firmware/pi_robot"
 install -d -o "$USER_NAME" -g "$USER_NAME" "$DEST"
-for f in pi_robot.py requirements.txt pi-robot.service heartbeat.py pi-robot-heartbeat.service wifi_discover.py pi-robot-wifi-discover.service; do
+for f in pi_robot.py requirements.txt pi-robot.service heartbeat.py pi-robot-heartbeat.service pi_robot_health.py pi-robot-health.service avahi-betterrobot.service; do
     if [ -f "$STAGED/$f" ]; then
         install -m 644 -o "$USER_NAME" -g "$USER_NAME" "$STAGED/$f" "$DEST/$f"
     else
@@ -267,14 +237,24 @@ BTEOF
       sed "s|__HOME__|/home/$USER_NAME|g" "$DEST/pi-robot-heartbeat.service" > /etc/systemd/system/pi-robot-heartbeat.service
       chmod 644 /etc/systemd/system/pi-robot-heartbeat.service
     fi
-    if [ -f "$DEST/pi-robot-wifi-discover.service" ]; then
-      sed "s|__HOME__|/home/$USER_NAME|g" "$DEST/pi-robot-wifi-discover.service" > /etc/systemd/system/pi-robot-wifi-discover.service
-      chmod 644 /etc/systemd/system/pi-robot-wifi-discover.service
+    if [ -f "$DEST/pi-robot-health.service" ]; then
+      sed -e "s|__HOME__|/home/$USER_NAME|g" -e "s|__USER__|$USER_NAME|g" \
+        "$DEST/pi-robot-health.service" > /etc/systemd/system/pi-robot-health.service
+      chmod 644 /etc/systemd/system/pi-robot-health.service
     fi
+    if [ -f "$DEST/avahi-betterrobot.service" ]; then
+      install -d -m 755 /etc/avahi/services
+      install -m 644 "$DEST/avahi-betterrobot.service" /etc/avahi/services/betterrobot.service
+    fi
+    # avahi-daemon: required for the dashboard to resolve <hostname>.local.
+    # Install if missing — base image varies; --no-install-recommends keeps
+    # the dependency footprint tight.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends avahi-daemon 2>/dev/null || true
     systemctl daemon-reload
     systemctl enable pi-robot.service
     systemctl enable pi-robot-heartbeat.service 2>/dev/null || true
-    systemctl enable pi-robot-wifi-discover.service 2>/dev/null || true
+    systemctl enable pi-robot-health.service 2>/dev/null || true
+    systemctl enable avahi-daemon.service 2>/dev/null || true
     note service_enabled
 
     # Probe the service + dump journal to the boot partition so issues are

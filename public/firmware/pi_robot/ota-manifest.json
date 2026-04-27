@@ -1,61 +1,35 @@
 {
   "version": "1",
   "files": [
-    {
-      "src": "pi_robot.py",
-      "dest": "$HOME/better-robotics/firmware/pi_robot/pi_robot.py",
-      "mode": "644"
-    },
-    {
-      "src": "version.py",
-      "dest": "$HOME/better-robotics/firmware/pi_robot/version.py",
-      "mode": "644"
-    },
-    {
-      "src": "pi-robot.service",
-      "dest": "/etc/systemd/system/pi-robot.service",
-      "mode": "644"
-    },
-    {
-      "src": "heartbeat.py",
-      "dest": "$HOME/better-robotics/firmware/pi_robot/heartbeat.py",
-      "mode": "644"
-    },
-    {
-      "src": "pi-robot-heartbeat.service",
-      "dest": "/etc/systemd/system/pi-robot-heartbeat.service",
-      "mode": "644"
-    },
-    {
-      "src": "usb-gadget-setup.sh",
-      "dest": "/usr/local/bin/usb-gadget-setup.sh",
-      "mode": "755"
-    },
-    {
-      "src": "usb-gadget.service",
-      "dest": "/etc/systemd/system/usb-gadget.service",
-      "mode": "644"
-    },
-    {
-      "src": "serial-getty-autologin.conf",
-      "dest": "/etc/systemd/system/serial-getty@ttyGS0.service.d/autologin.conf",
-      "mode": "644"
-    },
-    {
-      "src": "ensure-autologin-password.sh",
-      "dest": "/usr/local/bin/ensure-autologin-password.sh",
-      "mode": "755"
-    }
+    { "src": "pi_robot.py", "dest": "$HOME/better-robotics/firmware/pi_robot/pi_robot.py", "mode": "644" },
+    { "src": "version.py", "dest": "$HOME/better-robotics/firmware/pi_robot/version.py", "mode": "644" },
+    { "src": "pi-robot.service", "dest": "/etc/systemd/system/pi-robot.service", "mode": "644" },
+    { "src": "heartbeat.py", "dest": "$HOME/better-robotics/firmware/pi_robot/heartbeat.py", "mode": "644" },
+    { "src": "pi-robot-heartbeat.service", "dest": "/etc/systemd/system/pi-robot-heartbeat.service", "mode": "644" },
+    { "src": "pi_robot_health.py", "dest": "$HOME/better-robotics/firmware/pi_robot/pi_robot_health.py", "mode": "644" },
+    { "src": "pi-robot-health.service", "dest": "/etc/systemd/system/pi-robot-health.service", "mode": "644" },
+    { "src": "avahi-betterrobot.service", "dest": "/etc/avahi/services/betterrobot.service", "mode": "644" },
+    { "src": "usb-gadget-setup.sh", "dest": "/usr/local/bin/usb-gadget-setup.sh", "mode": "755" },
+    { "src": "usb-gadget.service", "dest": "/etc/systemd/system/usb-gadget.service", "mode": "644" },
+    { "src": "serial-getty-autologin.conf", "dest": "/etc/systemd/system/serial-getty@ttyGS0.service.d/autologin.conf", "mode": "644" },
+    { "src": "ensure-autologin-password.sh", "dest": "/usr/local/bin/ensure-autologin-password.sh", "mode": "755" }
   ],
   "post_install": [
+    "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends avahi-daemon",
     "systemctl daemon-reload",
     "systemctl enable usb-gadget.service",
     "systemctl enable serial-getty@ttyGS0.service",
     "systemctl enable pi-robot-heartbeat.service",
     "systemctl restart pi-robot-heartbeat.service",
+    "systemctl enable pi-robot-health.service",
+    "systemctl restart pi-robot-health.service",
+    "systemctl enable avahi-daemon.service",
+    "systemctl restart avahi-daemon.service",
+    "systemctl disable pi-robot-wifi-discover.service 2>/dev/null || true",
+    "systemctl stop pi-robot-wifi-discover.service 2>/dev/null || true",
+    "rm -f /etc/systemd/system/pi-robot-wifi-discover.service $HOME/better-robotics/firmware/pi_robot/wifi_discover.py",
     "sed -i 's/modules-load=dwc2,g_ether/modules-load=dwc2,libcomposite/' /boot/firmware/cmdline.txt",
     "/usr/local/bin/ensure-autologin-password.sh __USER__"
   ],
-  "reboot": true,
-  "commit": "b2d4d9b"
+  "reboot": true
 }

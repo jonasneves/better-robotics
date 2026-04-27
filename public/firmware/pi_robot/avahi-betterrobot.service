@@ -1,0 +1,20 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!--
+Better Robotics presence — avahi-daemon publishes the Pi's hostname over
+mDNS so the dashboard can resolve <hostname>.local without an internet
+rendezvous. The /health endpoint on port 81 (pi_robot_health.py) serves
+the JSON status the dashboard probe consumes. %h expands to the system
+hostname (firstrun.template.sh sets this to "BetterRobot-XXXX", so the
+mDNS name lands at betterrobot-xxxx.local — same shape as ESP32).
+
+Drop into /etc/avahi/services/ at firstrun + on OTA. avahi monitors that
+directory and republishes whenever it changes.
+-->
+<service-group>
+  <name>%h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>81</port>
+  </service>
+</service-group>
