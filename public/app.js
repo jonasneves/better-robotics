@@ -442,11 +442,29 @@ async function connect(id) {
   // failing the same way until Chrome's pairing-list garbage-collects it.
   if (entry.staleHandle) entry.device = null;
   if (!entry.device) {
+    // requestDevice requires user activation. If we got here from
+    // setTimeout (auto-reconnect after OTA) there's no gesture to spend
+    // — bail without firing requestDevice, otherwise we'd silently
+    // SecurityError four times in a row eating the retry window for a
+    // call that can never succeed without a click.
+    if (!navigator.userActivation?.isActive) return;
+    // Visual feedback BEFORE the chooser opens — without this, if Chrome
+    // doesn't pop the picker (no matching device advertising yet) the
+    // button stays on "Re-pair" with no signal that the click registered.
+    // Setting connecting now flips the label to "Connecting…" and the
+    // catch path below restores it on cancel.
+    entry.status = "connecting";
+    renderEntry(entry);
     try {
       log("re-pairing…", entry.name);
       await restoreDevice(entry);
     } catch (err) {
+      // NotFoundError = user cancelled an empty/wrong picker. Either way
+      // we drop back to whatever status the entry had before this click,
+      // and re-render so the button stops saying "Connecting…".
       if (err.name !== "NotFoundError") logFor(entry, `re-pair cancelled: ${err.message}`);
+      entry.status = entry.lastConnectError ? "error" : "idle";
+      renderEntry(entry);
       return;
     }
   }
