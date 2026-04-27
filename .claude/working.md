@@ -215,6 +215,76 @@ a one-off feature. Two failure modes to watch:
   homography (4 known floor points OR phone IMU + marker scale)
   earns its way. Defer until path length actually demands it.
 
+**H. Perception model rotation: drop OWLv2, add YOLO26n.** Trigger:
+the project direction softened toward "toy self-driving car" — desk
+/ tabletop scale, walking speed, single robot. The current two-model
+perception stack (OWLv2 for bboxes via `grounding.js`, LFM2.5-VL-450M
+for captions via `perception.js`) is shaped for the OLD scope where
+the loop was seconds-latency and "spatially aware" was off the
+table. With closed-loop control on the table, OWLv2 at 1–2 s per
+inference is the wrong primitive — too slow to drive against. YOLO26n
+runs at 10–30 ms per inference on WebGPU, cleared January 2026, ONNX
+exports cleanly, NMS-free deterministic latency. That's the missing
+"fast reflex layer" the comma.ai-shaped two-tier pattern needs.
+
+The other shift worth banking: LFM2.5-VL-450M's April 2026 release
+added bbox prediction (RefCOCO-M 81.28). That inverts a CLAUDE.md
+assumption — VLM was "text only, never spatial." With bbox-output
+LFM-VL we can do "where is the doorway?" without a separate detector
+session. Combined with YOLO26n's closed-vocab speed, OWLv2's
+open-vocab niche shrinks to "things you can describe but YOLO wasn't
+trained for AND need bboxes faster than LFM-VL prompting can do."
+That niche is small enough that retiring OWLv2 is probably right.
+
+Shape:
+- **YOLO26n** — fast detector for the closed COCO class set + any
+  custom classes the toy needs (lane lines / colored objects via
+  re-train). New module `public/yolo.js` mirroring `grounding.js`'s
+  shape; transformers.js with onnx-community/yolov26n-onnx (or the
+  Ultralytics export path if the community port lags). Tool surface:
+  rename `get_robot_detections` to be backed by YOLO instead of
+  OWLv2 — Pip's prompt doesn't change.
+- **LFM2.5-VL-450M with bbox prompts** — already loaded for captions;
+  add `ask_robot_scene` variants that prompt for structured JSON
+  output (`{objects: [{name, box: [x, y, w, h]}, ...]}`) for
+  open-vocab spatial when "what objects with positions" is the
+  question. One model, one session.
+- **OWLv2** — retire. Delete `grounding.js` once YOLO26n + LFM-VL
+  bbox-prompting cover the use cases observed in replay. Keep the
+  module flag pattern (`GROUNDING_ENABLED`) renamed to a generic
+  detector-availability gate so the stop-rule executor doesn't
+  break.
+
+Phases:
+1. **Add YOLO26n alongside OWLv2.** Don't delete anything yet. Add a
+   `?detector=yolo` URL flag so the dashboard can A/B which model
+   answers `get_robot_detections` for a session. Compare quality on
+   a fixed set of typical "what's in front of the robot" questions.
+2. **LFM-VL bbox prompting.** Add a structured-JSON output mode to
+   `ask_robot_scene` — one prompt template that asks for objects +
+   normalized boxes, parsed back into the same shape OWLv2 returns
+   today. Validate that LFM-VL's bboxes survive on this die /
+   browser combo (its older sibling didn't always).
+3. **Retire OWLv2.** When (1) shows YOLO is faster + good enough
+   AND (2) shows LFM-VL covers the open-vocab niche, delete
+   `grounding.js`. Update CLAUDE.md model discipline.
+
+Validation criterion: closed-loop "drive toward yellow can on the
+floor" at ≥ 5 Hz with YOLO26n alone. If the toy can servo to a
+target without stalling on perception, the model rotation is the
+right call. Failing < 5 Hz means we either need a smaller YOLO
+variant, fewer frames per inference, or revisit whether browser
+ONNX hits the latency budget on the target hardware.
+
+Skeptical angle: this is a perception-architecture move and they're
+hard to reverse cleanly — once Pip's prompts assume YOLO's class
+vocabulary, switching back to open-vocab is more work than the
+flag-gated A/B suggests. Don't merge the prompt assumption changes
+in phase 1; only land them after phase 3's deletion. And the
+YOLO26 export-format gotcha (default 1×84×8400 vs the embedded
+NMS-free format) needs to be settled at the export stage, not in JS
+post-processing — confirm before committing.
+
 ### Background-rank items (known, not urgent)
 
 ### 1. ESP32 URL-trigger OTA still fails with http -1 on CAM-MB (superseded by lane work)
