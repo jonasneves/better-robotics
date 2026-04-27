@@ -384,10 +384,19 @@ static bool initCamera() {
   }
   Serial.printf("camera ok, psram=%d, profile=%s\n",
                 psramFound(), cameraProfileName(cameraProfile));
-  // Sensor-side tuning (set_aec2, set_gainceiling, etc.) was attempted but
-  // broke OV2640 on this die revision (all-black frames after init). Stock
-  // defaults work; revisit when we have a per-sensor compatibility matrix
-  // or the user wants a runtime knob to set them themselves.
+  // Orientation only — sensor-side EXPOSURE tweaks (set_aec2, set_gainceiling)
+  // broke OV2640 on this die revision earlier (all-black frames). vflip +
+  // hmirror just transform the readout coordinate space and have no effect
+  // on exposure or color, so they're safe to apply unconditionally. The
+  // AI-Thinker camera connector exits the module in a way that produces a
+  // 180°-rotated image vs. how operators naturally hold the chassis; the
+  // canonical CameraWebServer example ships with both flips enabled for
+  // exactly this reason.
+  sensor_t* s = esp_camera_sensor_get();
+  if (s) {
+    s->set_vflip(s, 1);
+    s->set_hmirror(s, 1);
+  }
   return true;
 }
 
