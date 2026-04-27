@@ -5,7 +5,7 @@ import { $, escapeHtml } from "./dom.js";
 import { log, logFor } from "./log.js";
 import { settings, saveSettings } from "./settings.js";
 import {
-  state, persist, loadKnown, loadRobots,
+  state, persist, loadKnown, loadRobots, robotFor, mergeRobots, splitMember,
   makeEntry, entryFor, attachDevice, setDisconnectHandler,
 } from "./state.js";
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
@@ -783,6 +783,17 @@ async function forgetDevice(id) {
   }
   const name = entry.name;
   state.devices.delete(id);
+  // Drop this device from its robot. If it was the only member, the robot
+  // disappears entirely; otherwise the surviving members keep the robot
+  // alive (forgetting one device of an ESP32-eye + Pi-brain robot leaves
+  // the other half behind, which is the right shape).
+  for (const r of [...state.robots.values()]) {
+    const i = r.members.indexOf(id);
+    if (i < 0) continue;
+    r.members.splice(i, 1);
+    if (r.members.length === 0) state.robots.delete(r.id);
+    break;
+  }
   persist();
   log("forgotten", name);
   render();
@@ -908,7 +919,7 @@ function render() {
 
   updateQrHint();
 
-  if (state.devices.size === 0) {
+  if (state.robots.size === 0) {
     empty.hidden = false;
     header.hidden = true;
     list.innerHTML = "";
@@ -918,29 +929,59 @@ function render() {
   header.hidden = false;
   updateHeaderActions();
 
-  const ids = new Set(state.devices.keys());
+  // Card-per-robot (working.md item F). Each robot has a single DOM node,
+  // shared by every member entry — so cap modules' in-place patchers
+  // (.cap-state querySelectors etc.) keep working without learning about
+  // the composition. The robot id is used as the dataset key; for the
+  // single-member case (universal pre-migration) it equals the deviceId.
+  const robotIds = new Set(state.robots.keys());
   for (const child of [...list.children]) {
-    if (!ids.has(child.dataset.entryId)) child.remove();
+    if (!robotIds.has(child.dataset.robotId)) child.remove();
   }
 
   let prev = null;
-  for (const entry of state.devices.values()) {
-    if (!entry.node) {
-      entry.node = document.createElement("section");
-      entry.node.className = "card robot";
-      entry.node.dataset.entryId = entry.id;
-      renderEntry(entry);
+  for (const robot of state.robots.values()) {
+    if (!robot.node) {
+      robot.node = document.createElement("section");
+      robot.node.className = "card robot";
+      robot.node.dataset.robotId = robot.id;
     }
+    // Point every member's entry.node at the shared robot node, so calls
+    // to renderEntry(member) and surgical patchers find the right DOM.
+    const members = robot.members.map(id => state.devices.get(id)).filter(Boolean);
+    for (const m of members) m.node = robot.node;
+    if (members.length) renderEntry(members[0]);
     const target = prev ? prev.nextSibling : list.firstChild;
-    if (target !== entry.node) {
-      if (prev) prev.after(entry.node); else list.prepend(entry.node);
+    if (target !== robot.node) {
+      if (prev) prev.after(robot.node); else list.prepend(robot.node);
     }
-    prev = entry.node;
+    prev = robot.node;
   }
 }
 
-function renderEntry(entry) {
-  if (!entry.node) { render(); return; }
+function renderEntry(entryArg) {
+  if (!entryArg.node) { render(); return; }
+  // Resolve robot context. After Pass 1 auto-migration, every device is its
+  // own one-member robot — so members === [entryArg] and the rest of this
+  // function behaves identically. Multi-member robots (created by explicit
+  // merge in Pass 3) flow through the same path with multiple member
+  // entries contributing caps; the cap loop below fans out across them.
+  const robot = robotFor(entryArg.id);
+  const members = robot
+    ? robot.members.map(mId => state.devices.get(mId)).filter(Boolean)
+    : [entryArg];
+  if (!members.length) return;
+  // Primary member drives top-level concerns (header status, telemetry,
+  // fwInfo, otaStatus). Prefer the entry whose notify triggered this render
+  // (entryArg) so callbacks reading "their" connection state see the right
+  // shape; fall back to any connected member; finally first member.
+  const primary = members.find(m => m === entryArg && m.status === "connected")
+              || members.find(m => m.status === "connected")
+              || members.find(m => m === entryArg)
+              || members[0];
+  const entry = primary;
+  const displayName = robot?.name || entry.name;
+  const isComposite = members.length > 1;
   // Preserve focus + value across the innerHTML rebuild for any data-action
   // input/textarea inside this card. Telemetry/ops/motor notifies fire
   // renderEntry frequently; without this, typing in an inline editor (e.g.
@@ -950,7 +991,8 @@ function renderEntry(entry) {
   const savedValue = savedAction && "value" in active ? active.value : null;
   const savedStart = savedAction && active.selectionStart != null ? active.selectionStart : null;
   const savedEnd   = savedAction && active.selectionEnd != null ? active.selectionEnd : null;
-  const { id, name, status } = entry;
+  const { id, status } = entry;
+  const name = displayName;
   const firmwareDown = status === "firmware-down";
   // GATT IS connected when firmwareDown — only the main service is missing.
   // Treat as connected for button purposes so the user gets Disconnect.
@@ -983,25 +1025,37 @@ function renderEntry(entry) {
   // Render-tree groups them under their parent so the card mirrors the model
   // instead of the wire shape. Mapping is dashboard-side, no firmware change.
   const PARENT_MAP = { flash: "camera", snapshot: "camera" };
-  const allCaps = [...CAPABILITIES, ...(entry.runtimeCaps || [])];
+  // Fan out across members — each cap is anchored to the member that owns
+  // its BLE characteristic, so the cap module's renderSection / wireActions
+  // operate on that member's entry without needing to learn about robot
+  // composition. For single-member robots this collapses to the prior
+  // shape; for multi-member, an ESP32-eye's camera section and a Pi-brain's
+  // motors section both show up under the same robot card, each driven by
+  // its own member.
+  const allCaps = [];
+  for (const m of members) {
+    for (const c of CAPABILITIES) allCaps.push({ cap: c, member: m });
+    for (const c of m.runtimeCaps || []) allCaps.push({ cap: c, member: m });
+  }
   const childrenOf = new Map();
   const topCaps = [];
-  for (const c of allCaps) {
-    const parent = PARENT_MAP[c.name];
+  for (const item of allCaps) {
+    const parent = PARENT_MAP[item.cap.name];
     if (parent) {
       if (!childrenOf.has(parent)) childrenOf.set(parent, []);
-      childrenOf.get(parent).push(c);
+      childrenOf.get(parent).push(item);
     } else {
-      topCaps.push(c);
+      topCaps.push(item);
     }
   }
+  const capByOrder = (a, b) => byOrder(a.cap, b.cap);
   const sections = topCaps
     .slice()
-    .sort(byOrder)
-    .map(c => {
-      const kids = (childrenOf.get(c.name) || []).slice().sort(byOrder);
-      const childHtml = kids.map(k => k.renderSection(entry)).join("");
-      return c.renderSection(entry, { childHtml });
+    .sort(capByOrder)
+    .map(({ cap, member }) => {
+      const kids = (childrenOf.get(cap.name) || []).slice().sort(capByOrder);
+      const childHtml = kids.map(k => k.cap.renderSection(k.member)).join("");
+      return cap.renderSection(member, { childHtml });
     })
     .join("");
   const liveStatus = entry.robotStatus;
@@ -1035,9 +1089,16 @@ function renderEntry(entry) {
         </div>
       </div>`;
   })();
-  const typeBadge = entry.fwType
-    ? `<span class="type-badge type-${escapeHtml(entry.fwType)}">${escapeHtml(entry.fwType === "esp32" ? "ESP32" : entry.fwType.toUpperCase())}</span>`
-    : "";
+  // One badge per member — single-member robots see exactly one, composites
+  // get one per platform tier (Pi + ESP32 in the eye-and-brain pattern).
+  // Iterates in robot.members order so the user controls which badge sits
+  // first by which device they paired first.
+  const typeBadge = members
+    .filter(m => m.fwType)
+    .map(m => `<span class="type-badge type-${escapeHtml(m.fwType)}" title="${escapeHtml(m.name)}">${
+      escapeHtml(m.fwType === "esp32" ? "ESP32" : m.fwType.toUpperCase())
+    }</span>`)
+    .join("");
   // Secondary metadata row — surfaces WiFi state, uptime, abnormal reset
   // reasons. Only when connected (otherwise we don't have the data and the
   // row would say nothing useful). Card layout earns its height; this is
@@ -1078,27 +1139,33 @@ function renderEntry(entry) {
   // running-state in its own row; this strip aggregates them so a list
   // of robots reads "this one is streaming + this one is OTAing"
   // without per-card eye-walks.
+  // Active-ops aggregate across members — if either the ESP32 or the Pi is
+  // streaming, the composite robot is streaming. OTA stays anchored to the
+  // primary's chip (only one OTA at a time across the robot in practice).
   const activeOps = [];
-  if (connected) {
-    if (entry.cameraRunning || entry.cameraStream) activeOps.push({ text: "streaming" });
-    if ((entry.motorLeft || 0) !== 0 || (entry.motorRight || 0) !== 0) {
-      activeOps.push({ text: `motors L:${entry.motorLeft || 0} R:${entry.motorRight || 0}` });
+  const anyConnected = members.some(m => m.status === "connected" || m.status === "firmware-down");
+  if (anyConnected) {
+    if (members.some(m => m.cameraRunning || m.cameraStream)) {
+      activeOps.push({ text: "streaming" });
     }
-    if ((entry.flashLevel || 0) > 0) activeOps.push({ text: `flash ${entry.flashLevel}%` });
-    const oSt = entry.otaStatus?.st;
-    if (oSt && oSt !== "idle") {
-      // data-op="ota" lets patchOtaSection update the chip in place during
-      // the upload — without it, the chip stays at the initial 0% because
-      // patchOtaSection only patches the inline section, not the row chips.
-      const total = entry.otaStatus.total || 0;
-      const n = entry.otaStatus.n || entry.otaSent || 0;
+    const motorMember = members.find(m => (m.motorLeft || 0) !== 0 || (m.motorRight || 0) !== 0);
+    if (motorMember) {
+      activeOps.push({ text: `motors L:${motorMember.motorLeft || 0} R:${motorMember.motorRight || 0}` });
+    }
+    const flashMember = members.find(m => (m.flashLevel || 0) > 0);
+    if (flashMember) activeOps.push({ text: `flash ${flashMember.flashLevel}%` });
+    const otaMember = members.find(m => m.otaStatus?.st && m.otaStatus.st !== "idle");
+    if (otaMember) {
+      const oSt = otaMember.otaStatus.st;
+      const total = otaMember.otaStatus.total || 0;
+      const n = otaMember.otaStatus.n || otaMember.otaSent || 0;
       const pct = total ? Math.round(100 * n / total) : 0;
       activeOps.push({
         op: "ota",
         text: total ? `OTA ${oSt} ${pct}%` : `OTA ${oSt}`,
       });
     }
-    if (entry.snapshotBusy) activeOps.push({ text: "snapshotting…" });
+    if (members.some(m => m.snapshotBusy)) activeOps.push({ text: "snapshotting…" });
   }
   const opsRow = activeOps.length
     ? `<div class="robot-ops">${activeOps.map(o =>
@@ -1150,6 +1217,22 @@ function renderEntry(entry) {
       ${metaRow}
       ${opsRow}
     </div>
+    ${isComposite ? `
+      <div class="robot-members" role="list">
+        ${members.map(m => {
+          const memSt = m.status === "connected" ? "connected"
+                      : m.status === "firmware-down" ? "fw-down"
+                      : m.status === "connecting" ? "connecting"
+                      : m.status === "error" ? "error"
+                      : "offline";
+          const dot = `<span class="member-dot member-dot-${memSt}"></span>`;
+          const badge = m.fwType
+            ? `<span class="type-badge type-${escapeHtml(m.fwType)}">${escapeHtml(m.fwType === "esp32" ? "ESP32" : m.fwType.toUpperCase())}</span>`
+            : "";
+          return `<span class="member-chip" role="listitem" title="${escapeHtml(m.name)}">${dot}${badge}<span class="member-name">${escapeHtml(m.name)}</span></span>`;
+        }).join("")}
+      </div>
+    ` : ""}
     ${entry.staleHandle && !connected && !connecting ? `
       <div class="meta robot-stale-hint">
         Pick ${escapeHtml(entry.name)} again to reconnect. The robot's pairing isn't affected.
@@ -1326,6 +1409,13 @@ function openMenu(triggerBtn, id) {
   // render whatever it's capable of, and the menu is reachable for ESP32.
   $("menu-pinout").hidden  = !(entry?.status === "connected" && entry?.fwInfo);
   $("menu-disconnect").hidden = !(entry?.status === "connected");
+  // Merge requires at least one OTHER robot to combine with. Split only
+  // appears when this robot has multiple members (composition exists to be
+  // undone). Both work whether or not the device is currently connected.
+  const myRobot = robotFor(entry?.id);
+  const otherRobotCount = [...state.robots.values()].filter(r => r.id !== myRobot?.id).length;
+  $("menu-merge").hidden = otherRobotCount === 0;
+  $("menu-split").hidden = !(myRobot && myRobot.members.length > 1);
   const rect = triggerBtn.getBoundingClientRect();
   // Position below-right of trigger, nudging left if it would overflow viewport.
   const menuWidth = 220;
@@ -1764,6 +1854,39 @@ document.addEventListener("DOMContentLoaded", () => {
     const id = menuTargetId;
     closeMenu();
     if (id) disconnect(id);
+  });
+  $("menu-merge").addEventListener("click", () => {
+    const id = menuTargetId;
+    closeMenu();
+    if (!id) return;
+    const myRobot = robotFor(id);
+    if (!myRobot) return;
+    const candidates = [...state.robots.values()].filter(r => r.id !== myRobot.id);
+    if (!candidates.length) return;
+    // Minimal native picker for now — list each other robot with member
+    // count, accept a single keystroke. A nicer dialog can replace this
+    // once we have a feel for how often merges actually happen.
+    const lines = candidates.map((r, i) =>
+      `${i + 1}. ${r.name}${r.members.length > 1 ? ` (${r.members.length} members)` : ""}`,
+    );
+    const pick = prompt(
+      `Merge "${myRobot.name}" into which robot?\n\n${lines.join("\n")}\n\nEnter number, or Cancel:`,
+    );
+    const idx = parseInt(pick, 10) - 1;
+    if (!Number.isFinite(idx) || idx < 0 || idx >= candidates.length) return;
+    const dest = candidates[idx];
+    if (!confirm(`Merge "${myRobot.name}" into "${dest.name}"?\n\nBoth devices will appear as one robot. Reversible from the merged robot's menu.`)) return;
+    mergeRobots(myRobot.id, dest.id);
+    persist();
+    render();
+  });
+  $("menu-split").addEventListener("click", () => {
+    const id = menuTargetId;
+    closeMenu();
+    if (!id) return;
+    splitMember(id);
+    persist();
+    render();
   });
   $("menu-forget").addEventListener("click", () => {
     const id = menuTargetId;

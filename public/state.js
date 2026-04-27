@@ -198,6 +198,13 @@ export function entryFor(device) {
   const entry = makeEntry(device.id, device.name || device.id);
   attachDevice(entry, device);
   state.devices.set(device.id, entry);
+  // New paired device → auto-create a one-member robot. The user can later
+  // merge it into an existing robot via the menu (working.md item F).
+  if (!robotFor(device.id)) {
+    state.robots.set(device.id, {
+      id: device.id, name: device.name || device.id, members: [device.id],
+    });
+  }
   persist();
   return entry;
 }
