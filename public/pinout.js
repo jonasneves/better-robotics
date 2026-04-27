@@ -760,17 +760,22 @@ function renderEsp32Edit(entry) {
   const c = editConfig;
   const usedBy = {};
   for (const k of ["led", "flash", "m_l_in1", "m_l_in2", "m_r_in1", "m_r_in2"]) {
+    if (c[k] < 0) continue;  // -1 = disabled, multiple disables don't conflict
     (usedBy[c[k]] ||= []).push(k);
   }
   const dup = Object.entries(usedBy).filter(([, v]) => v.length > 1);
-  const cameraHits = Object.entries(c).filter(([, p]) => ESP32_CAMERA_RESERVED.has(p));
+  const cameraHits = Object.entries(c).filter(([, p]) => p >= 0 && ESP32_CAMERA_RESERVED.has(p));
 
+  // Blank field = -1 (cap disabled). The note explains it inline so the
+  // operator doesn't have to guess at the convention.
   const input = (label, key) => {
-    const note = esp32PinNote(c[key]);
+    const v = c[key];
+    const display = v < 0 ? "" : String(v);
+    const note = v < 0 ? "(disabled)" : esp32PinNote(v);
     return `<div class="pinout-edit-row">
       <span class="pinout-edit-label">${label}</span>
       <input type="text" inputmode="numeric" class="pinout-edit-input"
-             data-key="${key}" value="${c[key]}">
+             data-key="${key}" value="${display}" placeholder="blank to disable">
       ${note ? `<span class="meta">${escapeHtml(note)}</span>` : ""}
     </div>`;
   };
@@ -805,11 +810,13 @@ function renderEsp32Edit(entry) {
   `;
   $("pinout-body").querySelectorAll("input[data-key]").forEach(el => {
     el.addEventListener("input", () => {
-      const v = parseInt(el.value, 10);
+      const raw = el.value.trim();
+      // Empty input = -1 (cap disabled). Otherwise parse the integer; ignore
+      // unparseable so partial typing doesn't snap to NaN mid-keystroke.
+      const v = raw === "" ? -1 : parseInt(raw, 10);
       if (!Number.isNaN(v)) {
         editConfig[el.dataset.key] = v;
         renderEsp32Edit(entry);  // re-render to refresh conflict + note rows
-        // Restore focus + cursor to the just-edited input.
         const back = $("pinout-body").querySelector(`input[data-key="${el.dataset.key}"]`);
         if (back) { back.focus(); back.setSelectionRange(back.value.length, back.value.length); }
       }
@@ -823,11 +830,13 @@ function renderEsp32Edit(entry) {
 
 async function saveEsp32Edit(entry) {
   // Range check (firmware also validates, but reject early so the user
-  // gets a focused error instead of a silent ignore over BLE).
+  // gets a focused error instead of a silent ignore over BLE). -1 means
+  // "cap disabled" — accepted; only out-of-range positives reject.
   for (const key of ["led", "flash", "m_l_in1", "m_l_in2", "m_r_in1", "m_r_in2"]) {
     const v = editConfig[key];
-    if (!Number.isInteger(v) || v < 0 || v > 39) {
-      alert(`${key}: GPIO ${v} is out of range [0, 39].`);
+    if (!Number.isInteger(v) || v === -1) continue;
+    if (v < 0 || v > 39) {
+      alert(`${key}: GPIO ${v} is out of range [0, 39] (or leave blank to disable).`);
       return;
     }
   }

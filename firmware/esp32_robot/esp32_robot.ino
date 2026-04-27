@@ -112,6 +112,15 @@ const uint16_t LLM_MAX_DURATION_MS = 2000;
 // ENA/ENB jumpers on the L298N stay ON (5V — H-bridge always enabled),
 // PWM rides the IN pins. Forward = IN1=PWM, IN2=LOW; reverse = IN1=LOW,
 // IN2=PWM. Same 2-pin-per-motor pattern the Pi uses.
+// -1 in any pin field = "not wired, disable this cap." Lets the operator
+// strip a capability the firmware compiled in (e.g. a camera-only chassis
+// with no motors) by clearing pins from the dashboard's Pinout editor —
+// no separate enable/disable toggle, the missing pin IS the disable signal.
+// Camera + WiFi + telemetry are always on; this gates LED / flash / motors.
+// pinValid + motorsConfigured live below, after CamProfile (Arduino's auto-
+// prototype generator hoists prototypes above all type declarations, so
+// putting helper functions before an enum that other functions reference
+// breaks the prototype block).
 int LED_PIN = 33;
 int FLASH_PIN = 4;
 int MOTOR_L_IN1 = 14;
@@ -163,6 +172,13 @@ static CamProfile cameraProfileFromName(const String& s) {
   if (s == "compact")  return CAM_COMPACT;
   if (s == "full")     return CAM_FULL;
   return CAM_STANDARD;
+}
+// Pin-validity helpers. Placed AFTER CamProfile so Arduino's auto-prototype
+// generator doesn't hoist their prototypes above the enum.
+static inline bool pinValid(int p) { return p >= 0; }
+static inline bool motorsConfigured() {
+  return pinValid(MOTOR_L_IN1) && pinValid(MOTOR_L_IN2)
+      && pinValid(MOTOR_R_IN1) && pinValid(MOTOR_R_IN2);
 }
 // Snapshot chunk size — must fit under MTU-3. Matches public/ble.js CHUNK_BYTES
 // (180), which is conservative for desktop Chrome's negotiated MTU (~185).
@@ -666,29 +682,45 @@ static void publishFwInfo() {
   // across platforms. "dev" when building outside git (rare — CI always has git).
   info += ",\"version\":\"" GIT_SHA "\"";
   info += ",\"caps\":[";
-  info += "{\"name\":\"led\",\"type\":\"toggle\",\"pin\":";
-  info += String(LED_PIN);
-  info += "}";
+  // Each cap below skips fw-info entry (and thus dashboard rendering) when
+  // its pins are -1. The dashboard renders strictly from this advertisement,
+  // so no UI lies about hardware that isn't wired. WiFi has no pin config
+  // and stays unconditional.
+  bool firstCap = true;
+  if (pinValid(LED_PIN)) {
+    info += "{\"name\":\"led\",\"type\":\"toggle\",\"pin\":";
+    info += String(LED_PIN);
+    info += "}";
+    firstCap = false;
+  }
   if (_flash_attached) {
-    info += ",{\"name\":\"flash\",\"type\":\"level\",\"range\":[0,100],\"pin\":";
+    if (!firstCap) info += ",";
+    info += "{\"name\":\"flash\",\"type\":\"level\",\"range\":[0,100],\"pin\":";
     info += String(FLASH_PIN);
     info += "}";
+    firstCap = false;
   }
-  info += ",{\"name\":\"wifi\",\"type\":\"wifi-scan\"}";
+  if (!firstCap) info += ",";
+  info += "{\"name\":\"wifi\",\"type\":\"wifi-scan\"}";
+  firstCap = false;
   // Motor pin assignments mirror Pi's get-config shape so the future
   // pinout editor (working.md item D) can render both platforms with
   // one schema. ENA/ENB jumpers stay ON — H-bridge is always enabled,
   // PWM rides the IN pins. See firmware comments above LED_PIN decl.
-  info += ",{\"name\":\"motors\",\"type\":\"signed-pair\",\"range\":[-100,100]";
-  info += ",\"pins\":{\"left\":{\"in1\":";
-  info += String(MOTOR_L_IN1);
-  info += ",\"in2\":";
-  info += String(MOTOR_L_IN2);
-  info += "},\"right\":{\"in1\":";
-  info += String(MOTOR_R_IN1);
-  info += ",\"in2\":";
-  info += String(MOTOR_R_IN2);
-  info += "}}}";
+  if (motorsConfigured()) {
+    if (!firstCap) info += ",";
+    info += "{\"name\":\"motors\",\"type\":\"signed-pair\",\"range\":[-100,100]";
+    info += ",\"pins\":{\"left\":{\"in1\":";
+    info += String(MOTOR_L_IN1);
+    info += ",\"in2\":";
+    info += String(MOTOR_L_IN2);
+    info += "},\"right\":{\"in1\":";
+    info += String(MOTOR_R_IN1);
+    info += ",\"in2\":";
+    info += String(MOTOR_R_IN2);
+    info += "}}}";
+    firstCap = false;
+  }
   if (cameraReady) {
     info += ",{\"name\":\"camera\",\"type\":\"mjpeg-stream\",\"port\":81,\"path\":\"/stream\"";
     // Profile metadata so the dashboard can render the picker. `profile`
@@ -715,7 +747,7 @@ static void publishFwInfo() {
 
 static void applyLed(bool on) {
   ledOn = on;
-  digitalWrite(LED_PIN, on ? LOW : HIGH);  // active-low
+  if (pinValid(LED_PIN)) digitalWrite(LED_PIN, on ? LOW : HIGH);  // active-low
   uint8_t v = on ? 1 : 0;
   if (ledChar) {
     ledChar->setValue(&v, 1);
@@ -847,29 +879,35 @@ class FlashCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
-// Tiny JSON int extractor — same pattern wifi-join uses. Returns -1 when
-// the key is missing OR the value isn't a parseable integer in [0, 99].
-// We don't pull a JSON library; the schema is fixed and small.
+// Tiny JSON int extractor — handles a leading minus so the pin-config
+// editor can write `-1` to disable a cap. PIN_ABSENT signals "key absent
+// or unparseable"; the pin-config callback distinguishes that from a real
+// `-1` (user-set sentinel) so missing keys can fall through to current.
+static const int PIN_ABSENT = -32768;
 static int extractIntKey(const std::string& json, const char* key) {
   std::string needle = "\""; needle += key; needle += "\"";
   size_t k = json.find(needle);
-  if (k == std::string::npos) return -1;
+  if (k == std::string::npos) return PIN_ABSENT;
   size_t c = json.find(':', k);
-  if (c == std::string::npos) return -1;
+  if (c == std::string::npos) return PIN_ABSENT;
   size_t i = c + 1;
   while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) i++;
+  bool neg = false;
+  if (i < json.size() && json[i] == '-') { neg = true; i++; }
   int v = 0;
   bool any = false;
   while (i < json.size() && json[i] >= '0' && json[i] <= '9') {
     v = v * 10 + (json[i] - '0');
     i++; any = true;
   }
-  return any ? v : -1;
+  if (!any) return PIN_ABSENT;
+  return neg ? -v : v;
 }
 
-// Pin-config write — JSON with the same keys loadPinConfig() reads. Validates
-// each pin is in [0, 39] and not in the camera-reserved set; on success,
-// writes NVS and schedules a restart.
+// Pin-config write — JSON with the same keys loadPinConfig() reads. Each
+// pin must be -1 (cap disabled) or in [0, 39] and not in the camera-
+// reserved set. Missing keys (PIN_ABSENT) preserve the current value, so
+// the dashboard can update one field without re-sending the whole map.
 class PinConfigCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* ch, NimBLEConnInfo& /*info*/) override {
     std::string json = ch->getValue();
@@ -880,10 +918,6 @@ class PinConfigCallbacks : public BLECharacteristicCallbacks {
     int l_in2  = extractIntKey(json, "m_l_in2");
     int r_in1  = extractIntKey(json, "m_r_in1");
     int r_in2  = extractIntKey(json, "m_r_in2");
-    if (led < 0 || flash < 0 || l_in1 < 0 || l_in2 < 0 || r_in1 < 0 || r_in2 < 0) {
-      Serial.printf("pin-config: missing keys, ignored\n");
-      return;
-    }
     // Camera pins — must not collide. Bake the reserved set in (it's the
     // AI-Thinker fixed pin map; changing the camera pins requires a code
     // change, not a config change).
@@ -891,6 +925,8 @@ class PinConfigCallbacks : public BLECharacteristicCallbacks {
     int candidates[6] = { led, flash, l_in1, l_in2, r_in1, r_in2 };
     for (int i = 0; i < 6; i++) {
       int p = candidates[i];
+      if (p == PIN_ABSENT) continue;     // missing key: keep current value
+      if (p == -1) continue;             // explicit disable: no validation
       if (p < 0 || p > 39) {
         Serial.printf("pin-config: pin %d out of range, ignored\n", p);
         return;
@@ -898,7 +934,8 @@ class PinConfigCallbacks : public BLECharacteristicCallbacks {
       for (int r : RESERVED) {
         if (p == r) { Serial.printf("pin-config: GPIO %d is camera-reserved, ignored\n", p); return; }
       }
-      // No-duplicate check among the editable pins themselves.
+      // No-duplicate check among the editable pins themselves — only
+      // active (>= 0) pins; -1 may appear multiple times trivially.
       for (int j = i + 1; j < 6; j++) {
         if (candidates[j] == p) {
           Serial.printf("pin-config: GPIO %d assigned twice, ignored\n", p);
@@ -908,12 +945,12 @@ class PinConfigCallbacks : public BLECharacteristicCallbacks {
     }
     Preferences pins;
     pins.begin("pins", false);  // read/write
-    pins.putInt("led",     led);
-    pins.putInt("flash",   flash);
-    pins.putInt("m_l_in1", l_in1);
-    pins.putInt("m_l_in2", l_in2);
-    pins.putInt("m_r_in1", r_in1);
-    pins.putInt("m_r_in2", r_in2);
+    if (led    != PIN_ABSENT) pins.putInt("led",     led);
+    if (flash  != PIN_ABSENT) pins.putInt("flash",   flash);
+    if (l_in1  != PIN_ABSENT) pins.putInt("m_l_in1", l_in1);
+    if (l_in2  != PIN_ABSENT) pins.putInt("m_l_in2", l_in2);
+    if (r_in1  != PIN_ABSENT) pins.putInt("m_r_in1", r_in1);
+    if (r_in2  != PIN_ABSENT) pins.putInt("m_r_in2", r_in2);
     pins.end();
     Serial.printf("pin-config: saved (led=%d flash=%d L=%d/%d R=%d/%d) — restarting\n",
                   led, flash, l_in1, l_in2, r_in1, r_in2);
@@ -1199,6 +1236,11 @@ static void loadPinConfig() {
 // duty doesn't bleed into the flash output. 1 kHz / 8-bit duty matches
 // motors — keeps LEDC config uniform.
 static void initFlashPwm() {
+  if (!pinValid(FLASH_PIN)) {
+    Serial.println("flash: pin -1, cap disabled");
+    _flash_attached = false;
+    return;
+  }
   _flash_attached = ledcAttach(FLASH_PIN, MOTOR_PWM_FREQ, MOTOR_PWM_RES);
   if (!_flash_attached) {
     Serial.printf("flash: ledcAttach(%d) failed\n", FLASH_PIN);
@@ -1255,9 +1297,16 @@ void setup() {
 
   Serial.begin(115200);
   loadPinConfig();
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);  // off
-  initMotorPwm();
+  // Each peripheral init is gated on its pins being valid — sentinel -1 in
+  // any required pin field skips initialization (and downstream BLE
+  // registration + fw-info advertising) so a chassis built without that
+  // hardware doesn't try to drive nothing.
+  if (pinValid(LED_PIN)) {
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, HIGH);  // off
+  }
+  if (motorsConfigured()) initMotorPwm();
+  else Serial.println("motors: pins -1, cap disabled");
   initFlashPwm();
   // Stop the wheels on any clean restart (OTA reboot, ESP.restart, etc.)
   // so the L298N doesn't hold the last duty for the ~500 ms it takes to
@@ -1330,13 +1379,19 @@ void setup() {
   server->setCallbacks(new ServerCallbacks());
   BLEService* service = server->createService(SERVICE_UUID);
 
-  ledChar = service->createCharacteristic(
-    LED_CHAR_UUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
-  );
-  ledChar->setCallbacks(new LedCallbacks());
-  uint8_t initial = 0;
-  ledChar->setValue(&initial, 1);
+  // LED gated by pinValid — clearing LED_PIN to -1 from the dashboard's
+  // Pinout editor strips this characteristic from the service entirely
+  // (matches the missing entry in fw-info.caps), so the dashboard doesn't
+  // render an LED row for hardware that isn't wired.
+  if (pinValid(LED_PIN)) {
+    ledChar = service->createCharacteristic(
+      LED_CHAR_UUID,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
+    );
+    ledChar->setCallbacks(new LedCallbacks());
+    uint8_t initial = 0;
+    ledChar->setValue(&initial, 1);
+  }
 
   // Flash LED — only when ledcAttach succeeded; otherwise the cap is hidden
   // from fw-info too. No half-broken state where the dashboard offers a
@@ -1403,13 +1458,20 @@ void setup() {
   );
   publishFwInfo();
 
-  motorChar = service->createCharacteristic(
-    MOTOR_CHAR_UUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
-  );
-  motorChar->setCallbacks(new MotorCallbacks());
-  uint8_t motorInit[2] = { 0, 0 };
-  motorChar->setValue(motorInit, 2);
+  // Motors gated on pin validity — clear any of the four motor pins to -1
+  // and the cap drops out of fw-info.caps + this characteristic isn't
+  // registered. applyMotors short-circuits on _motors_attached anyway, but
+  // skipping the BLE handle keeps the dashboard from offering a control
+  // surface that writes into a no-op.
+  if (motorsConfigured()) {
+    motorChar = service->createCharacteristic(
+      MOTOR_CHAR_UUID,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
+    );
+    motorChar->setCallbacks(new MotorCallbacks());
+    uint8_t motorInit[2] = { 0, 0 };
+    motorChar->setValue(motorInit, 2);
+  }
 
   // Telemetry: system-health observability matched to Pi's TELEMETRY_CHAR_UUID
   // shape. ESP32 has one binary so there's no "main service down, device fine"
