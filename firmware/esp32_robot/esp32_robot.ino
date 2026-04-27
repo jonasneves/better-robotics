@@ -1521,13 +1521,32 @@ static void publishDiscoverAd() {
   body += DISCOVER_TTL_MS;
   body += "}";
 
+  // Resolve first so we can distinguish DNS failure from TLS failure.
+  // arduino-esp32's WiFiClientSecure.connect() returns 0 for both, which
+  // makes the silent-failure case impossible to triage.
+  IPAddress addr;
+  unsigned long tDns = millis();
+  if (!WiFi.hostByName(DISCOVER_HOST, addr)) {
+    Serial.printf("discover: DNS failed for %s (heap=%u, %lums)\n",
+                  DISCOVER_HOST, ESP.getFreeHeap(), millis() - tDns);
+    return;
+  }
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(8);  // seconds
+  client.setHandshakeTimeout(15);  // seconds — TLS handshake on classic
+                                   // ESP32-CAM with BLE coex is slow; 8 s
+                                   // is enough on home WiFi but flaky on
+                                   // marginal links.
+  client.setTimeout(15);
   unsigned long t0 = millis();
   if (!client.connect(DISCOVER_HOST, DISCOVER_PORT)) {
-    Serial.printf("discover: connect failed (host=%s port=%u)\n",
-                  DISCOVER_HOST, DISCOVER_PORT);
+    // lastError captures the mbedTLS code when handshake fails. Format
+    // matches the standard mbedTLS strerror lookup so we can decode it.
+    char errBuf[64] = {0};
+    int err = client.lastError(errBuf, sizeof(errBuf));
+    Serial.printf("discover: connect failed (dns=%s ip=%s err=%d msg=%s heap=%u %lums)\n",
+                  DISCOVER_HOST, addr.toString().c_str(), err, errBuf,
+                  ESP.getFreeHeap(), millis() - t0);
     return;
   }
   client.printf("PUT %s HTTP/1.1\r\n", DISCOVER_PATH);
