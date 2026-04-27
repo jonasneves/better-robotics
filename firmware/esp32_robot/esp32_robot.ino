@@ -144,7 +144,7 @@ static TaskHandle_t snapshotTaskHandle = nullptr;
 // Compact saves DMA heap (matters when WiFi is marginal); full pushes
 // resolution at the cost of buffers + bandwidth. Standard is the default.
 enum CamProfile { CAM_COMPACT = 0, CAM_STANDARD = 1, CAM_FULL = 2 };
-static CamProfile cameraProfile = CAM_STANDARD;
+static CamProfile cameraProfile = CAM_COMPACT;
 static const char* cameraProfileName(CamProfile p) {
   switch (p) {
     case CAM_COMPACT:  return "compact";
@@ -1247,7 +1247,14 @@ void setup() {
   // char persists to Preferences and restarts the device so a fresh setup()
   // re-runs initCamera with the new profile.
   prefs.begin("cam", true);   // read-only
-  cameraProfile = (CamProfile)prefs.getInt("profile", (int)CAM_STANDARD);
+  // Compact (QVGA) is the daily-use default — on classic ESP32-CAM with
+  // 1-of-4 WiFi RX buffers, standard (VGA) sustains ~15 fps and full
+  // (SVGA) ~10 fps, both of which feel laggy. Compact sustains 30+ fps
+  // and the resolution loss is acceptable for stream + VLM/detector
+  // input. Operators who want higher-res snapshots flip via the profile
+  // picker on the camera card; that choice persists in NVS and overrides
+  // this default on subsequent boots.
+  cameraProfile = (CamProfile)prefs.getInt("profile", (int)CAM_COMPACT);
   prefs.end();
 
   cameraReady = initCamera();
