@@ -971,6 +971,14 @@ static void snapshotTask(void* param) {
   begin[4] = (fb->len      ) & 0xff;
   snapshotDataChar->setValue(begin, 5);
   snapshotDataChar->notify();
+  // Pace begin → chunk 0 the same way every chunk → next-chunk pair is
+  // paced. Without this the begin notify and chunk 0's notify queue
+  // back-to-back; NimBLE's shallow tx queue drops one of the pair, and
+  // observed behavior is begin being the casualty — every subsequent
+  // chunk then arrives at the dashboard without a buffer to land in
+  // and is silently ignored. Symptom: dashboard log shows op=0x02
+  // notifies arriving but no image ever rendering.
+  vTaskDelay(pdMS_TO_TICKS(40));
 
   // Chunks: opcode 0x02 + payload. Loop with small yields between to let the
   // BLE stack drain its tx queue — sending too fast on classic ESP32 BLE
