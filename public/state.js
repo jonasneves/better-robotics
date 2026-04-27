@@ -68,7 +68,6 @@ export function makeEntry(id, name, fwType = null, { autoReconnect = false, last
     // the source phone's pairing roomId so detach can find it.
     attachedCameraStream: null,
     attachedFromPhoneId: null,
-    lastEvent: null,
     capSchema: null,
     runtimeCaps: [],
     // Top-level "what is this robot doing" — populated from robot-status char

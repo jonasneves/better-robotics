@@ -100,14 +100,4 @@ export const log = (msg, name = "") => {
   _lastLogName = name;
 };
 
-// Render re-trigger is injected by the caller to avoid log.js → render.js dep.
-let _renderEntry = () => {};
-export function setLogRenderer(fn) { _renderEntry = fn; }
-
-export const logFor = (entry, msg) => {
-  log(msg, entry.name);
-  if (entry.lastEvent !== msg) {
-    entry.lastEvent = msg;
-    _renderEntry(entry);
-  }
-};
+export const logFor = (entry, msg) => log(msg, entry.name);

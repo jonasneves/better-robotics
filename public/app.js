@@ -2,7 +2,7 @@ import { SERVICE_UUID, HEARTBEAT_SVC_UUID, HEARTBEAT_CHAR_UUID,
   FW_INFO_CHAR_UUID, ROBOT_STATUS_CHAR_UUID,
   OPS_RESPONSE_CHAR_UUID, TELEMETRY_CHAR_UUID, decodeJson } from "./ble.js";
 import { $, escapeHtml } from "./dom.js";
-import { log, logFor, setLogRenderer } from "./log.js";
+import { log, logFor } from "./log.js";
 import { settings, saveSettings } from "./settings.js";
 import {
   state, persist, loadKnown,
@@ -28,7 +28,6 @@ import { getLoadState as getLocalLoadState, onLoadStateChange as onLocalLoadStat
 import { initHelpers, setHelpersRobotRenderer, renderHelpers } from "./helpers.js";
 import { startTracking as startArucoTracking, stopTracking as stopArucoTracking } from "./aruco.js";
 
-setLogRenderer((entry) => renderEntry(entry));
 setDisconnectHandler((id) => onDisconnected(id));
 setCapabilityRenderer((entry) => renderEntry(entry));
 setHelpersRobotRenderer((entry) => renderEntry(entry));
@@ -975,10 +974,31 @@ function renderEntry(entry) {
   // ordering is a no-op in steady state.
   const CAP_ORDER = { ota: 0, led: 1, motors: 2, wifi: 3, camera: 4, ops: 5 };
   const byOrder = (a, b) => (CAP_ORDER[a.name] ?? 99) - (CAP_ORDER[b.name] ?? 99);
-  const sections = [...CAPABILITIES, ...(entry.runtimeCaps || [])]
+  // Schema is flat (each cap is its own BLE characteristic) but the operator's
+  // mental model isn't — Flash and Snapshot are sub-controls of the Camera.
+  // Render-tree groups them under their parent so the card mirrors the model
+  // instead of the wire shape. Mapping is dashboard-side, no firmware change.
+  const PARENT_MAP = { flash: "camera", snapshot: "camera" };
+  const allCaps = [...CAPABILITIES, ...(entry.runtimeCaps || [])];
+  const childrenOf = new Map();
+  const topCaps = [];
+  for (const c of allCaps) {
+    const parent = PARENT_MAP[c.name];
+    if (parent) {
+      if (!childrenOf.has(parent)) childrenOf.set(parent, []);
+      childrenOf.get(parent).push(c);
+    } else {
+      topCaps.push(c);
+    }
+  }
+  const sections = topCaps
     .slice()
     .sort(byOrder)
-    .map(c => c.renderSection(entry))
+    .map(c => {
+      const kids = (childrenOf.get(c.name) || []).slice().sort(byOrder);
+      const childHtml = kids.map(k => k.renderSection(entry)).join("");
+      return c.renderSection(entry, { childHtml });
+    })
     .join("");
   const liveStatus = entry.robotStatus;
   const sticky = !liveStatus ? entry.stickyStatus : null;

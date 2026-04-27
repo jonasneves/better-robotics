@@ -60,7 +60,7 @@ export function makeMjpegStreamCap(schema) {
       entry[profileField] = null;
     },
 
-    renderSection(entry) {
+    renderSection(entry, { childHtml = "" } = {}) {
       if (entry.status !== "connected") return "";
       const url = streamUrl(entry, schema);
       const running = entry[runningField];
@@ -109,7 +109,10 @@ export function makeMjpegStreamCap(schema) {
         label,
         state: stateText,
         action,
-        body: `${body}${watchRow}${promptField}${profileRow}`,
+        // Child caps (Flash, Snapshot — schema-flat, conceptually camera
+        // sub-controls) render here so the operator sees one Camera section
+        // hosting everything camera-shaped instead of three peers in a flat list.
+        body: `${body}${watchRow}${promptField}${profileRow}${childHtml}`,
       });
     },
 

@@ -703,6 +703,18 @@ details.tray.has-alert > summary::after {
   white-space: nowrap;
 }
 .cap-body { margin-top: 10px; }
+
+/* Nested caps (Flash + Snapshot inside Camera) — render as sub-controls,
+   not stacked cards. Drop the dashed top-border + reduced spacing so the
+   visual hierarchy reads "these belong inside Camera" instead of "three
+   peers in a row." Border-left would also work, but the lighter touch
+   keeps the card from feeling like a tree-view. */
+.cap-section .cap-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dotted var(--line);
+  padding-left: 12px;
+}
 @media (prefers-reduced-motion: reduce) { .cap-chevron { transition: none; } }
 
 /* Camera profile picker — sits at the bottom of the camera body when fw-info
