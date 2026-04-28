@@ -369,13 +369,15 @@
 
 <dialog id="label-modal" class="label-modal">
   <div class="modal-header">
-    <div class="label" id="label-title">Robot label</div>
+    <div class="modal-title-stack">
+      <div class="label">Robot label</div>
+      <div class="modal-subtitle" id="label-title"></div>
+    </div>
     <button class="icon" id="label-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
   <div class="qr-box" id="qr-box"></div>
-  <div class="label-url" id="label-url"></div>
+  <div class="label-url" id="label-url" role="button" tabindex="0" aria-label="Copy URL — click to copy"></div>
   <div class="modal-footer">
-    <button class="secondary sm" id="label-copy">Copy URL</button>
     <button class="secondary sm" id="label-print">Print</button>
   </div>
 </dialog>

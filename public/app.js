@@ -1517,7 +1517,10 @@ function openLabel(id) {
   if (!entry) return;
   const url = robotUrl(entry.name);
   $("label-title").textContent = entry.name;
-  $("label-url").textContent = url;
+  const labelUrl = $("label-url");
+  labelUrl.textContent = url;
+  labelUrl.dataset.url = url;
+  labelUrl.classList.remove("copied");
   const qr = qrcode(0, "M");
   qr.addData(url);
   qr.make();
@@ -1765,12 +1768,24 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   $("label-close").addEventListener("click", () => $("label-modal").close());
-  $("label-copy").addEventListener("click", async () => {
+  const labelUrlEl = $("label-url");
+  let _labelCopyTimer = null;
+  async function copyLabelUrl() {
+    const original = labelUrlEl.dataset.url || labelUrlEl.textContent;
     try {
-      await navigator.clipboard.writeText($("label-url").textContent);
-      $("label-copy").textContent = "Copied";
-      setTimeout(() => $("label-copy").textContent = "Copy URL", 1500);
+      await navigator.clipboard.writeText(original);
+      labelUrlEl.textContent = "Copied";
+      labelUrlEl.classList.add("copied");
+      clearTimeout(_labelCopyTimer);
+      _labelCopyTimer = setTimeout(() => {
+        labelUrlEl.textContent = original;
+        labelUrlEl.classList.remove("copied");
+      }, 1500);
     } catch {}
+  }
+  labelUrlEl.addEventListener("click", copyLabelUrl);
+  labelUrlEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); copyLabelUrl(); }
   });
   $("label-print").addEventListener("click", () => window.print());
   $("menu-disconnect").addEventListener("click", () => {
