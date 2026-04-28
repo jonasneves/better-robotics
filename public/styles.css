@@ -1705,7 +1705,6 @@ details.tray.has-alert > summary::after {
 /* Flex column with gap is immune to margin-collapse + specificity edge cases —
    spacing stays right whether the .empty-sub is present or not. */
 .empty-state { text-align: center; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
-.empty-state .empty-icon { width: 48px; height: 48px; color: var(--ink-muted); opacity: 0.6; }
 .empty-state button { padding: 10px 20px; }  /* more breathing room for the primary CTA */
 
 .log {
