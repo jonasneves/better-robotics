@@ -303,18 +303,22 @@ function watchDialogs() {
 }
 
 export function initAssistant() {
+  // Intro fires once per install; subsequent loads stay silent at idle.
+  const seenKey = "better-robotics:pip-intro-seen";
+  const showIntro = !localStorage.getItem(seenKey);
   _pip = createPip({
     container: document.body,
     ask,
     onSubmit,
     systemPrompt: PIP_SYSTEM,
     historyLimit: HISTORY_LIMIT,
-    introText: PIP_INTRO,
+    introText: showIntro ? PIP_INTRO : "",
     introDismissMs: 7000,
     placeholder: "Ask Pip…",
     maxLength: 4000,
     onOpen: cancelAutoDismiss,
   });
+  if (showIntro) { try { localStorage.setItem(seenKey, "1"); } catch {} }
   // Typing cancels auto-dismiss so Pip doesn't vanish mid-thought.
   _pip.input.addEventListener("input", () => { if (_pip.input.value) cancelAutoDismiss(); });
   // Collapsed-turn summary click = re-expand.

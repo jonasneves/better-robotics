@@ -1021,17 +1021,17 @@ async function init() {
   }
   try {
     setStatus("connecting", "");
-    // Route pair stages through setMessage so the user sees where we're
-    // stuck if something stalls — "offer sent, waiting for desktop…" tells
-    // them way more than a forever-spinning "Connecting…".
-    _peer = await joinPairingRoom(roomId, {
-      onStatus: (s) => setMessage(s, "status"),
-    });
+    _peer = await joinPairingRoom(roomId, {});
     setStatus("connected", "");
-    // Mirror of assistant.js's PIP_INTRO — kept in sync manually rather
-    // than imported, since pulling assistant.js into the phone bundle
-    // would drag claude.js + Pip popover code we don't need on phone.
-    setMessage("Hi — I'm Pip. Ask me anything, or I'll pipe up when there's something worth knowing.");
+    // Intro fires once per install (the dot+silence is the steady state;
+    // re-greeting on every reconnect violates Pip's own "pipe up only when
+    // there's something worth knowing" rule). Mirror of assistant.js's
+    // PIP_INTRO — kept in sync manually rather than imported (would drag
+    // claude.js + Pip popover code into the phone bundle).
+    if (!localStorage.getItem("better-robotics:pip-intro-seen")) {
+      setMessage("Hi — I'm Pip. Ask me anything, or I'll pipe up when there's something worth knowing.");
+      try { localStorage.setItem("better-robotics:pip-intro-seen", "1"); } catch {}
+    }
     hideReconnect();
     // Send the desktop our pubkey + label so it can trust us on future
     // discovery without re-scanning. Sent as soon as the channel is up.
