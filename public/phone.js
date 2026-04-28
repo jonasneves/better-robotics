@@ -44,7 +44,16 @@ function setStatus(state, text) {
   $("phone-status-text").textContent = text;
 }
 
-function setMessage(text) { $("phone-message").textContent = text; }
+// Three semantic channels share #phone-message: pair-status, intro, and
+// Pip chat content. Channel kind controls a class on the message element so
+// CSS can visually distinguish them (status = muted/italic, chat = normal).
+// Without this distinction a stale "Connecting…" written into the slot would
+// look like Pip's most recent reply when the user reopens the accordion.
+function setMessage(text, channel = "chat") {
+  const el = $("phone-message");
+  el.textContent = text;
+  el.dataset.channel = channel;
+}
 function setEcho(text) {
   const el = $("phone-echo");
   if (text) { el.textContent = `"${text}"`; el.hidden = false; }
@@ -1135,10 +1144,13 @@ async function init() {
     // stuck if something stalls — "offer sent, waiting for desktop…" tells
     // them way more than a forever-spinning "Connecting…".
     _peer = await joinPairingRoom(roomId, {
-      onStatus: (s) => setMessage(s),
+      onStatus: (s) => setMessage(s, "status"),
     });
     setStatus("connected", "Connected");
-    setMessage("Hi — I'm Pip, running on your desktop. Ask me something.");
+    // Mirror of assistant.js's PIP_INTRO — kept in sync manually rather
+    // than imported, since pulling assistant.js into the phone bundle
+    // would drag claude.js + Pip popover code we don't need on phone.
+    setMessage("Hi — I'm Pip. Ask me anything, or I'll pipe up when there's something worth knowing.");
     hideReconnect();
     // Send the desktop our pubkey + label so it can trust us on future
     // discovery without re-scanning. Sent as soon as the channel is up.

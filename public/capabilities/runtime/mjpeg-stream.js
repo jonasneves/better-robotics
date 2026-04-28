@@ -20,8 +20,7 @@ import {
 import { capSection } from "./cap-section.js";
 import { startMjpegForward, stopMjpegForward } from "./mjpeg-restream.js";
 
-let renderEntry = () => {};
-export function setRender(fn) { renderEntry = fn; }
+import { renderEntry } from "./render-bus.js";
 
 function streamUrl(entry, schema) {
   const ip = entry.wifiStatus?.ip;

@@ -54,7 +54,11 @@
     This browser does not support Web Bluetooth. Use Chrome, Edge, or Opera on desktop or Android.
   </div>
 
-  <div id="bluetooth-off" class="unsupported" hidden>
+  <!-- Recoverable in 2 seconds (system Bluetooth toggle). Distinct tone
+       from .unsupported — that one is terminal (browser can't do BLE
+       at all). Painting them identically would lose the "fix this"
+       vs. "give up here" pre-attentive distinction. -->
+  <div id="bluetooth-off" class="info-banner" hidden>
     Bluetooth is off — turn it on to scan for robots.
   </div>
 
@@ -90,8 +94,8 @@
     </div>
   </section>
 
-  <div class="helpers-section">
-    <div class="helpers-label">Your helpers</div>
+  <div class="helpers-section" id="helpers-section">
+    <div class="helpers-label" id="helpers-label">Helpers</div>
     <div id="helpers-list"></div>
     <div class="helpers-add">
       <span id="phone-presence" class="presence-badge" hidden></span>
@@ -101,8 +105,8 @@
 
   <details class="tray" id="log-tray" hidden>
     <summary class="label">
-      <svg class="icon-svg disclosure-chevron" aria-hidden="true"><use href="icons.svg#icon-chevron-down"/></svg>
       Log
+      <svg class="icon-svg disclosure-chevron" aria-hidden="true"><use href="icons.svg#icon-chevron-down"/></svg>
     </summary>
     <div class="log" id="log"></div>
   </details>
@@ -250,7 +254,7 @@
     <input type="checkbox" id="setting-pip-vision">
     <label for="setting-pip-vision">
       <div class="settings-title">Let Pip view camera frames directly</div>
-      <div class="hint">Frames leave the device when Pip needs visual nuance — Claude-only, off by default.</div>
+      <div class="hint">Frames leave the device when Pip needs visual nuance. Bridge / Anthropic backends only; off by default.</div>
     </label>
   </div>
 
@@ -483,7 +487,6 @@
       <div class="platform-cta">
         <button type="button" id="prepare-open-btn">Set up SD card</button>
       </div>
-      <div class="platform-footnote" aria-hidden="true"></div>
     </section>
   </div>
 </dialog>

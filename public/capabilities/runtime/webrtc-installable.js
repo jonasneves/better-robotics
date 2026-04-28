@@ -25,8 +25,7 @@ const OP_COMMIT  = 0x03;
 const OP_STOP    = 0x04;
 const CHUNK_BYTES = 180;
 
-let renderEntry = () => {};
-export function setRender(fn) { renderEntry = fn; }
+import { renderEntry } from "./render-bus.js";
 
 export function makeWebrtcInstallableCap(schema) {
   const { name } = schema;

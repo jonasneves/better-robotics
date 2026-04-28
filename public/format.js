@@ -22,11 +22,11 @@ export function summarizeTool(name, input, result, error) {
   const lbl = labelTool(name);
   if (error) return `${lbl} · ${shorten(error, 80)}`;
   const r = result || {};
-  if (name === "move_motor" || name === "pulse_motor") {
+  if (name === "move_motor") {
     const a = r.applied || input || {};
     return `${lbl} · L${a.l ?? a.left ?? "?"} R${a.r ?? a.right ?? "?"} · ${a.duration_ms ?? "?"}ms`;
   }
-  if (name === "get_robot_scene" || name === "ask_robot_scene" || name === "get_robot_scene_now") {
+  if (name === "get_robot_scene" || name === "ask_robot_scene") {
     return `${lbl} · "${shorten(r.scene || r.text || "", 80)}"`;
   }
   if (name === "ask_human") {

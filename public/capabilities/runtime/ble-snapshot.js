@@ -8,8 +8,7 @@ import { escapeHtml } from "../../dom.js";
 import { logFor } from "../../log.js";
 import { capSection, setOpen } from "./cap-section.js";
 
-let renderEntry = () => {};
-export function setRender(fn) { renderEntry = fn; }
+import { renderEntry } from "./render-bus.js";
 
 export function makeBleSnapshotCap(schema) {
   const { name } = schema;

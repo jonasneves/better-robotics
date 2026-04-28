@@ -15,8 +15,7 @@ import { state } from "../../state.js";
 import { attachJoypad, mix } from "../../joypad.js";
 import { capSection } from "./cap-section.js";
 
-let renderEntry = () => {};
-export function setRender(fn) { renderEntry = fn; }
+import { renderEntry } from "./render-bus.js";
 
 // Clamp-on-write so callers don't have to check the declared range.
 export async function setPairValue(entry, capName, left, right) {

@@ -6,8 +6,7 @@ import { UUIDS_BY_CAP } from "../../ble.js";
 import { logFor } from "../../log.js";
 import { capSection } from "./cap-section.js";
 
-let renderEntry = () => {};
-export function setRender(fn) { renderEntry = fn; }
+import { renderEntry } from "./render-bus.js";
 
 export async function setToggleValue(entry, capName, value) {
   const ch = entry[`${capName}Char`];

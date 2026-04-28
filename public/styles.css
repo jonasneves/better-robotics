@@ -638,13 +638,14 @@ details.tray > summary {
   user-select: none;
   display: flex;
   align-items: center;
+  gap: 6px;
 }
 details.tray > summary::-webkit-details-marker { display: none; }
 details.tray > summary::marker { content: ""; }
-/* Chevron SVG lives inside the summary at the leading edge — matches the
-   robot card's disclosure pattern for visual consistency. The shared
-   .disclosure-chevron style already rotates on demand; we just need the
-   [open] selector for details. */
+/* Trailing chevron — matches the iOS-Settings idiom the rest of the
+   dashboard uses (settings disclosures, capability sections). Earlier
+   leading-edge variant was the minority pattern; unified now. */
+details.tray > summary .disclosure-chevron { margin-left: auto; }
 details.tray[open] > summary .disclosure-chevron { transform: rotate(0); }
 details.tray[open] > :not(summary) { margin-top: 12px; }
 /* Unread-error pip: cleared by log.js on toggle-open, re-set by the next error
@@ -1216,8 +1217,12 @@ details.tray.has-alert > summary::after {
    type-badge treatment from the robot-card list so the dialog visually
    rhymes with the surface the user came from. */
 .platform-tile {
-  display: flex;
-  flex-direction: column;
+  /* Grid template aligns CTAs across tiles without a phantom footnote
+     div — body grows, CTA + footnote anchor at known rows. Tiles
+     missing a footnote (Pi) just leave that row empty; alignment
+     holds without DOM ritual. */
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
   gap: 12px;
   padding: 20px;
   background: var(--surface);
@@ -1237,11 +1242,7 @@ details.tray.has-alert > summary::after {
 .platform-pi    .platform-mark { color: var(--success); }
 .platform-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .platform-sub { font-size: 13px; color: var(--ink-muted); line-height: 1.45; }
-/* CTA anchors to the bottom of the tile so buttons align across tiles.
-   Footnote sits BELOW the CTA as a fixed-height slot — keeping the hint
-   out of the CTA row is what lets the Flash / Set-up buttons line up.
-   Pi tile carries an empty footnote purely to reserve matching height. */
-.platform-cta { margin-top: auto; }
+.platform-cta { display: flex; align-items: center; }
 .platform-footnote { min-height: 20px; display: flex; align-items: center; }
 
 .help-hint {
@@ -1759,6 +1760,19 @@ details.tray.has-alert > summary::after {
   line-height: 1.5;
   margin-bottom: 16px;
 }
+/* Lighter tone than .unsupported — recoverable state, not terminal.
+   Same shape, different palette so the user pre-attentively reads
+   "fix this" vs. ".unsupported = give up here." */
+.info-banner {
+  padding: 16px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
 
 /* modals */
 .label-modal, .prepare-dialog, .settings-modal, .pair-dialog {
@@ -1807,7 +1821,7 @@ dialog[open]::backdrop { opacity: 1; }
    keep the input visually tight. */
 .pip-input { font-size: 13px; padding: 6px 10px; background: var(--bg); }
 .pip-input:focus { background: var(--surface); }
-/* Tool-trace row — one per tool_use call, appended as Claude dispatches them.
+/* Tool-trace row — one per tool_use call, appended as Pip dispatches them.
    .pending = in-flight (italic + dim), .error = tool returned/threw. */
 .pip-trace {
   list-style: none;
@@ -2689,6 +2703,15 @@ body.phone textarea {
    full-section, here it's nested. */
 .phone-pip-body .phone-chat { margin: 0; }
 .phone-pip-body .phone-form { margin: 0; }
+/* Channel-specific tone for the multiplexed message slot. status / intro
+   read as boilerplate; chat reads as Pip's actual voice. Lets a stale
+   "Connecting…" not look like Pip's last reply on reopen. */
+.phone-message[data-channel="status"],
+.phone-message[data-channel="intro"] {
+  color: var(--ink-muted);
+  font-style: italic;
+  font-size: 13px;
+}
 
 /* ask_human modal on the phone. Preempts chat / drive so the user notices
    Pip is waiting on them. Image is the robot's current frame; options row

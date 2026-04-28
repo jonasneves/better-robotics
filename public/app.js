@@ -2036,17 +2036,22 @@ document.addEventListener("DOMContentLoaded", () => {
   const localProgressEl = $("setting-pip-local-progress");
   const localInstallBtn = $("setting-pip-local-install");
   const localDotEl      = $("setting-pip-local-dot");
+  // One line each — keep the dropdown's hint scannable. Detailed explanation
+  // lives in claude.js's module header for the developer audience; the
+  // settings page is for the operator picking a backend, not learning the
+  // protocol. Don't compare against "the default" by name — defaults change.
   const HINTS = {
-    github:    "Inference via GitHub Models. Connect once with GitHub OAuth — short-lived token stays in this browser. No API key to manage; rate limits per GitHub's free tier. Same Pip behavior as OpenAI direct (vendor-prefixed model id, same tool-calling shape).",
-    bridge:    "Routes through the AI Bridge extension. Token stays in Keychain via native messaging — never exposed to the page.",
-    anthropic: "Calls api.anthropic.com directly with your API key. Works without the AI Bridge extension. Key stays in this browser.",
-    openai:    "Calls api.openai.com directly with your API key. Tool-calling translated from Anthropic's tool_use shape to OpenAI's function_calling shape — same Pip behavior, different backend.",
-    local:     "Runs in this browser via WebGPU. Experimental — tool calls may need retries, output capped at 512 tokens. Requires Chrome/Edge.",
+    github:    "OAuth with GitHub once; no API key. Free-tier rate-limited.",
+    bridge:    "Routes through the AI Bridge Chrome extension; token stays in macOS Keychain.",
+    anthropic: "Direct call to api.anthropic.com with your API key. Stored in this browser.",
+    openai:    "Direct call to api.openai.com with your API key. Stored in this browser.",
+    local:     "Runs in-browser via WebGPU (LFM2.5-1.2B). 1.2 GB one-time download; output capped at 512 tokens.",
   };
   const visionRow   = $("setting-pip-vision-row");
   const visionInput = $("setting-pip-vision");
-  // Vision tool only works on Claude-shape backends. OpenAI / GitHub-Models
-  // image-in-tool_result isn't wired; local LFM has no vision.
+  // Vision tool wires the Anthropic image-in-tool_result content shape; the
+  // OpenAI / GitHub Models / local backends would need a different content-
+  // block packing that isn't in place. Gate accordingly.
   const VISION_BACKENDS = new Set(["bridge", "anthropic"]);
   function syncGithubUI() {
     const auth = settings.pipGithubAuth;

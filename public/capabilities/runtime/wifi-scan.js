@@ -8,8 +8,7 @@ import { capSection } from "./cap-section.js";
 import { escapeHtml } from "../../dom.js";
 import { logFor } from "../../log.js";
 
-let renderEntry = () => {};
-export function setRender(fn) { renderEntry = fn; }
+import { renderEntry } from "./render-bus.js";
 
 // Classic ESP32 shares the radio between BLE and WiFi; a passive scan
 // can take 7-12s. 30s gives headroom; longer = real failure.

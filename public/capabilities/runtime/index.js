@@ -1,12 +1,13 @@
 // Type → runtime-constructor map, keyed by fw-info.caps entry `type`.
-import { makeToggleCap,             setRender as setToggleRender     } from "./toggle.js";
-import { makeLevelCap,              setRender as setLevelRender      } from "./level.js";
-import { makeSignedPairCap,         setRender as setSignedPairRender } from "./signed-pair.js";
-import { makeCommandCap                                              } from "./command.js";
-import { makeWifiScanCap,           setRender as setWifiScanRender   } from "./wifi-scan.js";
-import { makeWebrtcInstallableCap,  setRender as setWebrtcRender     } from "./webrtc-installable.js";
-import { makeMjpegStreamCap,        setRender as setMjpegRender      } from "./mjpeg-stream.js";
-import { makeBleSnapshotCap,        setRender as setBleSnapshotRender} from "./ble-snapshot.js";
+import { makeToggleCap            } from "./toggle.js";
+import { makeLevelCap             } from "./level.js";
+import { makeSignedPairCap        } from "./signed-pair.js";
+import { makeCommandCap           } from "./command.js";
+import { makeWifiScanCap          } from "./wifi-scan.js";
+import { makeWebrtcInstallableCap } from "./webrtc-installable.js";
+import { makeMjpegStreamCap       } from "./mjpeg-stream.js";
+import { makeBleSnapshotCap       } from "./ble-snapshot.js";
+import { setRender as setBusRender } from "./render-bus.js";
 
 export const RUNTIMES = {
   "toggle":              makeToggleCap,
@@ -19,12 +20,8 @@ export const RUNTIMES = {
   "ble-snapshot":        makeBleSnapshotCap,
 };
 
-export function setRuntimeRenderer(fn) {
-  setToggleRender(fn);
-  setLevelRender(fn);
-  setSignedPairRender(fn);
-  setWifiScanRender(fn);
-  setWebrtcRender(fn);
-  setMjpegRender(fn);
-  setBleSnapshotRender(fn);
-}
+// All runtime caps share render-bus.js for the back-channel to the
+// dashboard's renderEntry. One setter, one binding — no per-module
+// plumbing fan-out (was setToggleRender / setLevelRender / etc., one
+// per cap, all calling the same fn with the same arg).
+export function setRuntimeRenderer(fn) { setBusRender(fn); }

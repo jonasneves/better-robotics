@@ -11,16 +11,17 @@ import { observeOnce, captureFrameDataUrl } from "./perception.js";
 import { listPhones, askHuman } from "./phones.js";
 import { ask as claudeAsk } from "./claude.js";
 
-// pip.ask(prompt, opts?) — same Claude bridge Pip uses (claude.js). Throws on
-// any bridge/HTTP/parse failure so scripts catch a single error path instead
-// of branching on null vs. text. Costs the user's API quota — same as Pip.
+// pip.ask(prompt, opts?) — routes through whichever Pip backend the user
+// picked in Settings (GitHub Models / Anthropic / OpenAI / Bridge / local).
+// Throws on any backend/HTTP/parse failure so scripts catch a single error
+// path instead of branching on null vs. text. Costs the user's quota.
 const pip = {
   async ask(prompt, opts = {}) {
     const text = await claudeAsk(String(prompt), {
       system: opts.system,
       maxTokens: opts.maxTokens ?? 300,
     });
-    if (text === null) throw new Error("pip.ask: Claude bridge unreachable (is AI Bridge installed?)");
+    if (text === null) throw new Error("pip.ask: backend unreachable (check Settings → Pip backend)");
     return text;
   },
 };
@@ -167,7 +168,7 @@ log("done");
 // a typed action, firmware enforces the safety floor. Same primitives Pip
 // uses — the script is just driving the loop directly. Six steps, then stop.
 //
-// Requires: camera streaming on this robot + AI Bridge installed
+// Requires: camera streaming on this robot + a connected Pip backend
 // (pip.ask hits the user's Claude API key, same as Pip).
 
 if (!robot) { log("Pair a robot first."); return; }

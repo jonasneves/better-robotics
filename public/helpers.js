@@ -270,11 +270,21 @@ function render() {
   const list = $("helpers-list");
   if (!list) return;
   const phones = listPhones();
+  // Idle laptop tile is permanent noise for the 99%-case desktop user
+  // who paired BLE to drive. Render the laptop card only when it's
+  // actively shared; otherwise the helpers list stays empty and only
+  // the "+ Pair phone" affordance shows. The laptop can still be
+  // started — the gateway is restored if anything else (a phone) joins.
+  const hasLiveLaptop = _laptop.status === "live" || _laptop.status === "starting";
   const cards = [];
-
   for (const p of phones) cards.push(renderPhoneCard(p));
-  cards.push(renderLaptopCard());
+  if (hasLiveLaptop || phones.length > 0) cards.push(renderLaptopCard());
   list.innerHTML = cards.join("");
+  // Section-label hides too when the list is empty — the "+ Pair phone"
+  // button below speaks for itself; "Helpers" with nothing under it
+  // is heading without content.
+  const label = $("helpers-label");
+  if (label) label.hidden = cards.length === 0;
   wire();
 }
 
