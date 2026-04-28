@@ -153,17 +153,17 @@ const ALL_TOOLS = [
   },
   {
     name: "list_helpers",
-    description: "Returns the operator's non-mobile observers/operators: paired phones (id 'phone:<phoneId>') and this laptop's webcam (id 'laptop'). Each carries kind, label, status. Use to discover an external viewpoint when the robot has no usable camera, or when a third-party angle would resolve ambiguity.",
+    description: "Returns paired phones the operator has linked (id 'phone:<phoneId>'). Each carries kind, label, status. Use to discover an external viewpoint when the robot has no usable camera, or when a third-party angle would resolve ambiguity.",
     input_schema: { type: "object", properties: {}, required: [] },
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "take_helper_snapshot",
-    description: "Capture one JPEG frame from a helper's video source. Use when the robot's onboard camera can't see what matters (occluded, wrong angle, no camera at all) but a helper can. Returns { imageDataUrl, width, height } on success. Phones currently can't expose video to the desktop — call only on 'laptop' or future video-capable helpers.",
+    description: "Capture one JPEG frame from a paired phone's shared camera. Use when the robot's onboard camera can't see what matters (occluded, wrong angle, no camera at all) but a phone helper has been pointed at the scene. Returns { imageDataUrl, width, height } on success.",
     input_schema: {
       type: "object",
       properties: {
-        helper_id: { type: "string", description: "Helper id from list_helpers ('laptop' or 'phone:<phoneId>')." },
+        helper_id: { type: "string", description: "Helper id from list_helpers ('phone:<phoneId>')." },
       },
       required: ["helper_id"],
     },
@@ -171,7 +171,7 @@ const ALL_TOOLS = [
   },
   {
     name: "start_helper_camera",
-    description: "Turn on the helper's camera so subsequent take_helper_snapshot calls work. For 'laptop' this prompts the user once for browser camera permission. Idempotent — safe to call when already live.",
+    description: "Surface a hint that the user should tap Share camera on the paired phone. Phone owns its own camera permission; desktop can't flip it on remotely. Idempotent — returns ok if already live.",
     input_schema: {
       type: "object",
       properties: {

@@ -13,7 +13,7 @@ import { log } from "./log.js";
 import { hostPairingRoom } from "./pairing.js";
 import { sendPairById, pickMotorsTarget } from "./capabilities/runtime/signed-pair.js";
 import { state } from "./state.js";
-import { getLaptopStream, onLaptopChange, setPhoneStream } from "./helpers.js";
+import { setPhoneStream } from "./helpers.js";
 import { discover } from "./discover.js";
 import { getMyPubkeyB64 } from "./peer-key.js";
 import { makeTrustStore } from "./trust.js";
@@ -137,34 +137,9 @@ export async function initPhones() {
 
   getLobby().onChange(renderPhonePresence);
   _initPairListener();
-
-  // Laptop camera → phone(s) bridge: whenever the laptop transitions, sync
-  // every paired phone's media tracks. Phones connected later pick up the
-  // live stream in onPhonePaired.
-  onLaptopChange((stream) => {
-    for (const p of _phones.values()) syncPhoneMedia(p, stream);
-  });
 }
 
-// Per-phone book-keeping for the RTCRtpSenders we've added (so we can
-// removeTrack when the source goes away). One sender per laptop track.
-function syncPhoneMedia(phone, stream) {
-  if (!phone || phone.status === "failed") return;
-  // Remove anything we previously added.
-  if (phone.laptopSenders?.length) {
-    for (const s of phone.laptopSenders) phone.peer.removeTrack(s);
-    phone.laptopSenders = [];
-  }
-  if (!stream) return;
-  const senders = [];
-  for (const t of stream.getVideoTracks()) {
-    const s = phone.peer.addTrack(t, stream);
-    if (s) senders.push(s);
-  }
-  phone.laptopSenders = senders;
-}
-
-// Robot camera → phone bridge. Parallel to syncPhoneMedia but keyed per
+// Robot camera → phone bridge. Keyed per
 // robot id since a dashboard may have multiple robots streaming at once.
 // pairing.js's negotiationneeded handler re-offers after addTrack, so the
 // track lands on the phone automatically.
@@ -434,10 +409,6 @@ function _registerPairedPhone(id, peer, defaultLabel) {
     });
   });
   sendTargetInfo(peer);
-  // Push the laptop's current camera stream if there is one so the
-  // newly-connected phone can immediately use it as a helper.
-  const stream = getLaptopStream();
-  if (stream) syncPhoneMedia(_phones.get(id), stream);
   // Same for any robot cameras that are already streaming — phone sees
   // the robot's view as soon as it pairs, not only if it pairs first.
   const phone = _phones.get(id);

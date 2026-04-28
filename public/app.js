@@ -812,9 +812,9 @@ function render() {
   updateQrHint();
 
   if (state.robots.size === 0) {
-    // Empty state means "no operating surface AT ALL". A user with phone
-    // helpers paired or laptop camera streaming has a working surface; the
-    // "Set up a robot" prompt is wrong for them.
+    // Empty state means "no operating surface AT ALL". A user with a
+    // phone helper paired has a working surface; the "Set up a robot"
+    // prompt is wrong for them.
     empty.hidden = hasActiveHelpers();
     header.hidden = true;
     list.innerHTML = "";
