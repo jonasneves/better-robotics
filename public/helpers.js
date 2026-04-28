@@ -38,12 +38,6 @@ export function initHelpers() {
 // reflects the current robot list.
 export function renderHelpers() { render(); }
 
-// "Has the operator got an active operating surface besides robots?" —
-// drives empty-state suppression on the dashboard.
-export function hasActiveHelpers() {
-  return listPhones().length > 0;
-}
-
 export function listHelpers() {
   const out = [];
   for (const p of listPhones()) {
@@ -189,13 +183,9 @@ function captureFromVideoEl(helperId, isLive, maxDim = 640, quality = 0.8) {
   }
 }
 
-let _onHelpersChangeCb = () => {};
-export function onHelpersChange(cb) { _onHelpersChangeCb = cb; }
-
 function render() {
   const list = $("helpers-list");
   if (!list) return;
-  try { _onHelpersChangeCb(); } catch {}
   const cards = listPhones().map(renderPhoneCard);
   list.innerHTML = cards.join("");
   wire();

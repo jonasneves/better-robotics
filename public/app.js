@@ -25,7 +25,7 @@ import { initPasswordsUI } from "./passwords.js";
 import { initAssistant, emitPipEvent } from "./assistant.js";
 import { initPhones, broadcastTargetInfo, sendArucoStatus } from "./phones.js";
 import { getLoadState as getLocalLoadState, onLoadStateChange as onLocalLoadStateChange, loadModel as loadLocalModel, reloadModel as reloadLocalModel } from "./local-llm.js";
-import { initHelpers, setHelpersRobotRenderer, renderHelpers, hasActiveHelpers, onHelpersChange } from "./helpers.js";
+import { initHelpers, setHelpersRobotRenderer, renderHelpers } from "./helpers.js";
 import { startTracking as startArucoTracking, stopTracking as stopArucoTracking } from "./aruco.js";
 import {
   setupServiceWorker, wireInstallMenuItem, wireCheckUpdatesMenuItem,
@@ -692,24 +692,6 @@ async function forgetDevice(id) {
 }
 
 // Connect-all shows when ≥1 idle robot has a BluetoothDevice handle already
-// attached (silent reconnect possible). Robots needing pairing have their own
-// per-card "Pair" button.
-function updateHeaderActions() {
-  const readyIdle = [...state.devices.values()]
-    .filter(e => e.status === "idle" && e.device).length;
-  $("connect-all-btn").hidden = readyIdle < 1;
-}
-
-function connectAll() {
-  const all = [...state.devices.values()].filter(e => e.status === "idle");
-  const ready = all.filter(e => e.device);
-  const needsPair = all.filter(e => !e.device);
-  ready.forEach(e => connect(e.id));
-  if (needsPair.length > 0) {
-    log(`${needsPair.length} robot(s) need pairing — click Pair on each card`);
-  }
-}
-
 // Per-entry node ownership: a notify for robot A never touches robot B's DOM,
 // so slider drags on one card survive sibling state changes.
 // QR hint: ?robot=X on the URL means a scan landed us here. Surface a
@@ -812,17 +794,16 @@ function render() {
   updateQrHint();
 
   if (state.robots.size === 0) {
-    // Empty state means "no operating surface AT ALL". A user with a
-    // phone helper paired has a working surface; the "Set up a robot"
-    // prompt is wrong for them.
-    empty.hidden = hasActiveHelpers();
+    // Robots are the platform; their pair affordances stay visible whether
+    // or not the operator has phone helpers. A "Set up a robot" prompt is
+    // never wrong — phones are an addition, not a substitute.
+    empty.hidden = false;
     header.hidden = true;
     list.innerHTML = "";
     return;
   }
   empty.hidden = true;
   header.hidden = false;
-  updateHeaderActions();
 
   // Card-per-robot (working.md item F). Each robot has a single DOM node,
   // shared by every member entry — so cap modules' in-place patchers
@@ -1283,8 +1264,6 @@ function renderEntry(entryArg) {
     }
   });
 
-  updateHeaderActions();
-
   // Restore focus + selection to the data-action element that had focus
   // before the rebuild, if any. Preserves the user's typing in inline
   // editors (perception prompt textarea, etc.) across telemetry ticks.
@@ -1446,7 +1425,6 @@ document.addEventListener("DOMContentLoaded", () => {
     $("unsupported").hidden = false;
     $("scan-btn").disabled = true;
     $("empty-scan-btn").disabled = true;
-    $("connect-all-btn").disabled = true;
   } else if (navigator.bluetooth.getAvailability) {
     navigator.bluetooth.getAvailability().then(setBluetoothAvailable);
     navigator.bluetooth.addEventListener("availabilitychanged", (e) => {
@@ -1457,7 +1435,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("scan-btn").addEventListener("click", scanForNew);
   $("empty-scan-btn").addEventListener("click", scanForNew);
   $("qr-hint-pair").addEventListener("click", scanForNew);
-  $("connect-all-btn").addEventListener("click", connectAll);
 
 
   // robot-menu is popover="manual" so neither Escape nor outside-click are
@@ -1973,10 +1950,6 @@ document.addEventListener("DOMContentLoaded", () => {
   initAssistant();
   initPhones();
   initHelpers();
-  // Empty-state visibility depends on whether helpers are active, not just
-  // whether robots are. Re-run render() whenever helpers change so a phone
-  // pairing or laptop start/stop can suppress the "Set up a robot" prompt.
-  onHelpersChange(() => { if (state.robots.size === 0) render(); });
   initRobotPresence();
 
   // Lazy-load prepare.js on first click — it's ~230 LOC and touches the File
