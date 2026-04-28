@@ -285,6 +285,71 @@ YOLO26 export-format gotcha (default 1×84×8400 vs the embedded
 NMS-free format) needs to be settled at the export stage, not in JS
 post-processing — confirm before committing.
 
+**I. Unified WebRTC byte transport via libpeer (Pi + ESP32).** Trigger:
+the user wants browser-side shell into the Pi (over BLE *or* WiFi),
+and the natural browser primitive (no raw TCP) forced the question of
+how a browser can speak any custom byte protocol to a robot. WebRTC
+data channels are the answer — both targets become peers, the dashboard
+opens labeled DataChannels, anything that needs a stream rides one of
+them. libpeer (sepfy, pure C, ~6 KLOC, mbedTLS-backed) compiles for
+both Linux/ARM (Pi) and ESP-IDF (ESP32-CAM-MB), so one stack covers
+the fleet.
+
+What it unlocks once the substrate exists:
+- **Shell** (Phase 1.A): DataChannel(`shell`) bridges to Pi's
+  localhost:22 sshd. Browser runs `ssh2` inside a WebContainer; a
+  Duplex stream wraps the DataChannel and ssh2 thinks it has a real
+  net.Socket. Real SSH crypto end-to-end, key auth via auth.js's
+  existing ed25519 (which finally does its second job — the prepare
+  flow already enrolls the dashboard pubkey in `authorized_keys`).
+- **OTA at WiFi speeds** (Phase 1.B): replaces the slow BLE-chunked
+  OTA path with a DataChannel push. Brings firmware updates from
+  minutes to seconds without waiting for lane B (PNA) to land.
+- **Log streaming**: `journalctl -f` over a `logs` DataChannel instead
+  of get-log snapshot polling.
+- **Camera (Phase 2, ESP32-CAM-MB)**: hardware-encoded video track
+  replaces MJPEG-over-HTTP. Lower latency, lower CPU, native browser
+  playback. The target hardware has 4 MB PSRAM, enough for libpeer +
+  camera framebuffer per Sepfy's reference designs.
+- **File transfer, telemetry firehose, future channels**: each is a
+  new DataChannel label, not a new daemon/port.
+
+Architecture:
+- Pi runs `pi-robot-rtc.service` — small C daemon linking libpeer +
+  mbedTLS + libsrtp, exposes signaling on the existing `:81` HTTP
+  surface (`POST :81/webrtc/offer` returns answer + ICE inline). LAN-
+  direct, no signal.neevs.io.
+- ESP32 firmware grows libpeer integration; signaling either via the
+  same HTTP-on-`:81` shape (camera task already runs an HTTP server)
+  or via a BLE typed-op (`webrtc-offer`) when WiFi is the resource
+  being constrained.
+- Dashboard: new `webrtc-robot.js` (peer manager + DataChannel pool
+  per robot), `shell.js` (xterm + WebContainer + ssh2 + Duplex shim),
+  later `webrtc-camera.js` (consume the video track). Lazy-loaded —
+  WebContainer only mounts when shell opens.
+
+Phase plan:
+- **Phase 1.A** — Pi shell over WebRTC. Smallest end-to-end demo:
+  click Shell in robot menu → xterm pops → real bash on the Pi via
+  SSH-over-DataChannel. Validates the substrate.
+- **Phase 1.B** — OTA over a second DataChannel (highest user-visible
+  latency win after shell).
+- **Phase 1.C** — Log streaming.
+- **Phase 2** — ESP32-CAM-MB libpeer integration + camera-as-WebRTC-
+  video-track.
+
+Why libpeer over aiortc despite Python alignment with pi-robot.py: one
+mental model across both robot types, zero re-architecture when ESP32
+work begins. Aiortc would have been faster for Phase 1 alone but
+forced a rewrite at Phase 2. The "this is still developing" stance
+favors the architectural compression now.
+
+Skeptical angle: libpeer is a real C dep with build/cross-compile
+work. Phase 1.A proves the architecture but doesn't yet save anything
+the user couldn't get with `ssh robot@hostname.local` from their
+terminal. Phases 1.B and 2 are where the substrate earns out — don't
+declare victory at 1.A, plan to build through 1.B at minimum.
+
 ### Background-rank items (known, not urgent)
 
 ### 1. ESP32 URL-trigger OTA still fails with http -1 on CAM-MB (superseded by lane work)
