@@ -22,7 +22,10 @@ const ICE_TIMEOUT_MS = 30000;
 // Per-robot peer connections, lazy-built. Keyed by robot id.
 const _peers = new Map();  // robotId → { pc, ws, channels: Map<label, ch> }
 
-function roomIdFor(robotId) { return `pi-rtc-${robotId}`; }
+// roomId derives from the robot's NAME (BR-XXXX), not its BLE device id.
+// The Pi-side daemon computes the same name from /proc/cpuinfo, so both
+// sides land in the same room without separate discovery.
+function roomIdFor(robotName) { return `pi-rtc-${robotName}`; }
 
 // Open (or reuse) a peer connection to the robot, then ensure a DataChannel
 // with the requested label exists and is open. Resolves to the channel.
@@ -30,12 +33,12 @@ function roomIdFor(robotId) { return `pi-rtc-${robotId}`; }
 // Phase 1.A creates one PC per call (single-channel, fresh handshake each
 // time). Multi-channel multiplexing — opening a second label on an existing
 // PC — is a follow-up.
-export async function openChannel(robotId, label, { onStatus = () => {} } = {}) {
+export async function openChannel(robotId, robotName, label, { onStatus = () => {} } = {}) {
   // Tear down any prior peer for this robot — single-PC model for now.
   closePeer(robotId);
 
   const myPeerId = makePeerId("dashboard");
-  const roomId = roomIdFor(robotId);
+  const roomId = roomIdFor(robotName);
   onStatus("Opening signal channel…");
   const iceServers = await fetchIceServers();
   const pc = new RTCPeerConnection({ iceServers });

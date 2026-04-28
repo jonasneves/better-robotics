@@ -55,7 +55,7 @@ async function connect() {
   if (!entry) return;
   setStatus("connecting", "Negotiating peer connection…");
   try {
-    _channel = await openChannel(id, "shell", {
+    _channel = await openChannel(id, entry.name, "shell", {
       onStatus: (s) => setStatus("connecting", s),
     });
   } catch (err) {
