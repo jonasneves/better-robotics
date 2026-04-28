@@ -157,13 +157,20 @@ note usb_gadget_configured
 INSTALL_OK=0
 DEST="/home/$USER_NAME/better-robotics/firmware/pi_robot"
 install -d -o "$USER_NAME" -g "$USER_NAME" "$DEST"
-for f in pi_robot.py uuids.py requirements.txt pi-robot.service heartbeat.py pi-robot-heartbeat.service pi_robot_health.py pi-robot-health.service avahi-betterrobot.service; do
+for f in pi_robot.py uuids.py requirements.txt pi-robot.service heartbeat.py pi-robot-heartbeat.service pi_robot_health.py pi-robot-health.service avahi-betterrobot.service pi-robot-rtc.service; do
     if [ -f "$STAGED/$f" ]; then
         install -m 644 -o "$USER_NAME" -g "$USER_NAME" "$STAGED/$f" "$DEST/$f"
     else
         note firmware_missing "$f not staged on boot partition"
     fi
 done
+# rtc/ subdirectory: build sources for the libpeer-based WebRTC peer.
+# Copied recursively so future additions don't need a code change here.
+if [ -d "$STAGED/rtc" ]; then
+    install -d -o "$USER_NAME" -g "$USER_NAME" "$DEST/rtc"
+    cp -r "$STAGED/rtc/." "$DEST/rtc/"
+    chown -R "$USER_NAME":"$USER_NAME" "$DEST/rtc"
+fi
 note firmware_staged
 
 note venv_create_start
