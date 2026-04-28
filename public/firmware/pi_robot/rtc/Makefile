@@ -12,8 +12,13 @@ LIBPEER_SHA  := 9319aa434cb9     # pinned 2026-04 — bump deliberately
 VENDOR       := vendor
 LIBPEER_DIR  := $(VENDOR)/libpeer
 LIBPEER_BUILD := $(LIBPEER_DIR)/build
+# libpeer's CMake auto-installs its deps (mbedtls, libsrtp, libusrsctp,
+# cjson) into build/dist/ via ExternalProject. libpeer.a itself lives at
+# build/src/libpeer.a — running `cmake --install` would also try to
+# write /usr/local/include (libpeer hardcodes that path), which needs
+# root and we don't want. Use the in-tree path instead.
 LIBPEER_DIST := $(LIBPEER_BUILD)/dist
-LIBPEER_LIB  := $(LIBPEER_DIST)/lib/libpeer.a
+LIBPEER_LIB  := $(LIBPEER_BUILD)/src/libpeer.a
 
 CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra -Wno-unused-parameter
