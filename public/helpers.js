@@ -61,11 +61,6 @@ function emitLaptopChange() {
 
 export function initHelpers() {
   setPhonesChangeHandler(() => render());
-  // Always-on entry point for sharing the laptop camera. Sits next to
-  // "+ Pair phone" in helpers-add; visibility toggles in render() when
-  // the laptop is already live.
-  const shareBtn = $("share-laptop-btn");
-  if (shareBtn) shareBtn.addEventListener("click", () => startHelperCamera(LAPTOP_ID));
   render();
 }
 
@@ -300,10 +295,6 @@ function render() {
   for (const p of phones) cards.push(renderPhoneCard(p));
   if (hasLiveLaptop || phones.length > 0) cards.push(renderLaptopCard());
   list.innerHTML = cards.join("");
-  // Hide the Share-laptop link once the laptop card is in the list —
-  // duplicate affordance otherwise. The card has its own Stop button.
-  const shareBtn = $("share-laptop-btn");
-  if (shareBtn) shareBtn.hidden = hasLiveLaptop;
   wire();
 }
 

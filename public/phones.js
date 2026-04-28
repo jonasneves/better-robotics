@@ -280,15 +280,16 @@ function closePairing() {
 // by phones sending requests, not by us deciding ahead of time.
 function renderPhonePresence(ads) {
   const phones = (ads || []).filter(a => a.data && a.data.app === "better-robotics-phone");
+  const btn = $("pair-phone-btn");
+  if (!btn) return;
   const total = phones.length;
-  const badge = $("phone-presence");
-  if (!badge) return;
-  if (total === 0) { badge.hidden = true; return; }
-  badge.hidden = false;
-  badge.classList.remove("alert");
-  badge.textContent = total === 1
-    ? `${phones[0].data.label || "Phone"} on wifi`
-    : `${total} phones on wifi`;
+  btn.classList.toggle("has-nearby", total > 0);
+  // Hover hint carries the specifics that the dot can't.
+  btn.title = total === 0
+    ? "Pair a phone"
+    : total === 1
+      ? `Pair a phone — ${phones[0].data.label || "1 phone"} nearby`
+      : `Pair a phone — ${total} phones nearby`;
 }
 
 // ── Incoming pair-requests ────────────────────────────────────────

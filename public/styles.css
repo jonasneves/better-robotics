@@ -2099,41 +2099,22 @@ dialog[open]::backdrop { opacity: 1; }
    links sitting on the dark void, which Gestalt-proximity-wise read as
    detritus, not affordances. Same containment treatment matches the
    empty-state's framing so the eye reads "this is a section." */
-.helpers-section {
-  max-width: 440px;
-  margin-top: 16px;
-  padding: 12px 16px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--surface) 50%, transparent);
-}
-/* Helpers-add buttons inherit .share-action-btn's contained, rounded
-   shape from the phone surface but step down in weight: helpers are
-   tertiary on the dashboard (the daily action is driving a robot, not
-   pairing peripherals), so they don't earn the full 44pt primary-action
-   height that the phone variant uses. Smaller padding + font reads as
-   "supporting cast"; the shape stays consistent so the affordance still
-   reads as a button. Mouse precision on dashboard makes the smaller
-   target safe; phone keeps its larger variant for thumb comfort. */
-.helpers-add {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-}
-.helpers-add .share-action-btn {
-  width: 100%;
-  min-height: 0;
-  padding: 8px 12px;
-  font-size: 13px;
-  border-color: var(--border-subtle);
-  background: transparent;
-  color: var(--ink-muted);
-}
-.helpers-add .share-action-btn:hover {
-  color: var(--ink);
-  background: var(--surface);
-  border-color: var(--border-default);
+.helpers-section { max-width: 440px; }
+.helpers-section:empty, .helpers-section > #helpers-list:empty:only-child { display: none; }
+/* Topbar pair-phone button — small accent dot when nearby phones are
+   broadcasting on wifi (presence-aware affordance). The hint moves to
+   the title attr; the dot is the glance-level signal. */
+.pair-phone-btn { position: relative; }
+.pair-phone-btn.has-nearby::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg);
 }
 .link-btn {
   background: transparent;
