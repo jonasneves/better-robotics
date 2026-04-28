@@ -1,7 +1,7 @@
 [Unit]
-Description=Better Robotics — Pi WebRTC peer (libpeer)
-After=NetworkManager.service pi-robot-health.service
-Wants=NetworkManager.service
+Description=Better Robotics — Pi WebRTC peer (aiortc)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -10,11 +10,8 @@ Type=simple
 # (which still runs as root for BLE), so a crash here doesn't touch
 # motors / LEDs.
 User=robot
-# Port 82 is a privileged port (<1024). Same pattern as
-# pi-robot-health.service for :81 — grant just the bind cap, not root.
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-WorkingDirectory=__HOME__/better-robotics/firmware/pi_robot/rtc
-ExecStart=__HOME__/better-robotics/firmware/pi_robot/rtc/pi-robot-rtc
+WorkingDirectory=__HOME__/better-robotics/firmware/pi_robot
+ExecStart=__HOME__/better-robotics/firmware/pi_robot/.venv/bin/python pi_robot_rtc.py
 Restart=always
 RestartSec=3
 

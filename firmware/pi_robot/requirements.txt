@@ -1,3 +1,6 @@
 bless>=0.2.6
 gpiozero>=2.0
 lgpio>=0.2.2
+# pi_robot_rtc.py — WebRTC peer + WebSocket signaling
+aiortc>=1.9
+aiohttp>=3.9

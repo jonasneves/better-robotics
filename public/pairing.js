@@ -97,6 +97,10 @@ function makePeerId(role) {
   return role + "-" + Math.random().toString(36).slice(2, 8);
 }
 
+// Exports for callers that build their own room flow on top of the same
+// signal.neevs.io infrastructure (e.g. webrtc-robot.js for shell channels).
+export { SIGNAL_WS_URL, fetchIceServers, makePeerId };
+
 // State snapshots can carry stale entries from prior sessions. Apply only
 // semantic-describe (offer/answer); ICE candidates tied to a dead pc would
 // be rejected anyway. Filter to the opposite role's prefix so our own stale

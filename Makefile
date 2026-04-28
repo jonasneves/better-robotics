@@ -108,7 +108,7 @@ publish-firmware: compile
 	@echo "Firmware bins copied to $(PUBLISH_DIR). Commit and push to deploy."
 
 publish-pi-firmware: gen-uuids
-	@mkdir -p public/firmware/pi_robot/wheels public/firmware/pi_robot/rtc
+	@mkdir -p public/firmware/pi_robot/wheels
 	# Copy every regular file from firmware/pi_robot/ — avoids the trap of
 	# adding a new helper (usb-gadget-setup.sh, ota-manifest.json, …) and
 	# forgetting to update this list.
@@ -116,10 +116,6 @@ publish-pi-firmware: gen-uuids
 		-not -name 'README.md' \
 		-not -name 'SHELL.md' \
 		-exec cp {} public/firmware/pi_robot/ \;
-	# rtc/ subdirectory ships its build sources (Makefile + main.c) — the
-	# binary is built on the Pi, not staged. README.md is dev docs only.
-	cp firmware/pi_robot/rtc/Makefile firmware/pi_robot/rtc/main.c \
-		public/firmware/pi_robot/rtc/
 	rm -f public/firmware/pi_robot/wheels/*.whl
 	pip download --no-deps --platform manylinux2014_aarch64 --python-version 311 --implementation cp --only-binary=:all: -d public/firmware/pi_robot/wheels/ bless bleak dbus-fast dbus-next typing-extensions
 	pip download --no-deps --platform manylinux2014_aarch64 --python-version 313 --implementation cp --only-binary=:all: -d public/firmware/pi_robot/wheels/ bless bleak dbus-fast dbus-next typing-extensions

@@ -157,20 +157,13 @@ note usb_gadget_configured
 INSTALL_OK=0
 DEST="/home/$USER_NAME/better-robotics/firmware/pi_robot"
 install -d -o "$USER_NAME" -g "$USER_NAME" "$DEST"
-for f in pi_robot.py uuids.py requirements.txt pi-robot.service heartbeat.py pi-robot-heartbeat.service pi_robot_health.py pi-robot-health.service avahi-betterrobot.service pi-robot-rtc.service; do
+for f in pi_robot.py uuids.py requirements.txt pi-robot.service heartbeat.py pi-robot-heartbeat.service pi_robot_health.py pi-robot-health.service avahi-betterrobot.service pi_robot_rtc.py pi-robot-rtc.service; do
     if [ -f "$STAGED/$f" ]; then
         install -m 644 -o "$USER_NAME" -g "$USER_NAME" "$STAGED/$f" "$DEST/$f"
     else
         note firmware_missing "$f not staged on boot partition"
     fi
 done
-# rtc/ subdirectory: build sources for the libpeer-based WebRTC peer.
-# Copied recursively so future additions don't need a code change here.
-if [ -d "$STAGED/rtc" ]; then
-    install -d -o "$USER_NAME" -g "$USER_NAME" "$DEST/rtc"
-    cp -r "$STAGED/rtc/." "$DEST/rtc/"
-    chown -R "$USER_NAME":"$USER_NAME" "$DEST/rtc"
-fi
 note firmware_staged
 
 note venv_create_start
@@ -273,26 +266,23 @@ BTEOF
     # the dependency footprint tight.
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends avahi-daemon 2>/dev/null || true
 
-    # pi-robot-rtc: WebRTC peer for browser shell + future channels (OTA
-    # over DataChannel, log streaming, etc.). Build on first boot — libpeer
-    # CMake handles its own deps (mbedtls, libsrtp, libusrsctp, cjson) via
-    # ExternalProject, so we only need build-essential + cmake + git here.
-    note rtc_build_start
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        build-essential cmake pkg-config git >> "$BOOTFS/rtc-build.log" 2>&1 || true
-    if [ -d "$DEST/rtc" ]; then
-      su - "$USER_NAME" -c "cd '$DEST/rtc' && make all" >> "$BOOTFS/rtc-build.log" 2>&1
-      RTC_RC=$?
-      if [ $RTC_RC -eq 0 ] && [ -x "$DEST/rtc/pi-robot-rtc" ]; then
-        note rtc_build_ok
-        if [ -f "$DEST/pi-robot-rtc.service" ]; then
-          sed "s|__HOME__|/home/$USER_NAME|g" "$DEST/pi-robot-rtc.service" \
-            > /etc/systemd/system/pi-robot-rtc.service
-          chmod 644 /etc/systemd/system/pi-robot-rtc.service
-        fi
-      else
-        note rtc_build_failed "see /boot/firmware/rtc-build.log (exit $RTC_RC)"
+    # pi-robot-rtc: WebRTC peer for browser shell + future channels.
+    # Python-side via aiortc — runs in the same venv as pi_robot.py.
+    # aiortc + aiohttp are listed in requirements.txt but the offline
+    # wheels installer above doesn't ship them; pull from PyPI here.
+    note rtc_install_start
+    sudo -u "$USER_NAME" "$DEST/.venv/bin/pip" install aiortc aiohttp \
+        >> "$BOOTFS/rtc-install.log" 2>&1
+    RTC_RC=$?
+    if [ $RTC_RC -eq 0 ]; then
+      note rtc_install_ok
+      if [ -f "$DEST/pi-robot-rtc.service" ]; then
+        sed "s|__HOME__|/home/$USER_NAME|g" "$DEST/pi-robot-rtc.service" \
+          > /etc/systemd/system/pi-robot-rtc.service
+        chmod 644 /etc/systemd/system/pi-robot-rtc.service
       fi
+    else
+      note rtc_install_failed "see /boot/firmware/rtc-install.log (exit $RTC_RC)"
     fi
 
     systemctl daemon-reload

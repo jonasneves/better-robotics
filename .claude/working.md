@@ -285,7 +285,7 @@ YOLO26 export-format gotcha (default 1×84×8400 vs the embedded
 NMS-free format) needs to be settled at the export stage, not in JS
 post-processing — confirm before committing.
 
-**I. Unified WebRTC byte transport via libpeer (Pi + ESP32).** Trigger:
+**I. WebRTC byte transport (Pi: aiortc; ESP32: libpeer).** Trigger:
 the user wants browser-side shell into the Pi (over BLE *or* WiFi),
 and the natural browser primitive (no raw TCP) forced the question of
 how a browser can speak any custom byte protocol to a robot. WebRTC
@@ -338,11 +338,21 @@ Phase plan:
 - **Phase 2** — ESP32-CAM-MB libpeer integration + camera-as-WebRTC-
   video-track.
 
-Why libpeer over aiortc despite Python alignment with pi-robot.py: one
-mental model across both robot types, zero re-architecture when ESP32
-work begins. Aiortc would have been faster for Phase 1 alone but
-forced a rewrite at Phase 2. The "this is still developing" stance
-favors the architectural compression now.
+**Pivot 2026-04-29: aiortc on Pi, libpeer reserved for ESP32.** The
+"libpeer everywhere" plan above survived first contact with reality
+until two issues stacked: (1) browser Mixed Content blocks HTTPS
+dashboard → HTTP `<pi>:82` fetches before PNA preflight runs, killing
+the local-HTTP signaling path, and (2) routing through wss:// would
+have required either an MQTT broker on signal.neevs.io (libpeer's
+built-in signaling) or a hand-rolled WebSocket client in C. aiortc
+speaks WebSocket via aiohttp trivially and runs in pi-robot.py's
+existing asyncio loop, so the Pi side ships in hours. ESP32 keeps
+libpeer for Phase 2 where Python isn't an option. The "one stack
+across the fleet" property was nice-to-have; "Python where Python
+lives, C where C lives" is also defensible and let signaling go
+through the existing `wss://signal.neevs.io/<roomId>/ws` rendezvous
+that phone-pair already uses. roomId is `pi-rtc-<robotId>` so the
+dashboard finds each Pi without separate discovery.
 
 Skeptical angle: libpeer is a real C dep with build/cross-compile
 work. Phase 1.A proves the architecture but doesn't yet save anything

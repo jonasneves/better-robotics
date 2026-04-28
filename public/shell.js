@@ -48,13 +48,6 @@ async function ensureXtermLoaded() {
   return _xtermModule;
 }
 
-// Resolve the robot's hostname for signaling. Mirrors how app.js builds
-// the wifi-presence probe URL: prefer the BLE-reported IP if known,
-// fall back to <name>.local.
-function robotHost(entry) {
-  return entry.lastReportedIp || `${entry.name}.local`;
-}
-
 async function connect() {
   const id = _activeRobotId;
   if (!id) return;
@@ -62,7 +55,9 @@ async function connect() {
   if (!entry) return;
   setStatus("connecting", "Negotiating peer connection…");
   try {
-    _channel = await openChannel(id, robotHost(entry), "shell", { ordered: true });
+    _channel = await openChannel(id, "shell", {
+      onStatus: (s) => setStatus("connecting", s),
+    });
   } catch (err) {
     setStatus("error", `Couldn't reach pi-robot-rtc: ${err.message || err}`);
     log(`shell: ${err.message || err}`);

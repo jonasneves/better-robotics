@@ -32,14 +32,12 @@ Every Pip tool call is persisted to IndexedDB automatically. Record shape:
 ```
 `imageDataUrl` payloads (e.g. from `ask_human_via_phone`) are kept in-record so a replay can reconstruct what Pip saw. Implementation: `public/replay.js`.
 
-## Robot endpoints (per-Pi HTTP)
+## Robot endpoints
 
-Each Pi exposes two HTTP servers on its WiFi IP (and `<hostname>.local`):
+- `:81/health` (per-Pi HTTP) — wifi-presence probe. JSON `{ok, type, robotId, ip, uptime_s, pi_robot_service}`. Implementation: `firmware/pi_robot/pi_robot_health.py`. PNA preflight supported.
+- **WebRTC peer** (per-Pi, signaling via `wss://signal.neevs.io/pi-rtc-<robotId>/ws`). Used by `public/webrtc-robot.js` for the Shell dialog + future channels (OTA, logs, telemetry). Implementation: `firmware/pi_robot/pi_robot_rtc.py` (aiortc). The Pi presents as `desktop-<id>` in the existing pairing protocol; the dashboard joins as `dashboard-<id>` and sends the offer.
 
-- `:81/health` — wifi-presence probe. JSON `{ok, type, robotId, ip, uptime_s, pi_robot_service}`. Implementation: `firmware/pi_robot/pi_robot_health.py`.
-- `:82/webrtc/offer` — WebRTC signaling. `POST` an SDP offer JSON, get back an answer. Used by `public/webrtc-robot.js` for shell + future channels. Implementation: `firmware/pi_robot/rtc/` (libpeer-based C daemon, scaffold only — see `rtc/README.md`).
-
-Both endpoints support PNA preflight (`Access-Control-Allow-Private-Network: true`) so the dashboard's HTTPS origin can reach them.
+Why signaling via signal.neevs.io and not a per-Pi HTTP endpoint: browser Mixed Content blocks HTTPS dashboard → HTTP private-IP fetches before PNA preflight runs. WebSocket over wss:// avoids the gate.
 
 ## When to reach for what
 

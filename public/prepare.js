@@ -9,11 +9,9 @@ const FIRMWARE_FILES  = [
   "pi_robot_health.py", "pi-robot-health.service",
   "avahi-betterrobot.service",
   "usb-gadget-setup.sh", "usb-gadget.service",
-  // pi-robot-rtc — WebRTC peer (Phase 1.A item I in working.md). The
-  // rtc/Makefile clones libpeer on first boot, so we ship sources only.
-  // README is dev docs, not needed on the SD.
-  "pi-robot-rtc.service",
-  "rtc/Makefile", "rtc/main.c",
+  // pi-robot-rtc — Python aiortc daemon. firstrun.sh pip-installs aiortc
+  // + aiohttp on first boot (online deps; not in the offline wheels).
+  "pi_robot_rtc.py", "pi-robot-rtc.service",
 ];
 const SSH_KEY_STORE   = "better-robotics:ssh-pub";
 // libcomposite is the generic USB-gadget driver; the actual composite
