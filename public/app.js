@@ -920,20 +920,12 @@ function render() {
 
   updateQrHint();
 
-  // Helpers earn their place only when a robot exists to attach to —
-  // operator-side accessories without an anchor read as orphan text on
-  // the empty-state surface. Show/hide here so the empty state stays
-  // single-task ("set up a robot" / "scan nearby") and helpers come
-  // online once that task is complete.
-  const helpersSection = $("helpers-section");
   if (state.robots.size === 0) {
     empty.hidden = false;
     header.hidden = true;
     list.innerHTML = "";
-    if (helpersSection) helpersSection.hidden = true;
     return;
   }
-  if (helpersSection) helpersSection.hidden = false;
   empty.hidden = true;
   header.hidden = false;
   updateHeaderActions();
