@@ -25,7 +25,7 @@ export const settings = Object.assign(
   //   user's call (cost + privacy, per .claude/CLAUDE.md → Model discipline).
   // Keys + tokens stored in localStorage — browser-only, never leaves origin,
   // but treat like passwords (don't share your browser).
-  { voice: false, pipBackend: "github", pipApiKey: "", pipOpenaiKey: "", pipGithubAuth: null, pipLocalInstalled: false, pipVisionEnabled: false },
+  { pipBackend: "github", pipApiKey: "", pipOpenaiKey: "", pipGithubAuth: null, pipLocalInstalled: false, pipVisionEnabled: false },
   JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
 );
 

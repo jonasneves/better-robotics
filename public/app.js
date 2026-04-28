@@ -17,7 +17,6 @@ import { updateFirmware, updateFromFile, setExpectingReconnectHandler } from "./
 import { restartService, rebootRobot, enrollKey, getLog, getConfig } from "./capabilities/runtime/command.js";
 import { initGamepad } from "./gamepad.js";
 import { initMotorsKeyboard } from "./capabilities/runtime/signed-pair.js";
-import { initVoice } from "./voice.js";
 // prepare.js / pinout.js / recovery.js are lazy-loaded on first use (~750 LOC
 // combined, none of it needed for first paint). See the dynamic import()
 // calls in the DOMContentLoaded wiring below.
@@ -37,25 +36,6 @@ setDisconnectHandler((id) => onDisconnected(id));
 setCapabilityRenderer((entry) => renderEntry(entry));
 setHelpersRobotRenderer((entry) => renderEntry(entry));
 setExpectingReconnectHandler((id) => markExpectingReconnect(id));
-
-// Compact telemetry line below the robot-state. Only shows when the robot
-// actually publishes (Pi from fw_version onward; ESP32 from telemetry char).
-function telemetryText(entry) {
-  const t = entry.telemetry;
-  if (!t) return "";
-  const parts = [];
-  const up = formatUptime(t);
-  if (up) parts.push(up);
-  if (typeof t.mem_free_mb === "number") parts.push(`${t.mem_free_mb} MB free`);
-  if (typeof t.free_heap === "number") parts.push(`${Math.floor(t.free_heap / 1024)} KB free`);
-  if (typeof t.temp_c === "number") parts.push(`${t.temp_c.toFixed(1)}°C`);
-  return parts.join(" · ");
-}
-function telemetryHtml(entry) {
-  // Always emit the wrapper (even empty) so patchTelemetryLine can fill it
-  // without needing renderEntry. CSS :empty hides it when no data.
-  return `<div class="telemetry">${escapeHtml(telemetryText(entry))}</div>`;
-}
 
 // A phone helper's camera mounted on this robot (phone-as-eye). The video
 // element is discoverable by perception.js's findCameraElement enumerator
@@ -192,8 +172,6 @@ function patchSecondaryRow(entry) {
     meta.textContent = t;
     meta.title = t;
   }
-  const tel = node.querySelector(".telemetry");
-  if (tel) tel.textContent = telemetryText(entry);
 }
 
 // Same idea for robot-status notify (rebooting / installing / ready). Lower
@@ -1153,39 +1131,13 @@ function renderEntry(entryArg) {
         escapeHtml(entry.fwType === "esp32" ? "ESP32" : entry.fwType.toUpperCase())
       }</span>`
     : "";
-  // Secondary metadata row — surfaces WiFi state, uptime, abnormal reset
-  // reasons. Only when connected (otherwise we don't have the data and the
-  // row would say nothing useful). Card layout earns its height; this is
-  // what fills it.
-  const metaParts = [];
-  if (connected) {
-    const w = entry.wifiStatus;
-    if (w?.st === "joined") metaParts.push(`WiFi ${w.ip || w.ssid || "joined"}`);
-    else if (w?.st === "joining") metaParts.push("WiFi joining…");
-    else if (w?.st === "scanning") metaParts.push("WiFi scanning");
-    else if (w?.st === "failed")   metaParts.push("WiFi failed");
-    const tel = entry.telemetry;
-    const upS = tel?.uptime_s ?? (tel?.uptime_ms != null ? Math.floor(tel.uptime_ms / 1000) : null);
-    if (upS != null) {
-      metaParts.push(
-        upS < 60   ? `up ${upS}s`
-      : upS < 3600 ? `up ${Math.floor(upS / 60)}m`
-      : upS < 86400 ? `up ${Math.floor(upS / 3600)}h ${Math.floor((upS % 3600) / 60)}m`
-      :              `up ${Math.floor(upS / 86400)}d`
-      );
-    }
-    // Surface reset reason only when it's something the user should know
-    // about — power-on / software resets are normal, watchdog/panic/brownout
-    // mean the device is unhealthy.
-    const rr = tel?.reset_reason;
-    if (rr && rr !== "poweron" && rr !== "sw" && rr !== "ext") {
-      metaParts.push(`reset: ${rr}`);
-    }
-  }
-  // Always emit the wrapper (even empty) so patchSecondaryRow can fill it on
-  // telemetry/wifi notify without a full re-render. CSS :empty hides it.
-  // title carries the full text so the truncated row is hover-discoverable.
-  const metaJoined = metaParts.join(" · ");
+  // metaText() composes the WiFi/uptime/reset/RAM/temp row from format.js
+  // helpers; reused by patchSecondaryRow on the high-frequency telemetry
+  // notify path, so the display logic stays in one place. Always emit the
+  // wrapper (even empty) so the patcher can fill it without a full
+  // re-render. CSS :empty hides it. title carries the full text so a
+  // truncated row stays hover-discoverable.
+  const metaJoined = metaText(entry);
   const metaRow = `<div class="robot-meta" title="${escapeHtml(metaJoined)}">${escapeHtml(metaJoined)}</div>`;
 
   // Active-ops chips: at-a-glance "what's happening right now" without
@@ -2106,7 +2058,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   initGamepad();
   initMotorsKeyboard();
-  initVoice({ connectAll });
   initAuthUI();
   initPasswordsUI();
   initAssistant();

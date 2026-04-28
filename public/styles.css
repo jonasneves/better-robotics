@@ -147,13 +147,6 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.topbar-actions .icon.listening {
-  background: var(--danger);
-  color: var(--accent-ink);
-  animation: mic-pulse 1.5s ease-in-out infinite;
-}
-@keyframes mic-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
-
 main {
   flex: 1;
   overflow-y: auto;

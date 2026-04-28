@@ -45,7 +45,6 @@
   </h1>
   <div class="topbar-spacer"></div>
   <div class="topbar-actions">
-    <button class="icon" id="voice-btn" aria-label="Voice commands" hidden><svg class="icon-svg"><use href="icons.svg#icon-mic"/></svg></button>
     <button class="avatar-btn" id="avatar-btn" aria-label="Profile menu" aria-haspopup="menu">?</button>
   </div>
 </header>
@@ -252,16 +251,6 @@
     <label for="setting-pip-vision">
       <div class="settings-title">Let Pip view camera frames directly</div>
       <div class="hint">Frames leave the device when Pip needs visual nuance. Bridge / Anthropic backends only; off by default.</div>
-    </label>
-  </div>
-
-  <div class="settings-group-header">Experimental</div>
-  <div class="settings-item">
-    <input type="checkbox" id="setting-voice">
-    <label for="setting-voice">
-      <div class="settings-title">Voice commands</div>
-      <div class="hint" id="setting-voice-status"></div>
-      <div class="hint" id="setting-voice-privacy" hidden>Audio is processed by Chrome's speech-to-text (Google cloud).</div>
     </label>
   </div>
 

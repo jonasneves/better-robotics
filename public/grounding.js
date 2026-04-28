@@ -24,26 +24,13 @@ const DEFAULT_TOPK = 5;
 
 let _pipe = null;
 let _loadingPromise = null;
-let _onProgress = () => {};
 // Sticky failure flag — once init has failed across all backends, or an
 // inference has blown up, stop retrying. Subsequent detectOnce returns null
 // so pip-tools surfaces "detector unavailable" cleanly; Pip's system prompt
 // then follows the "no detector → ask_human" hard rule instead of looping.
 let _pipeFailed = false;
 
-export function onGroundingProgress(cb) { _onProgress = cb || (() => {}); }
-export function isGroundingLoaded() { return !!_pipe; }
 export function isGroundingFailed() { return _pipeFailed; }
-
-// Called from perception.js startWatching so detector + VLM loads share
-// the same user-gated moment. Fire-and-forget; errors surface at tool-call
-// time so a detector failure doesn't block VLM scene captions. Opt out
-// with ?no-grounding-preload (see DEV.md).
-export function preloadGrounding() {
-  if (!GROUNDING_ENABLED) return;
-  if (typeof location !== "undefined" && /\bno-grounding-preload\b/.test(location.search + location.hash)) return;
-  ensurePipe().catch(() => {});
-}
 
 // q4f16 is fastest but needs the WebGPU shader-f16 extension (absent on
 // some Intel iGPUs + older Android GPUs — symptom there is an opaque
@@ -69,10 +56,7 @@ async function ensurePipe() {
     const errors = [];
     for (const attempt of INIT_ATTEMPTS) {
       try {
-        _pipe = await pipeline("zero-shot-object-detection", MODEL_ID, {
-          ...attempt,
-          progress_callback: (p) => { try { _onProgress(p); } catch {} },
-        });
+        _pipe = await pipeline("zero-shot-object-detection", MODEL_ID, attempt);
         return _pipe;
       } catch (err) {
         errors.push(`${attempt.device || "auto"}/${attempt.dtype || "auto"}: ${err && err.message || err}`);
