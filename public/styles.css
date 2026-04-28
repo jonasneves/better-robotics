@@ -746,7 +746,13 @@ details.tray.has-alert > summary::after {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cap-body { margin-top: 10px; }
+.cap-body {
+  margin-top: 10px;
+  /* Indent body content so it aligns under the label, not the chevron —
+     same idiom as iOS Settings disclosure rows. The 20px = chevron 12px
+     + cap-toggle gap 8px. */
+  padding-left: 20px;
+}
 
 /* Source chip on a cap section — composite robots only. Inherits .type-badge
    look so it matches the per-member chips below the meta row; smaller font
