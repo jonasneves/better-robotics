@@ -153,17 +153,25 @@
       <div class="meta joypad-hint">Drag to drive</div>
     </div>
     <!-- Tilt-drive: phone-as-steering-wheel. Roll the phone left/right to
-         turn (gamma axis from DeviceOrientationEvent), press-and-hold a
-         throttle button to go forward / reverse. Hidden until the user
-         picks Tilt mode and grants the iOS motion-permission prompt. -->
+         turn, press-and-hold a throttle button to accelerate/reverse.
+         Hidden until the user picks Tilt mode and grants the iOS motion-
+         permission prompt.
+           Portrait: gamma axis (left-right tilt). Pedals stack vertically.
+           Landscape: beta axis (the steering-wheel idiom — rotate phone
+             clockwise/counter-clockwise around its long axis). Pedals
+             reflow to bottom corners (controller-grip pattern: thumbs
+             rest naturally on each side). -->
     <div class="tilt-drive" id="phone-drive-tilt-wrap" hidden>
       <div class="tilt-indicator" id="phone-tilt-indicator">
         <div class="tilt-bar"><div class="tilt-fill" id="phone-tilt-fill"></div></div>
         <div class="meta tilt-readout" id="phone-tilt-readout">Roll phone L/R to steer</div>
       </div>
-      <div class="tilt-pedals">
-        <button class="tilt-pedal forward" id="phone-tilt-forward" type="button">▲ Forward</button>
+      <div class="tilt-orient-hint" id="phone-tilt-orient-hint" hidden>
+        Rotate phone to landscape for the steering-wheel grip.
+      </div>
+      <div class="tilt-pedals" id="phone-tilt-pedals">
         <button class="tilt-pedal reverse" id="phone-tilt-reverse" type="button">▼ Reverse</button>
+        <button class="tilt-pedal forward" id="phone-tilt-forward" type="button">▲ Forward</button>
       </div>
       <button class="tilt-permission" id="phone-tilt-permission" hidden>Allow motion sensors</button>
     </div>

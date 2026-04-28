@@ -340,15 +340,38 @@ const TILT_TURN_SATURATION_DEG = 35;  // ±35° = full turn rate; beyond clips
 const TILT_THROTTLE = 60;             // base motor magnitude when a pedal is held (LLM-cap-safe range)
 const TILT_SEND_HZ = 10;
 let _tiltGamma = 0;                   // last orientation event's left-right roll
+let _tiltBeta = 0;                    // front-back tilt (used in landscape)
 let _tiltThrottle = 0;                // -1, 0, +1 from pedal state
 let _tiltSendTimer = null;
 let _tiltOrientationOn = false;
 let _tiltMotionPermission = "unknown"; // "granted" | "denied" | "unknown"
 
+// Returns the user's "left-right tilt to steer" reading in degrees,
+// normalized so positive = turn right regardless of how the phone is
+// physically oriented. The DeviceOrientationEvent axes (alpha/beta/gamma)
+// are tied to the device frame, not the screen frame, so we re-map based
+// on screen.orientation.angle:
+//   0   (portrait primary): gamma → screen left-right
+//   180 (portrait inverted): -gamma
+//   90  (landscape primary, home button on left): beta → screen left-right
+//   270 (landscape secondary, home button on right): -beta
+function _tiltSteerAxisDeg() {
+  const angle = ((screen.orientation?.angle ?? 0) % 360 + 360) % 360;
+  if (angle === 90)  return _tiltBeta;
+  if (angle === 270) return -_tiltBeta;
+  if (angle === 180) return -_tiltGamma;
+  return _tiltGamma;
+}
+
+function _tiltIsLandscape() {
+  const angle = ((screen.orientation?.angle ?? 0) % 360 + 360) % 360;
+  return angle === 90 || angle === 270;
+}
+
 function _tiltMix() {
-  // gamma is in [-90, 90] roughly when held in portrait; positive = right
-  // tilt (top of phone tipped right). dead-zone + clip then normalize.
-  let g = _tiltGamma;
+  // Steering axis is in [-90, 90] roughly; positive = right tilt.
+  // dead-zone + clip then normalize.
+  let g = _tiltSteerAxisDeg();
   if (Math.abs(g) < TILT_TURN_DEADZONE_DEG) g = 0;
   if (g >  TILT_TURN_SATURATION_DEG) g =  TILT_TURN_SATURATION_DEG;
   if (g < -TILT_TURN_SATURATION_DEG) g = -TILT_TURN_SATURATION_DEG;
@@ -369,17 +392,18 @@ function _tiltUpdateIndicator() {
   const fill = $("phone-tilt-fill");
   const read = $("phone-tilt-readout");
   if (!fill) return;
-  const pct = Math.max(-1, Math.min(1, _tiltGamma / TILT_TURN_SATURATION_DEG));
+  const steer = _tiltSteerAxisDeg();
+  const pct = Math.max(-1, Math.min(1, steer / TILT_TURN_SATURATION_DEG));
   // Center the bar at 50%; fill from center outward toward the tilt direction.
   const left = pct < 0 ? `${50 + pct * 50}%` : "50%";
   const width = `${Math.abs(pct) * 50}%`;
   fill.style.left = left;
   fill.style.width = width;
   if (read) {
-    if (Math.abs(_tiltGamma) < TILT_TURN_DEADZONE_DEG) {
+    if (Math.abs(steer) < TILT_TURN_DEADZONE_DEG) {
       read.textContent = _tiltThrottle === 0 ? "Roll phone L/R to steer" : "Steady";
     } else {
-      read.textContent = `${_tiltGamma > 0 ? "→ Right" : "← Left"} ${Math.round(Math.abs(_tiltGamma))}°`;
+      read.textContent = `${steer > 0 ? "→ Right" : "← Left"} ${Math.round(Math.abs(steer))}°`;
     }
   }
 }
@@ -395,9 +419,25 @@ function _tiltSendTick() {
 }
 
 function _tiltOrientationHandler(e) {
-  // gamma: left-right roll in degrees. iOS gives us the raw value;
-  // Android Chrome same. Defensive null-guard for older browsers.
+  // gamma: left-right roll. beta: front-back tilt. We need both because
+  // the steering axis depends on whether the phone is in portrait or
+  // landscape (handled by _tiltSteerAxisDeg).
   if (typeof e.gamma === "number") _tiltGamma = e.gamma;
+  if (typeof e.beta  === "number") _tiltBeta  = e.beta;
+  _tiltUpdateIndicator();
+}
+
+// Apply / remove the .landscape modifier on the tilt-drive container so
+// CSS can reflow the pedals to bottom corners (controller-grip pattern)
+// when the phone rotates. Hides the steering input when in portrait
+// + tilt mode, with a hint to rotate.
+function _tiltApplyOrientation() {
+  const wrap = $("phone-drive-tilt-wrap");
+  const hint = $("phone-tilt-orient-hint");
+  if (!wrap) return;
+  const land = _tiltIsLandscape();
+  wrap.classList.toggle("landscape", land);
+  if (hint) hint.hidden = land;
   _tiltUpdateIndicator();
 }
 
@@ -447,6 +487,7 @@ function _setDriveMode(mode) {
                        && _tiltMotionPermission !== "granted";
     $("phone-tilt-permission").hidden = !needsPrompt;
     if (!needsPrompt) _tiltStartOrientation();
+    _tiltApplyOrientation();
     // Joystick-mode is no longer the throttle source — kill any in-flight
     // joypad drive so swapping doesn't strand a non-zero throttle.
     _joypad?.reset();
@@ -462,6 +503,15 @@ function wireTiltDrive() {
   // Mode toggle: persist choice + swap UI.
   $("phone-drive-mode-joypad")?.addEventListener("click", () => _setDriveMode("joypad"));
   $("phone-drive-mode-tilt")?.addEventListener("click", () => _setDriveMode("tilt"));
+  // Orientation change → re-apply class + hint. The browser fires both
+  // orientationchange (legacy) and screen.orientation.change (modern);
+  // listen to whichever surfaces first.
+  const onOrient = () => _tiltApplyOrientation();
+  if (screen.orientation?.addEventListener) {
+    screen.orientation.addEventListener("change", onOrient);
+  } else {
+    window.addEventListener("orientationchange", onOrient);
+  }
   // Permission prompt — explicit gesture handler so iOS approves.
   $("phone-tilt-permission")?.addEventListener("click", async () => {
     const ok = await _tiltRequestMotionPermission();

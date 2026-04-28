@@ -1388,6 +1388,32 @@ details.tray.has-alert > summary::after {
   /* Big tap target, immediate visual response. The active state makes
      the held-down feel obvious to the operator. */
 }
+
+/* Landscape steering-wheel grip — pedals spread to bottom-left and
+   bottom-right corners (controller-grip), indicator runs across the top.
+   Same buttons, different geometry: each thumb has a dedicated pedal
+   right where it naturally rests when the phone is held landscape. */
+.tilt-drive.landscape .tilt-pedals {
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tilt-drive.landscape .tilt-pedal {
+  flex: 1;
+  min-height: 88px;       /* bigger thumb target in landscape */
+  font-size: 18px;
+}
+.tilt-drive.landscape .tilt-pedal.reverse { order: 1; }
+.tilt-drive.landscape .tilt-pedal.forward { order: 2; }
+.tilt-orient-hint {
+  font-size: 13px;
+  color: var(--ink-muted);
+  text-align: center;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--bg-elev);
+  border: 1px dashed var(--border-default);
+}
 .tilt-pedal:active,
 .tilt-pedal[aria-pressed="true"] {
   background: var(--accent);
