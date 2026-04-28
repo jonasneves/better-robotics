@@ -323,6 +323,21 @@ async def run():
                                     payload.get("peer", ""),
                                     payload.get("data", {}),
                                 )
+                            elif payload.get("type") == "state":
+                                # signal.neevs.io broadcasts cached signaling
+                                # to peers that join after another peer sent
+                                # an offer (e.g. the dashboard clicked Connect
+                                # while the Pi was momentarily disconnected).
+                                # Extract offer/answer entries for the other
+                                # role and replay them.
+                                peers = payload.get("peers", {}) or {}
+                                for peer_id, data in peers.items():
+                                    if peer_id == my_peer_id:
+                                        continue
+                                    if not data:
+                                        continue
+                                    if data.get("offer") or data.get("answer"):
+                                        await session.handle_signal(peer_id, data)
                         elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
                             break
                     LOG.info("ws closed")
