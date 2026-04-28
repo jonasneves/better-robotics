@@ -206,8 +206,23 @@ let _keyHoldTimer = null;
 let _keyboardWired = false;
 
 export function pickMotorsTarget() {
-  for (const e of state.devices.values()) {
-    if (e.motorsChar && e.status === "connected") return e;
+  // Composite-robot routing: when multiple members of the same robot
+  // expose motors, honor the user's per-cap source pref. Falls through
+  // to first-connected-with-motors (the prior behavior) when nothing
+  // explicit applies — single-robot or no-pref cases.
+  for (const r of state.robots?.values?.() || []) {
+    const pref = r.capSourcePrefs?.motors;
+    if (pref) {
+      const e = state.devices.get(pref);
+      if (e && e.motorsChar && e.status === "connected") return e;
+    }
+    // No pref: first member that has motors wins (matches the cap-fan-out
+    // dedup in renderEntry, so the phone joypad hits whatever the dashboard
+    // is currently showing).
+    for (const mid of r.members || []) {
+      const e = state.devices.get(mid);
+      if (e && e.motorsChar && e.status === "connected") return e;
+    }
   }
   return null;
 }

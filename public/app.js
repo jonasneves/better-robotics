@@ -1457,25 +1457,35 @@ function openMenu(triggerBtn, id) {
   } else {
     header.hidden = true;
   }
-  // Gate ops-dependent items on the presence of the ops channel. ESP32 has
-  // no opsChar, so restart/reboot/log would be no-ops and the log dialog
-  // would sit forever on "Loading…" waiting for a response that can't
-  // come. Hide them instead of letting the user click into a dead end.
-  const hasOps = !!entry?.opsChar;
-  $("menu-restart").hidden = !hasOps;
-  $("menu-reboot").hidden  = !hasOps;
-  $("menu-log").hidden     = !hasOps;
-  // Pinout dialog handles both platforms: Pi via get-config + bundle OTA
-  // (needs opsChar + otaDataChar — gated inside renderView's edit button);
-  // ESP32 reads pins from fw-info and writes via PIN_CONFIG_CHAR (no ops
-  // dependency). Gate on "connected and has fw-info" so either path can
-  // render whatever it's capable of, and the menu is reachable for ESP32.
-  $("menu-pinout").hidden  = !(entry?.status === "connected" && entry?.fwInfo);
-  $("menu-disconnect").hidden = !(entry?.status === "connected");
+  // Per-device menu items show when ANY member satisfies the predicate (on
+  // composite robots; the click handler then asks which member to target).
+  // Single-member robots collapse to today's gating: just check the entry.
+  const myRobot = robotFor(entry?.id);
+  const allMembers = (myRobot?.members || [])
+    .map(id => state.devices.get(id))
+    .filter(Boolean);
+  const anyMember = (pred) => allMembers.length
+    ? allMembers.some(pred)
+    : (entry && pred(entry));
+  // Ops-dependent items: restart, reboot, view log. ESP32 has no opsChar,
+  // so on a Pi+ESP32 composite these still target the Pi (only matching
+  // member). On a single-ESP32 robot they're hidden — same as today.
+  $("menu-restart").hidden = !anyMember(m => !!m.opsChar);
+  $("menu-reboot").hidden  = !anyMember(m => !!m.opsChar);
+  $("menu-log").hidden     = !anyMember(m => !!m.opsChar);
+  // Pinout dialog handles both platforms; ANY connected member with fw-info
+  // makes the item available. The handler picks among matching members.
+  $("menu-pinout").hidden  = !anyMember(m => m.status === "connected" && m.fwInfo);
+  // Update firmware: any member with otaDataChar (both Pi and ESP32 have it
+  // on connect). Composite robots get a per-member picker on click.
+  $("menu-update").hidden       = !anyMember(m => !!m.otaDataChar);
+  $("menu-update-file").hidden  = !anyMember(m => !!m.otaDataChar);
+  // Disconnect is robot-level — applies to ALL connected members. Hide
+  // when no member is connected.
+  $("menu-disconnect").hidden = !anyMember(m => m.status === "connected");
   // Merge requires at least one OTHER robot to combine with. Split only
   // appears when this robot has multiple members (composition exists to be
   // undone). Both work whether or not the device is currently connected.
-  const myRobot = robotFor(entry?.id);
   const otherRobotCount = [...state.robots.values()].filter(r => r.id !== myRobot?.id).length;
   $("menu-merge").hidden = otherRobotCount === 0;
   $("menu-split").hidden = !(myRobot && myRobot.members.length > 1);
@@ -1646,35 +1656,59 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Escape" && $("robot-menu").matches(":popover-open")) closeMenu();
   });
 
+  // Composite robots have multiple members — per-device menu actions
+  // (Pinout, Update firmware, Restart, Reboot, View log) need to ask
+  // WHICH member they target. Single-member robots collapse to "no
+  // picker, just the only member." Predicate filters to members the
+  // action makes sense for (e.g., Pinout needs fwInfo; restart needs
+  // ops channel). Returns the chosen deviceId or null on cancel.
+  async function chooseMemberForAction(label, predicate) {
+    const robotId = menuTargetId;
+    if (!robotId) return null;
+    const robot = robotFor(robotId);
+    const members = (robot?.members || [])
+      .map(id => state.devices.get(id))
+      .filter(m => m && predicate(m));
+    if (members.length === 0) return null;
+    if (members.length === 1) return members[0].id;
+    const lines = members.map((m, i) =>
+      `${i + 1}. ${m.name}${m.fwType ? ` (${m.fwType.toUpperCase()})` : ""}`
+    );
+    const pick = prompt(`${label} — pick a device:\n\n${lines.join("\n")}\n\nEnter number, or Cancel:`);
+    const idx = parseInt(pick, 10) - 1;
+    if (!Number.isFinite(idx) || idx < 0 || idx >= members.length) return null;
+    return members[idx].id;
+  }
+
   $("menu-label").addEventListener("click", () => {
     const id = menuTargetId;
     closeMenu();
     if (id) openLabel(id);
   });
-  $("menu-update").addEventListener("click", () => {
-    const id = menuTargetId;
+  $("menu-update").addEventListener("click", async () => {
     closeMenu();
+    const id = await chooseMemberForAction("Update firmware", m => !!m.otaDataChar);
     if (id) updateFirmware(id);
   });
-  $("menu-update-file").addEventListener("click", () => {
-    const id = menuTargetId;
+  $("menu-update-file").addEventListener("click", async () => {
     closeMenu();
+    const id = await chooseMemberForAction("Update from file", m => !!m.otaDataChar);
     if (id) updateFromFile(id);
   });
-  $("menu-restart").addEventListener("click", () => {
-    const id = menuTargetId;
+  $("menu-restart").addEventListener("click", async () => {
     closeMenu();
+    const id = await chooseMemberForAction("Restart service", m => !!m.opsChar);
     if (id) restartService(id);
   });
-  $("menu-reboot").addEventListener("click", () => {
-    const id = menuTargetId;
+  $("menu-reboot").addEventListener("click", async () => {
     closeMenu();
+    const id = await chooseMemberForAction("Reboot robot", m => !!m.opsChar);
     if (id) rebootRobot(id);
   });
   let logTimeoutId = null;
-  $("menu-log").addEventListener("click", () => {
-    const id = menuTargetId;
+  $("menu-log").addEventListener("click", async () => {
     closeMenu();
+    const id = await chooseMemberForAction("View log", m => !!m.opsChar);
     if (!id) return;
     const entry = state.devices.get(id);
     $("log-dialog-title").textContent = `Log · ${entry?.name || "robot"}`;
@@ -1702,8 +1736,10 @@ document.addEventListener("DOMContentLoaded", () => {
     $("log-dialog-body").textContent = msg.text || "(empty)";
   });
   $("menu-pinout").addEventListener("click", async () => {
-    const id = menuTargetId;
     closeMenu();
+    const id = await chooseMemberForAction(
+      "Edit pins", m => m.status === "connected" && m.fwInfo,
+    );
     if (!id) return;
     const mod = await import("./pinout.js");
     mod.openPinoutDialog(id);
@@ -1914,9 +1950,16 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("label-print").addEventListener("click", () => window.print());
   $("menu-disconnect").addEventListener("click", () => {
-    const id = menuTargetId;
     closeMenu();
-    if (id) disconnect(id);
+    // Robot-level: disconnect every connected member of this robot. The
+    // user thinks of "the robot is offline," not "this device's link
+    // dropped." Sequential to avoid concurrent BLE disconnect glitches.
+    const robot = robotFor(menuTargetId);
+    const ids = (robot?.members || [menuTargetId]).filter(Boolean);
+    for (const id of ids) {
+      const m = state.devices.get(id);
+      if (m && (m.status === "connected" || m.status === "firmware-down")) disconnect(id);
+    }
   });
   $("menu-merge").addEventListener("click", () => {
     const id = menuTargetId;
