@@ -163,7 +163,15 @@
              rest naturally on each side). -->
     <div class="tilt-drive" id="phone-drive-tilt-wrap" hidden>
       <div class="tilt-indicator" id="phone-tilt-indicator">
-        <div class="tilt-bar"><div class="tilt-fill" id="phone-tilt-fill"></div></div>
+        <div class="tilt-bar">
+          <!-- Neutral zone: fixed band centered at 50% width, sized to
+               the dead-zone fraction of the saturation range. Tells the
+               operator "tilt within this band = robot keeps going
+               straight." Sits behind the active fill so the reading
+               doesn't overlap visually. -->
+          <div class="tilt-neutral" id="phone-tilt-neutral"></div>
+          <div class="tilt-fill" id="phone-tilt-fill"></div>
+        </div>
         <div class="meta tilt-readout" id="phone-tilt-readout">Roll phone L/R to steer</div>
       </div>
       <div class="tilt-orient-hint" id="phone-tilt-orient-hint" hidden>

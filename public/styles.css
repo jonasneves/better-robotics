@@ -1354,7 +1354,7 @@ details.tray.has-alert > summary::after {
 .tilt-bar {
   position: relative;
   width: 100%;
-  height: 8px;
+  height: 12px;
   background: var(--border-subtle);
   border-radius: 999px;
   overflow: hidden;
@@ -1365,6 +1365,19 @@ details.tray.has-alert > summary::after {
   height: 100%;
   background: var(--accent);
   transition: left 60ms linear, width 60ms linear;
+}
+/* Neutral zone — band at the center showing "tilt within this range =
+   robot keeps going straight." JS sets the inline width to match the
+   ratio of the dead-zone to the saturation range so it scales if the
+   constants change. Sits BEHIND .tilt-fill so the active read is still
+   visible when the user crosses out of the dead zone. */
+.tilt-neutral {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 100%;
+  background: color-mix(in srgb, var(--success) 35%, transparent);
 }
 .tilt-readout {
   font-variant-numeric: tabular-nums;
