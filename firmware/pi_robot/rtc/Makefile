@@ -43,8 +43,11 @@ $(LIBPEER_LIB): $(LIBPEER_DIR)/CMakeLists.txt
 
 $(LIBPEER_DIR)/CMakeLists.txt:
 	mkdir -p $(VENDOR)
-	git clone $(LIBPEER_REPO) $(LIBPEER_DIR)
-	cd $(LIBPEER_DIR) && git checkout $(LIBPEER_SHA)
+	# --recursive pulls third_party/{coreHTTP,coreMQTT,cJSON} which
+	# libpeer's CMakeLists requires — without these the configure step
+	# errors with "could not find httpFilePaths.cmake".
+	git clone --recursive $(LIBPEER_REPO) $(LIBPEER_DIR)
+	cd $(LIBPEER_DIR) && git checkout $(LIBPEER_SHA) && git submodule update --init --recursive
 
 clean:
 	rm -f pi-robot-rtc
