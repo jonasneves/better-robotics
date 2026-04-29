@@ -124,6 +124,14 @@ async function openChannelViaBLE(robotId, label, signalChar, opts) {
   try {
     onStatus("Generating offer…");
     const offer = await pc.createOffer();
+    // libpeer's create_answer hardcodes the data-channel mid as
+    // "datachannel" (sdp.c:75) and the BUNDLE group as "datachannel"
+    // (sdp.c:103). Browsers auto-assign mids ("0", "1", ...). Without
+    // patching, Chrome's setRemoteDescription rejects libpeer's answer
+    // with "The order of m-lines in answer doesn't match order in offer"
+    // because the mids differ. Rewriting our offer to use libpeer's
+    // expected mid up-front makes both sides consistent.
+    offer.sdp = patchOfferForLibpeer(offer.sdp);
     await pc.setLocalDescription(offer);
 
     // Non-trickle ICE: wait for gathering to complete so the SDP carries
@@ -150,6 +158,20 @@ async function openChannelViaBLE(robotId, label, signalChar, opts) {
     signalChar.removeEventListener("characteristicvaluechanged", onSignal);
     throw err;
   }
+}
+
+// Match libpeer's hardcoded mid for the data channel m-section. Single
+// m-line per session in our use (one data channel per peer), so a
+// straight rename is enough; multi-channel peers will need a richer
+// patch keyed off m=application sections individually.
+function patchOfferForLibpeer(sdp) {
+  const midMatch = sdp.match(/^a=mid:(\S+)$/m);
+  if (!midMatch) return sdp;
+  const browserMid = midMatch[1];
+  if (browserMid === "datachannel") return sdp;  // already matches
+  return sdp
+    .replaceAll(`a=mid:${browserMid}`, "a=mid:datachannel")
+    .replaceAll(`BUNDLE ${browserMid}`, "BUNDLE datachannel");
 }
 
 async function sendChunked(char, bytes) {
@@ -298,6 +320,9 @@ async function openChannelViaWss(robotId, robotName, label, opts) {
       onStatus("Signal channel open. Creating offer…");
       try {
         const offer = await pc.createOffer();
+        // Same libpeer mid patch as the BLE path. Both signaling
+        // transports drive the same libpeer build on the chip.
+        offer.sdp = patchOfferForLibpeer(offer.sdp);
         await pc.setLocalDescription(offer);
         ws.send(JSON.stringify({
           type: "signal",
