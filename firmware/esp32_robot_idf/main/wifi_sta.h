@@ -1,16 +1,25 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
-// Bring up WiFi STA. Sets hostname, attaches a reconnect handler, and
-// kicks off a join attempt with whatever creds live in the "wifi" NVS
-// namespace. No-op if no creds saved — caller can drive a join later.
-//
-// `hostname` and `chip_suffix` come from the chip MAC. `chip_suffix` is
-// the lowercase 4-hex used for `<hostname>.local` consistency with the
-// dashboard's wifi-presence probe.
+// Bring up WiFi STA. Sets hostname, attaches event handlers, and kicks
+// off a join attempt with whatever creds live in the "wifi" NVS namespace.
+// No-op join if no creds saved — dashboard drives one over BLE later.
 void wifi_sta_init(const char *hostname);
 
-// True once we've seen STA_GOT_IP at least once. The /ota and presence
-// paths gate on this so they don't fire before LWIP has an address.
 bool wifi_sta_has_ip(void);
+
+// Triggered by BLE READ on wifi-scan. Async — completion fires
+// gatt_svr_notify_wifi_scan() once the records are formatted.
+void wifi_sta_scan_start(void);
+
+// Triggered by BLE WRITE on wifi-join. JSON: {"s":"ssid","p":"pass"}.
+// Empty p for open networks. Match firmware/pi_robot/pi_robot.py shape.
+void wifi_sta_handle_join_write(const uint8_t *json, size_t len);
+
+// JSON snapshots — gatt_svr returns these as char values on READ.
+// Stable pointers (file-static buffers); valid until the next update.
+const char *wifi_sta_scan_json(void);
+const char *wifi_sta_status_json(void);

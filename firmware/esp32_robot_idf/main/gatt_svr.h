@@ -6,9 +6,9 @@
 // caps call notify_X() after applying state to push the new value to
 // any subscribed dashboard.
 //
-// Phase 2.C.1 covers: LED, FLASH, MOTOR, PIN_CONFIG. Other characteristics
-// (wifi-scan/join/status, OTA, fw-info, telemetry, snapshot, camera-profile,
-// ops/ops-response) land in the next 2.C sub-phases.
+// Phases 2.C.1 + 2.C.2 cover: LED, FLASH, MOTOR, PIN_CONFIG, WIFI_SCAN,
+// WIFI_JOIN, WIFI_STATUS. Remaining (OTA, fw-info, telemetry, snapshot,
+// camera-profile, ops/ops-response) land in later 2.C sub-phases.
 void gatt_svr_init(void);
 
 // SERVICE_UUID parsed once at init — ble_host borrows this for advertising.
@@ -17,3 +17,5 @@ const ble_uuid128_t *gatt_svr_service_uuid(void);
 void gatt_svr_notify_led(void);
 void gatt_svr_notify_flash(void);
 void gatt_svr_notify_motor(void);
+void gatt_svr_notify_wifi_scan(void);
+void gatt_svr_notify_wifi_status(void);
