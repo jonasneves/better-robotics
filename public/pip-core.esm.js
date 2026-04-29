@@ -43,7 +43,6 @@ const CSS = `
 .pip-bubble .robot-antenna-s { opacity: 0; animation: pip-antenna-s-idle 8s step-end infinite; }
 .pip-bubble .robot-antenna-r { opacity: 0; }
 .pip-bubble .robot-spark { opacity: 0; animation: pip-spark-flash 8s step-end infinite; }
-.pip-bubble .robot-eye-r { animation: pip-robot-wink 12s step-end infinite; transform-origin: 15px 14px; }
 
 @keyframes pip-antenna-l-idle { 0%, 100% { opacity: 1; } 58% { opacity: 0; } 67% { opacity: 1; } }
 @keyframes pip-antenna-s-idle { 0%, 100% { opacity: 0; } 58% { opacity: 1; } 67% { opacity: 0; } }
@@ -59,13 +58,10 @@ const CSS = `
   93%, 96% { transform: scaleY(1) translateX(-0.6px); }
   98%, 100% { transform: scaleY(1) translateX(0); }
 }
-@keyframes pip-robot-wink { 0%, 38%, 44%, 100% { transform: scaleY(1); } 40% { transform: scaleY(0.15); } }
-
 .pip-bubble.responding .robot-eyes { animation: pip-robot-speak-eyes 2.4s step-end infinite; }
 .pip-bubble.responding .robot-antenna-l { animation: pip-antenna-l-speak 1.2s step-end infinite; }
 .pip-bubble.responding .robot-antenna-s { animation: pip-antenna-s-speak 1.2s step-end infinite; }
 .pip-bubble.responding .robot-antenna-r { animation: pip-antenna-r-speak 1.2s step-end infinite; }
-.pip-bubble.responding .robot-eye-r { animation: none; }
 .pip-bubble.responding .robot-spark { animation: none; opacity: 0; }
 @keyframes pip-robot-speak-eyes {
   0%, 50%, 100% { transform: scaleY(1) translateX(0); }
@@ -82,7 +78,6 @@ const CSS = `
 
 @media (prefers-reduced-motion: reduce) {
   .pip-bubble .robot-eyes,
-  .pip-bubble .robot-eye-r,
   .pip-bubble .robot-spark,
   .pip-bubble .robot-antenna-l,
   .pip-bubble .robot-antenna-s,
