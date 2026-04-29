@@ -4,7 +4,7 @@
 
 Source: protocol/uuids.json
 Outputs:
-    firmware/esp32_robot/uuids.h    — `#define X "uuid"`
+    firmware/esp32_robot_idf/main/uuids.h    — `#define X "uuid"`
     firmware/pi_robot/uuids.py      — `X = "uuid"`
     public/uuids.js                 — `export const X = "uuid";`
 
@@ -99,7 +99,7 @@ def main():
     with open(SOURCE) as f:
         spec = json.load(f)
     targets = [
-        ("firmware/esp32_robot/uuids.h", gen_c),
+        ("firmware/esp32_robot_idf/main/uuids.h", gen_c),
         ("firmware/pi_robot/uuids.py",   gen_py),
         ("public/uuids.js",              gen_js),
     ]

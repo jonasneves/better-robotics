@@ -1,9 +1,16 @@
-# Two-slot OTA layout for 4MB flash. App partitions must be 64KB-aligned;
-# otadata ends at 0x11000 so ota_0 starts at the next aligned offset 0x20000.
-# Each app slot is 1920K — large enough for WiFi + BLE + esp32-camera +
-# libpeer; the Arduino-side bin lands around 1.4MB so headroom is real.
-# Name,   Type, SubType, Offset,   Size,   Flags
-nvs,      data, nvs,     0x9000,   0x6000
-otadata,  data, ota,     0xf000,   0x2000
-ota_0,    app,  ota_0,   0x20000,  0x1E0000
-ota_1,    app,  ota_1,   0x200000, 0x1E0000
+# Layout matches arduino-esp32's "min_spiffs" partition scheme so an OTA
+# from Arduino-firmware → IDF-firmware writes to the same slot the running
+# bootloader expects (otadata at 0xE000, ota_0 at 0x10000). Without this,
+# fielded ESP32-CAM units running the .ino can't OTA to the IDF build —
+# the dashboard's BLE OTA only updates the app bin, not bootloader / part
+# table. Each app slot is 1920K — the .ino has fit comfortably; the IDF
+# build is currently ~1.5MB with WebRTC + camera + BLE all in.
+#
+# spiffs / coredump partitions from arduino-esp32's layout are dropped
+# here — the IDF build doesn't use SPIFFS (NVS handles all persistence)
+# and we'd rather have the flash for headroom.
+# Name,   Type, SubType, Offset,    Size,     Flags
+nvs,      data, nvs,     0x9000,    0x5000
+otadata,  data, ota,     0xE000,    0x2000
+ota_0,    app,  ota_0,   0x10000,   0x1E0000
+ota_1,    app,  ota_1,   0x1F0000,  0x1E0000

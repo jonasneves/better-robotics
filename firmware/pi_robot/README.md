@@ -1,6 +1,6 @@
 # pi_robot
 
-Python robot firmware for the Raspberry Pi. Mirrors `firmware/esp32_robot/` — same BLE service, same characteristic UUIDs, same dashboard experience.
+Python robot firmware for the Raspberry Pi. Mirrors `firmware/esp32_robot_idf/` — same BLE service, same characteristic UUIDs, same dashboard experience.
 
 ## BLE service
 

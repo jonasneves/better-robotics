@@ -60,9 +60,9 @@ Requires a USB-C **data** cable (not charge-only) — Anker or Cable Matters USB
 
 Two variables need to match your ESP32 board:
 
-- **`FQBN`** in `Makefile` — `esp32:esp32:esp32cam:PartitionScheme=min_spiffs` for CAM-MB; for S3, something like `esp32:esp32:esp32s3:PartitionScheme=min_spiffs,USBMode=default,CDCOnBoot=cdc`; for C6, `esp32:esp32:esp32c6:PartitionScheme=min_spiffs,CDCOnBoot=cdc` (run `arduino-cli board listall` for exact identifiers on your core version).
-- **`LED_PIN`** in `firmware/esp32_robot/esp32_robot.ino` — GPIO 33 active-low on CAM-MB. S3 and C6 boards vary; many use a WS2812 neopixel (GPIO 48 on DevKitC-S3, GPIO 8 on DevKitC-C6) which needs a different driver entirely.
+- **target** for `idf.py set-target` — `esp32` for CAM-MB; `esp32s3` for S3 boards. The IDF tree carries per-target sdkconfig defaults (`sdkconfig.defaults.esp32`, `sdkconfig.defaults.esp32s3`).
+- **`LED_PIN`** default in `firmware/esp32_robot_idf/main/pin_config.c` — GPIO 33 active-low on CAM-MB. S3 boards vary; many use a WS2812 neopixel (GPIO 48 on DevKitC-S3) which needs a different driver entirely. The dashboard's Pinout editor can override this at runtime via NVS without a rebuild.
 
-`min_spiffs` is load-bearing across both: its dual 1.9 MB app partitions are what OTA needs to stage an update without wiping the running image.
+The IDF partition layout (1.9 MB OTA slots, otadata at 0xE000) matches arduino-esp32's `min_spiffs` so a fielded ESP32 originally flashed with the .ino can OTA into this firmware without bricking.
 
 After changing either, push to `main` — CI rebuilds and publishes the new binary automatically. Run `make publish-firmware` locally only to preview before pushing.
