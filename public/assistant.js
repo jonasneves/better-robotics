@@ -12,7 +12,6 @@ const HISTORY_LIMIT = 12;
 // resumes. Long enough to read a reply, short enough an abandoned chat doesn't
 // stick forever.
 const IDLE_RESUME_MS = 20000;
-const MAX_CHAT_TURNS = 5;
 
 // Trimmed: rules the executor mechanically enforces (3-pulse stop floor,
 // pulse duration cap, signed-pair clamp) live in pip-tools.js and are
@@ -47,6 +46,9 @@ const PIP_SYSTEM = [
   "specifically'. Spatial still prefers get_robot_detections.",
   "",
   "When chatting: if you don't know AND no tool would help, say so in one line.",
+  "Stay warm and curious. Off-topic asks (poems, jokes, small talk) — answer",
+  "briefly in character. No scope-policing or capping ('that's the last one',",
+  "'ask me something useful', 'not my thing').",
 ].join("\n");
 
 // Single source of truth for "Hi, I'm Pip" — used by the dashboard panel
@@ -101,38 +103,6 @@ function finishTraceLine(li, summary, isError) {
 
 function scrollPanelToBottom() {
   _pip.scroll.scrollTop = _pip.scroll.scrollHeight;
-}
-
-// Collapse every completed-but-not-active turn to a one-line summary.
-// NON-DESTRUCTIVE: wraps existing children in .pip-turn-full and appends
-// a .pip-turn-summary sibling — CSS toggles which is visible. Click the
-// summary to re-expand the original content (echo + trace + reply intact).
-function collapsePreviousTurns() {
-  const turns = _pip.turns.querySelectorAll(".pip-turn:not(.collapsed)");
-  for (const t of turns) {
-    if (t === _activeTurnEl) continue;
-    if (!t.querySelector(".pip-reply")) continue;
-    if (!t.querySelector(".pip-turn-summary")) {
-      const echo = t.querySelector(".pip-echo")?.textContent?.trim() || "";
-      const replyText = t.querySelector(".pip-reply")?.textContent?.trim() || "";
-      const traceCount = t.querySelectorAll(".pip-trace-line").length;
-      const summary = echo
-        ? `${shorten(echo, 50)}${traceCount ? ` · ${traceCount} action${traceCount === 1 ? "" : "s"}` : ""}`
-        : shorten(replyText, 70);
-      const sumBtn = document.createElement("button");
-      sumBtn.type = "button";
-      sumBtn.className = "pip-turn-summary";
-      sumBtn.textContent = `▸ ${summary}`;
-      const full = document.createElement("div");
-      full.className = "pip-turn-full";
-      while (t.firstChild) full.appendChild(t.firstChild);
-      t.appendChild(sumBtn);
-      t.appendChild(full);
-    }
-    t.classList.add("collapsed");
-  }
-  // Cap the DOM stack — older turns still live in pip.history for Claude context.
-  while (_pip.turns.children.length > MAX_CHAT_TURNS) _pip.turns.removeChild(_pip.turns.firstChild);
 }
 
 // Stop button while askWithTools iterates. Click sets abort flag the loop
@@ -214,7 +184,6 @@ async function notifyDialog(dialogEl) {
 // Host onSubmit — runs askWithTools with trace + stop + max-iter continue/stop.
 async function onSubmit(text, { turnEl }) {
   _activeTurnEl = turnEl;
-  collapsePreviousTurns();
   _abort = false;
   cancelAutoDismiss();
   const stopBtn = attachStopButton(turnEl);
@@ -294,12 +263,6 @@ export function initAssistant() {
   if (showIntro) { try { localStorage.setItem(seenKey, "1"); } catch {} }
   // Typing cancels auto-dismiss so Pip doesn't vanish mid-thought.
   _pip.input.addEventListener("input", () => { if (_pip.input.value) cancelAutoDismiss(); });
-  // Collapsed-turn summary click = re-expand.
-  _pip.turns.addEventListener("click", (e) => {
-    const sum = e.target.closest(".pip-turn-summary");
-    if (!sum) return;
-    sum.closest(".pip-turn")?.classList.toggle("collapsed");
-  });
   // Inject in-chat ask handler so pip-tools' ask_human can render option
   // buttons / free-text input inline in the active turn.
   setAskInChatHandler(({ question, options }) =>

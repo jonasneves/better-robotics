@@ -114,25 +114,6 @@ const CSS = `
 .pip-panel:popover-open { display: flex; flex-direction: column; }
 .pip-panel.fading { opacity: 0; transition: opacity 3s ease-out; }
 
-.pip-close {
-  position: absolute;
-  top: 6px; right: 6px;
-  min-width: 28px; min-height: 28px;
-  width: 28px; height: 28px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  color: var(--pip-ink-muted, #6e6e73);
-  background: var(--pip-surface, #fff);
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-}
-.pip-close:hover { color: var(--pip-ink, inherit); }
-
 /* Inner scroll region — min-height:0 is the flex-child escape hatch that
    lets overflow-y actually scroll instead of pushing the form out. Scroll
    moves here, not the outer .pip-panel, so the speech-bubble ::after tail
@@ -387,12 +368,6 @@ export function createPip(opts = {}) {
   panel.setAttribute("role", "dialog");
   panel.setAttribute("aria-label", "Assistant");
 
-  const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
-  closeBtn.className = "pip-close";
-  closeBtn.setAttribute("aria-label", "Close");
-  closeBtn.textContent = "×";
-
   const scroll = document.createElement("div");
   scroll.className = "pip-scroll";
 
@@ -418,7 +393,6 @@ export function createPip(opts = {}) {
   input.setAttribute("aria-label", placeholder);
   form.appendChild(input);
 
-  panel.appendChild(closeBtn);
   panel.appendChild(scroll);
   panel.appendChild(form);
 
@@ -470,7 +444,6 @@ export function createPip(opts = {}) {
     if (panel.matches(":popover-open")) close();
     else open();
   });
-  closeBtn.addEventListener("click", close);
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && panel.matches(":popover-open")) close();

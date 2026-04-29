@@ -1870,23 +1870,6 @@ dialog[open]::backdrop { opacity: 1; }
   min-height: 22px;
 }
 
-/* Non-destructive collapse: summary + full content both live in the DOM,
-   CSS toggles which is visible. Click summary to re-expand. */
-.pip-turn-summary {
-  display: none;
-  width: 100%;
-  text-align: left;
-  font-size: 12px;
-  color: var(--ink-muted);
-  background: transparent;
-  border: none;
-  padding: 4px 0;
-  cursor: pointer;
-}
-.pip-turn-summary:hover { color: var(--ink); }
-.pip-turn-full { display: block; }
-.pip-turn.collapsed > .pip-turn-summary { display: block; }
-.pip-turn.collapsed > .pip-turn-full    { display: none; }
 .settings-profile {
   display: flex;
   align-items: flex-start;
