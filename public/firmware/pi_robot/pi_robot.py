@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Better Robotics — robot firmware for Raspberry Pi.
 
-Mirrors firmware/esp32_robot/esp32_robot.ino: advertises a single BLE
+Mirrors firmware/esp32_robot_idf: advertises a single BLE
 service; each capability (LED, WiFi, motors, sensors, ...) is a
 characteristic within that service. The dashboard connects to Pi and
 ESP32 robots identically.
