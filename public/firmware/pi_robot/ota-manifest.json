@@ -85,5 +85,5 @@
     "/usr/local/bin/ensure-autologin-password.sh __USER__"
   ],
   "reboot": true,
-  "commit": "30b28f2"
+  "commit": "b9664f2"
 }
