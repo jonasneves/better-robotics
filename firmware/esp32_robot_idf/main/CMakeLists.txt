@@ -23,6 +23,7 @@ idf_component_register(
         "restart_util.c"
         "fw_info.c"
         "telemetry.c"
+        "webrtc_peer.c"
     INCLUDE_DIRS
         "."
         "../../esp32_robot"
@@ -47,4 +48,7 @@ idf_component_register(
         # Capabilities
         driver
         esp_timer
+        # WebRTC signaling — JSON over wss:// to signal.neevs.io.
+        json
+        esp-tls
 )

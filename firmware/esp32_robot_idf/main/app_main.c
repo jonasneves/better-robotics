@@ -15,6 +15,7 @@
 #include "ota.h"
 #include "pin_config.h"
 #include "telemetry.h"
+#include "webrtc_peer.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "esp32_robot";
@@ -76,4 +77,7 @@ void app_main(void) {
     wifi_sta_init(hostname);
     http_server_init(ble_name);
     mdns_advertise_init(hostname);
+    // WebRTC peer last — websocket client connects asynchronously when
+    // WiFi gets an IP. Safe to start before the first GOT_IP event.
+    webrtc_peer_init(ble_name);
 }

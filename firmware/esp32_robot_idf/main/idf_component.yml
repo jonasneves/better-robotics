@@ -20,5 +20,9 @@ dependencies:
   # probe, same publisher avahi handles on the Pi.
   espressif/mdns: "^1.4.0"
 
+  # WebSocket client — the WebRTC signaling rendezvous (wss://signal.neevs.io)
+  # speaks JSON-over-WebSocket. Same component split-out as mDNS in IDF 5.x.
+  espressif/esp_websocket_client: "^1.2.0"
+
   idf:
     version: ">=5.1.0"
