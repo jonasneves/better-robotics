@@ -109,6 +109,86 @@ function patchOtaSectionThrottled(entry) {
   });
 }
 
+// Stream the bundle to the Pi's RTC daemon over a WebRTC DataChannel,
+// which stages to /tmp/pi-robot-staged-ota.json. Then trigger the
+// privileged apply via the existing BLE ops verb apply-staged-ota.
+//
+// Why split: RTC daemon runs as `robot` (low priv); _apply_bundle in
+// pi_robot.py runs as root (writes /etc/systemd/system/, runs systemctl).
+// WebRTC handles the bulk transfer (MB/s); BLE op handles the ack +
+// kicks the privileged apply. End-to-end ~seconds for 1.6 MB instead
+// of minutes.
+//
+// Throws on any failure — caller falls back to BLE-stream.
+async function streamOtaViaWebRTC(entry, bytes) {
+  if (!entry.opsChar) throw new Error("no ops channel — can't trigger apply");
+  const { openChannel, closePeer } = await import("../webrtc-robot.js");
+  let channel;
+  try {
+    channel = await openChannel(entry.id, entry.name, "ota", {
+      onStatus: (s) => logFor(entry, `ota webrtc: ${s}`),
+    });
+  } catch (err) {
+    throw new Error(`webrtc open: ${err.message || err}`);
+  }
+  try {
+    channel.binaryType = "arraybuffer";
+    // Pi RTC replies with {type:"staged"} when the file is closed and
+    // sized correctly; resolve the staging step on that. {type:"error"}
+    // surfaces from the Pi side (write/open failure, size mismatch).
+    const stagedAck = new Promise((resolve, reject) => {
+      const onMsg = (e) => {
+        if (typeof e.data !== "string") return;
+        let msg; try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.type === "staged") { channel.removeEventListener("message", onMsg); resolve(msg); }
+        else if (msg.type === "error") { channel.removeEventListener("message", onMsg); reject(new Error(msg.error)); }
+      };
+      channel.addEventListener("message", onMsg);
+      // Bound the wait — 60 s covers a 1.6 MB transfer easily; longer
+      // than that means the Pi is wedged or never sending the ack.
+      setTimeout(() => reject(new Error("staged ack timeout")), 60000);
+    });
+
+    channel.send(JSON.stringify({ type: "begin", size: bytes.length }));
+
+    // Chunk size: keep below SCTP's default max-message limit (64 KB
+    // is universally safe; Chrome+aiortc both negotiate higher but
+    // 64 KB is the conservative floor and still gives ~25 round-trips
+    // for 1.6 MB — plenty fast).
+    const CHUNK = 64 * 1024;
+    entry.otaSent = 0;
+    patchOtaSection(entry);
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+      channel.send(slice);
+      entry.otaSent = i + slice.length;
+      patchOtaSectionThrottled(entry);
+      // Backpressure: queue can grow unbounded if we send faster than
+      // SCTP drains. Pause when buffered amount climbs past 1 MB.
+      while (channel.bufferedAmount > 1 * 1024 * 1024) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    }
+    channel.send(JSON.stringify({ type: "commit" }));
+    await stagedAck;
+    entry.otaSent = bytes.length;
+    patchOtaSection(entry);
+
+    // Trigger apply on the BLE side — the existing _apply_bundle path
+    // runs as root and drives the OTA status notifies the dashboard
+    // already renders. Body matches the apply-staged-ota verb's args
+    // shape (path is allowlisted on the Pi side).
+    const applyMsg = encodeJson({
+      op: "apply-staged-ota",
+      args: { path: "/tmp/pi-robot-staged-ota.json" },
+    });
+    await entry.opsChar.writeValueWithResponse(applyMsg);
+  } finally {
+    try { channel?.close(); } catch {}
+    closePeer(entry.id);
+  }
+}
+
 async function streamOtaBytes(entry, bytes) {
   const ch = entry.otaDataChar;
   // All chunks go WithResponse. WithoutResponse speedup was observed
@@ -265,12 +345,27 @@ export async function updateFirmware(id) {
     await acquireWakeLock();
     try {
       logFor(entry, `OTA streaming bundle ${bytes.length} B…`);
+      // Prefer WebRTC for Pi bundles — minutes (BLE chunked) → seconds
+      // (WebRTC P2P) for 1.6 MB. Falls back to BLE-stream on any error
+      // (peer not running, network blocked, etc.) so existing OTA path
+      // is preserved as the safety net.
+      let webrtcOk = false;
       try {
-        await streamOtaBytes(entry, bytes);
-        logFor(entry, "OTA commit sent — robot applying bundle");
+        await streamOtaViaWebRTC(entry, bytes);
+        webrtcOk = true;
+        logFor(entry, "OTA staged + apply triggered — robot applying bundle");
         _markExpectingReconnect(entry.id);
       } catch (err) {
-        logFor(entry, `OTA failed: ${err.message}`);
+        logFor(entry, `WebRTC OTA failed: ${err.message} — falling back to BLE`);
+      }
+      if (!webrtcOk) {
+        try {
+          await streamOtaBytes(entry, bytes);
+          logFor(entry, "OTA commit sent — robot applying bundle");
+          _markExpectingReconnect(entry.id);
+        } catch (err) {
+          logFor(entry, `OTA failed: ${err.message}`);
+        }
       }
     } finally {
       await releaseWakeLock();

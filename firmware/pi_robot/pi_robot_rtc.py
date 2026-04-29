@@ -199,39 +199,11 @@ class Session:
         def on_dc(channel):
             LOG.info("datachannel opened: %s", channel.label)
             if channel.label == "shell":
-                bridge = ShellBridge(channel, asyncio.get_event_loop())
-                self.bridges[channel.label] = bridge
-                bridge.start()
-
-                @channel.on("message")
-                def on_msg(message):
-                    # Binary = raw PTY bytes (stdin). Text = JSON control
-                    # messages (resize, future: signals, env). Splitting on
-                    # WebRTC's native text/binary discriminator avoids inline
-                    # escape-sequence games.
-                    if isinstance(message, str):
-                        try:
-                            ctrl = json.loads(message)
-                        except json.JSONDecodeError:
-                            return
-                        if ctrl.get("type") == "resize" and bridge.master_fd is not None:
-                            cols = int(ctrl.get("cols") or 80)
-                            rows = int(ctrl.get("rows") or 24)
-                            try:
-                                fcntl.ioctl(
-                                    bridge.master_fd, termios.TIOCSWINSZ,
-                                    struct.pack("HHHH", rows, cols, 0, 0),
-                                )
-                            except OSError:
-                                pass
-                    else:
-                        bridge.write(message)
-
-                @channel.on("close")
-                def on_close():
-                    LOG.info("datachannel closed: %s", channel.label)
-                    bridge.dispose()
-                    self.bridges.pop(channel.label, None)
+                self._wire_shell(channel)
+            elif channel.label == "ota":
+                self._wire_ota(channel)
+            else:
+                LOG.warning("ignoring unknown channel label: %s", channel.label)
 
         @self.pc.on("connectionstatechange")
         async def on_state():
@@ -261,6 +233,120 @@ class Session:
             "sdp": self.pc.localDescription.sdp,
             "type": self.pc.localDescription.type,
         }})
+
+    def _wire_shell(self, channel):
+        bridge = ShellBridge(channel, asyncio.get_event_loop())
+        self.bridges[channel.label] = bridge
+        bridge.start()
+
+        @channel.on("message")
+        def on_msg(message):
+            # Binary = raw PTY bytes (stdin). Text = JSON control messages
+            # (resize, future: signals, env). WebRTC's native text/binary
+            # discriminator avoids inline escape-sequence games.
+            if isinstance(message, str):
+                try:
+                    ctrl = json.loads(message)
+                except json.JSONDecodeError:
+                    return
+                if ctrl.get("type") == "resize" and bridge.master_fd is not None:
+                    cols = int(ctrl.get("cols") or 80)
+                    rows = int(ctrl.get("rows") or 24)
+                    try:
+                        fcntl.ioctl(
+                            bridge.master_fd, termios.TIOCSWINSZ,
+                            struct.pack("HHHH", rows, cols, 0, 0),
+                        )
+                    except OSError:
+                        pass
+            else:
+                bridge.write(message)
+
+        @channel.on("close")
+        def on_close():
+            LOG.info("datachannel closed: %s", channel.label)
+            bridge.dispose()
+            self.bridges.pop(channel.label, None)
+
+    def _wire_ota(self, channel):
+        # OTA staging path: dashboard streams a bundle JSON's bytes here, we
+        # write to a fixed file in /tmp; the dashboard then triggers the
+        # privileged apply via the existing BLE ops verb (apply-staged-ota
+        # in pi_robot.py). Keeps RTC daemon at user privs while pi_robot.py
+        # (root) does the file-system + systemctl work.
+        state = {"writer": None, "size": 0, "received": 0,
+                 "path": "/tmp/pi-robot-staged-ota.json"}
+
+        def reset(reason=None):
+            if state["writer"]:
+                try: state["writer"].close()
+                except Exception: pass
+            state["writer"] = None
+            state["size"] = 0
+            state["received"] = 0
+            try: os.unlink(state["path"])
+            except OSError: pass
+            if reason:
+                try:
+                    channel.send(json.dumps({"type": "error", "error": reason}))
+                except Exception:
+                    pass
+
+        @channel.on("message")
+        def on_msg(message):
+            if isinstance(message, str):
+                try:
+                    ctrl = json.loads(message)
+                except json.JSONDecodeError:
+                    return
+                t = ctrl.get("type")
+                if t == "begin":
+                    reset()
+                    state["size"] = int(ctrl.get("size") or 0)
+                    try:
+                        state["writer"] = open(state["path"], "wb")
+                    except OSError as e:
+                        reset(f"open failed: {e}")
+                        return
+                    LOG.info("ota begin: size=%d → %s", state["size"], state["path"])
+                elif t == "commit":
+                    if state["writer"]:
+                        state["writer"].close()
+                        state["writer"] = None
+                    LOG.info("ota commit: %d / %d bytes", state["received"], state["size"])
+                    if state["size"] and state["received"] != state["size"]:
+                        reset(f"size mismatch: {state['received']} != {state['size']}")
+                        return
+                    try:
+                        channel.send(json.dumps({
+                            "type": "staged",
+                            "path": state["path"],
+                            "size": state["received"],
+                        }))
+                    except Exception:
+                        pass
+                elif t == "abort":
+                    LOG.info("ota abort")
+                    reset()
+            else:
+                # Binary chunk — append to file. Bytes are the bundle JSON's
+                # raw UTF-8; pi_robot.py will JSON-decode on apply.
+                if not state["writer"]:
+                    return
+                try:
+                    state["writer"].write(message)
+                    state["received"] += len(message)
+                except OSError as e:
+                    reset(f"write failed: {e}")
+
+        @channel.on("close")
+        def on_close():
+            LOG.info("datachannel closed: %s", channel.label)
+            if state["writer"]:
+                try: state["writer"].close()
+                except Exception: pass
+                state["writer"] = None
+            self.bridges.pop(channel.label, None)
 
     async def _on_ice(self, ice):
         if not self.pc:

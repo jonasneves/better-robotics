@@ -1009,8 +1009,41 @@ def _ops_handle_write(data: bytearray) -> None:
         # _publish, and running that alongside the concurrent telemetry task
         # from the callback thread glitched BlueZ enough to drop the link.
         _schedule(_get_config_task())
+    elif op == "apply-staged-ota":
+        # Dashboard streamed a bundle JSON to pi_robot_rtc.py over WebRTC
+        # (~MB/s), which staged it to a file. We read + apply via the
+        # existing _apply_bundle path. Allowlist the path so a rogue ops
+        # write can't read arbitrary files.
+        path = str(args.get("path") or "/tmp/pi-robot-staged-ota.json")
+        if path != "/tmp/pi-robot-staged-ota.json":
+            log.warning("ops: apply-staged-ota path not allowed: %r", path)
+            _set_ota_status("failed", err="staged path not allowed")
+            return
+        _schedule(_apply_staged_ota(path))
     else:
         log.warning("ops: unknown op %r", op)
+
+
+async def _apply_staged_ota(path: str) -> None:
+    global _ota_buffer, _ota_size
+    try:
+        with open(path, "rb") as f:
+            blob = f.read()
+        _ota_size = len(blob)
+        _ota_buffer = bytearray(blob)
+        _set_ota_status("committing", n=_ota_size, total=_ota_size)
+        try:
+            bundle = json.loads(blob.decode("utf-8"))
+        except Exception as e:
+            _set_ota_status("failed", err=f"staged json: {e}"[:120])
+            _ota_buffer = bytearray()
+            return
+        await _apply_bundle(bundle)
+    except Exception as e:
+        _set_ota_status("failed", err=str(e)[:120])
+    finally:
+        try: os.unlink(path)
+        except OSError: pass
 
 
 async def _cam_handle_message(msg: dict) -> None:
