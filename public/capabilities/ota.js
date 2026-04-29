@@ -411,21 +411,39 @@ export async function updateFirmware(id) {
   }
   await acquireWakeLock();
   try {
-    // PNA-direct: dashboard POSTs the bin to the ESP32's /ota endpoint over
-    // the local network (~seconds). On deny/timeout/error, fall back to
-    // BLE-stream (~30s with WithoutResponse chunks).
-    if (entry.fwInfo?.type === "esp32"
+    // Three transports for ESP32 OTA, fastest first:
+    //   1. WebRTC P2P (BLE-signaled or wss): seconds, no Mixed-Content
+    //      / PNA exposure. ESP32 firmware commits inline and restarts;
+    //      we get a "staged" reply, then the BLE link drops as the chip
+    //      reboots into the new firmware.
+    //   2. PNA HTTP /ota: seconds on a network that allows Private
+    //      Network Access. Fails with "PNA failed: network error" on
+    //      browsers / configurations that don't.
+    //   3. BLE-stream: slow (~30s for 1.6 MB) but works anywhere.
+    let webrtcOk = false;
+    try {
+      await streamOtaViaWebRTC(entry, bytes);
+      webrtcOk = true;
+      logFor(entry, "OTA committed via WebRTC — robot restarting");
+      _markExpectingReconnect(entry.id);
+    } catch (err) {
+      logFor(entry, `WebRTC OTA failed: ${err.message} — trying PNA`);
+    }
+    if (!webrtcOk
+        && entry.fwInfo?.type === "esp32"
         && entry.wifiStatus?.st === "joined"
         && entry.wifiStatus?.ip) {
       if (await pnaOtaUpload(entry, bytes)) return;
     }
-    logFor(entry, `OTA streaming over BLE (~30s for ~1.6 MB)…`);
-    try {
-      await streamOtaBytes(entry, bytes);
-      logFor(entry, "OTA commit sent — robot restarting");
-      _markExpectingReconnect(entry.id);
-    } catch (err) {
-      logFor(entry, `OTA failed: ${err.message}`);
+    if (!webrtcOk) {
+      logFor(entry, `OTA streaming over BLE (~30s for ~1.6 MB)…`);
+      try {
+        await streamOtaBytes(entry, bytes);
+        logFor(entry, "OTA commit sent — robot restarting");
+        _markExpectingReconnect(entry.id);
+      } catch (err) {
+        logFor(entry, `OTA failed: ${err.message}`);
+      }
     }
   } finally {
     await releaseWakeLock();
