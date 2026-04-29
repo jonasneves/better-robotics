@@ -18,8 +18,15 @@
 // The vprintf hook never blocks; logging from any task is safe.
 //
 // Init order: call BEFORE any ESP_LOG output you want captured. app_main
-// calls it first thing so boot/early-init lines are caught.
+// calls it first thing so boot/early-init lines are caught. Captures
+// into the ring buffer immediately; the BLE-side drain task starts
+// later via logs_start() — keeps DRAM available for the websocket
+// task that webrtc_peer_init creates after camera/BLE/WiFi.
 void logs_init(void);
+
+// Spin up the drain task that consumes the ring and emits BLE notifies.
+// Safe to call after all other modules have grabbed their DRAM stacks.
+void logs_start(void);
 
 // Called by ble_host's BLE_GAP_EVENT_SUBSCRIBE handler. When a central
 // enables notifications on the LOGS char, replay the full ring contents

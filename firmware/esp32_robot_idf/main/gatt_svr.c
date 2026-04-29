@@ -78,6 +78,15 @@ static void parse_uuid128(const char *s, ble_uuid128_t *out) {
     memcpy(out->value, bytes, 16);
 }
 
+// NimBLE requires an access_cb even for notify-only chars (it dereferences
+// the pointer during ble_gatts_count_cfg). This stub satisfies that for
+// LOGS — flags carry no read/write, so it never gets dispatched in
+// practice.
+static int noop_access(uint16_t conn, uint16_t attr,
+                       struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
 static int led_access(uint16_t conn, uint16_t attr,
                       struct ble_gatt_access_ctxt *ctxt, void *arg) {
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
@@ -393,9 +402,11 @@ static const struct ble_gatt_chr_def s_chars[] = {
     {
         // Logs (Phase 2.G): NOTIFY-only. Dashboard subscribes; chip's
         // logs.c worker drains the ring buffer and emits chunked
-        // notifies. No write — the dashboard never replies on this char.
+        // notifies. NimBLE rejects access_cb=NULL with EINVAL even
+        // for notify-only chars; the stub never fires because there
+        // are no read/write flags on this characteristic.
         .uuid = &s_logs_uuid.u,
-        .access_cb = NULL,
+        .access_cb = noop_access,
         .flags = BLE_GATT_CHR_F_NOTIFY,
         .val_handle = &s_logs_handle,
     },

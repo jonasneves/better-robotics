@@ -90,4 +90,10 @@ void app_main(void) {
     // WebRTC peer last — websocket client connects asynchronously when
     // WiFi gets an IP. Safe to start before the first GOT_IP event.
     webrtc_peer_init(ble_name);
+
+    // Logs drain task last so the websocket task gets first dibs on
+    // contiguous DRAM. Ring already filled with everything since
+    // logs_init at the top — subscribe-replay fires it down to a new
+    // dashboard subscriber.
+    logs_start();
 }

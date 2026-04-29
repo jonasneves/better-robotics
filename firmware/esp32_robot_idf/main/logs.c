@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -32,7 +33,12 @@
 #define LOG_BATCH_MAX    1024
 
 static SemaphoreHandle_t s_mutex;
-static uint8_t s_ring[LOG_RING_BYTES];
+// Ring buffer in PSRAM — 8 KB on top of camera + WiFi DMA + NimBLE
+// pools would exhaust internal DRAM. PSRAM access is slower than DRAM
+// but the worker reads in big batches at 200 ms cadence so the
+// throughput overhead is invisible. Allocated at init since PSRAM
+// isn't ready as a BSS target on classic ESP32.
+static uint8_t *s_ring = NULL;
 static size_t s_head = 0;       // next byte to write
 static size_t s_tail = 0;       // next byte to read
 static size_t s_used = 0;       // bytes available to read
@@ -46,7 +52,7 @@ static volatile uint16_t s_logs_handle = 0;
 static __thread bool s_in_log_hook = false;
 
 static void ring_push(const uint8_t *buf, size_t len) {
-    if (len == 0) return;
+    if (len == 0 || !s_ring) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     // Drop oldest on overflow. The alternative (drop new) hides the most
     // recent — and current — issue, which is exactly what we don't want.
@@ -73,6 +79,7 @@ static void ring_push(const uint8_t *buf, size_t len) {
 }
 
 static size_t ring_pop(uint8_t *out, size_t cap) {
+    if (!s_ring) return 0;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     size_t take = s_used < cap ? s_used : cap;
     size_t first = LOG_RING_BYTES - s_tail;
@@ -154,10 +161,24 @@ static void drain_task(void *arg) {
 
 void logs_init(void) {
     s_mutex = xSemaphoreCreateMutex();
+    // Ring lives in PSRAM. If PSRAM is unavailable we fall back to
+    // DRAM at half size; a missing buffer would lose all logs forever
+    // which defeats the point.
+    s_ring = heap_caps_malloc(LOG_RING_BYTES, MALLOC_CAP_SPIRAM);
+    if (!s_ring) s_ring = malloc(LOG_RING_BYTES / 2);
     s_orig_vprintf = esp_log_set_vprintf(log_vprintf_hook);
-    // 4 KB stack: vsnprintf is the heavyweight; everything else is small
-    // memcpys. Worker prio 1 (idle+1) — never starves real-time tasks.
-    xTaskCreate(drain_task, "logs", 4096, NULL, 1, NULL);
+    // Drain task is deferred to logs_start() — it would otherwise grab
+    // its DRAM stack before the websocket task that webrtc_peer_init
+    // creates later, leading to "Error create websocket task" on
+    // classic ESP32 where DRAM is tight.
+}
+
+void logs_start(void) {
+    // 2 KB DRAM stack — drain_task only memcpys + calls notify
+    // wrappers; nothing here needs vsnprintf or DTLS frames. Tasks
+    // with SPIRAM stacks panicked at boot on classic ESP32, even
+    // for this lightweight loop, so we pay the DRAM tax.
+    xTaskCreate(drain_task, "logs", 2048, NULL, 1, NULL);
 }
 
 void logs_replay_to(uint16_t conn_handle) {
