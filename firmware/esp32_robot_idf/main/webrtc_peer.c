@@ -16,6 +16,8 @@
 #include "peer.h"
 #include "peer_connection.h"
 
+#include "ota.h"
+
 static const char *TAG = "rtc";
 
 #define SIGNAL_HOST "signal.neevs.io"
@@ -70,6 +72,76 @@ static void on_state_change(PeerConnectionState state, void *ud) {
     ESP_LOGI(TAG, "pc state: %s", peer_connection_state_to_string(state));
 }
 
+// ── data channels ────────────────────────────────────────────────────────
+//
+// libpeer's onmessage callback drops the SCTP PPID (text vs binary) before
+// invoking us — peer_connection.h's signature has no type field. We
+// disambiguate by content: control frames are JSON starting with `{`,
+// payload chunks are arbitrary bytes. ESP32 firmware bins start with the
+// 0xE9 magic; JPEG frames start with 0xFFD8; neither collides with `{`
+// (0x7B). Same heuristic as several other libpeer ESP32 integrations.
+
+static void send_dc_text(const char *label, const char *text) {
+    if (!s_pc) return;
+    uint16_t sid;
+    if (peer_connection_lookup_sid(s_pc, (char *)label, &sid) != 0) return;
+    peer_connection_datachannel_send_sid(s_pc, (char *)text, strlen(text), sid);
+}
+
+static void handle_ota_dc(const char *msg, size_t len) {
+    if (len == 0) return;
+    if (msg[0] == '{') {
+        cJSON *root = cJSON_ParseWithLength(msg, len);
+        if (!root) return;
+        cJSON *type = cJSON_GetObjectItem(root, "type");
+        if (cJSON_IsString(type)) {
+            const char *t = type->valuestring;
+            if (strcmp(t, "begin") == 0) {
+                cJSON *size = cJSON_GetObjectItem(root, "size");
+                size_t total = cJSON_IsNumber(size) ? (size_t)size->valuedouble : 0;
+                if (ota_http_begin(total) != ESP_OK) {
+                    send_dc_text("ota", "{\"type\":\"error\",\"error\":\"ota_begin failed\"}");
+                }
+            } else if (strcmp(t, "commit") == 0) {
+                if (ota_http_commit() == ESP_OK) {
+                    // Match the Pi's reply shape so dashboard parsing
+                    // doesn't need a per-platform branch. The follow-up
+                    // BLE apply-staged-ota verb won't reach us before
+                    // schedule_restart fires (500 ms) — chip reboots
+                    // straight into the new firmware. Dashboard sees a
+                    // BLE write fail; the next reconnect shows the new
+                    // version. Acceptable until the dashboard branches
+                    // on fwType to skip the apply step for ESP32.
+                    send_dc_text("ota", "{\"type\":\"staged\"}");
+                } else {
+                    send_dc_text("ota", "{\"type\":\"error\",\"error\":\"ota_commit failed\"}");
+                }
+            } else if (strcmp(t, "abort") == 0) {
+                ota_http_abort();
+            }
+        }
+        cJSON_Delete(root);
+    } else {
+        // Binary chunk — append to OTA partition.
+        if (ota_http_write((const uint8_t *)msg, len) != ESP_OK) {
+            send_dc_text("ota", "{\"type\":\"error\",\"error\":\"ota_write failed\"}");
+        }
+    }
+}
+
+static void on_dc_message(char *msg, size_t len, void *ud, uint16_t sid) {
+    if (!s_pc) return;
+    char *label = peer_connection_lookup_sid_label(s_pc, sid);
+    if (!label) return;
+    if (strcmp(label, "ota") == 0) {
+        handle_ota_dc(msg, len);
+    }
+    // Other labels (logs, ops) drop here — wire in 2.D.2.x as needed.
+}
+
+static void on_dc_open(void *ud)  { ESP_LOGI(TAG, "data channel opened"); }
+static void on_dc_close(void *ud) { ESP_LOGI(TAG, "data channel closed"); }
+
 static void handle_offer(const char *sdp) {
     if (s_pc) {
         peer_connection_close(s_pc);
@@ -91,6 +163,7 @@ static void handle_offer(const char *sdp) {
         return;
     }
     peer_connection_oniceconnectionstatechange(s_pc, on_state_change);
+    peer_connection_ondatachannel(s_pc, on_dc_message, on_dc_open, on_dc_close);
 
     peer_connection_set_remote_description(s_pc, sdp, SDP_TYPE_OFFER);
     const char *answer = peer_connection_create_answer(s_pc);
