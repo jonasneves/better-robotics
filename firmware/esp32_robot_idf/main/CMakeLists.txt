@@ -10,7 +10,12 @@ idf_component_register(
         "app_main.c"
         "wifi_sta.c"
         "ble_host.c"
+        "gatt_svr.c"
         "mdns_advertise.c"
+        "pin_config.c"
+        "led.c"
+        "flash.c"
+        "motors.c"
     INCLUDE_DIRS
         "."
         "../../esp32_robot"
@@ -32,4 +37,7 @@ idf_component_register(
         esp_https_ota
         # HTTP (existing :81 server: MJPEG, /ota, /health)
         esp_http_server
+        # Capabilities
+        driver
+        esp_timer
 )

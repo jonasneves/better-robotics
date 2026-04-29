@@ -4,22 +4,17 @@
 
 #include "esp_log.h"
 #include "host/ble_hs.h"
-#include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
-#include "uuids.h"
+#include "gatt_svr.h"
 
 static const char *TAG = "ble_host";
 
 static uint8_t s_addr_type;
 static char s_name[32];
-
-// SERVICE_UUID from uuids.h is a string; NimBLE wants raw bytes in
-// little-endian order. Parse once at boot.
-static ble_uuid128_t s_service_uuid;
 
 static void start_advertising(void);
 
@@ -46,7 +41,7 @@ static void start_advertising(void) {
     fields.name = (uint8_t *)s_name;
     fields.name_len = strlen(s_name);
     fields.name_is_complete = 1;
-    fields.uuids128 = &s_service_uuid;
+    fields.uuids128 = (ble_uuid128_t *)gatt_svr_service_uuid();
     fields.num_uuids128 = 1;
     fields.uuids128_is_complete = 1;
     int rc = ble_gap_adv_set_fields(&fields);
@@ -75,23 +70,8 @@ static void host_task(void *arg) {
     nimble_port_freertos_deinit();
 }
 
-// Parse "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d91" into NimBLE little-endian bytes.
-static void parse_uuid128(const char *s, ble_uuid128_t *out) {
-    out->u.type = BLE_UUID_TYPE_128;
-    uint8_t bytes[16] = {0};
-    int bi = 15;
-    for (size_t i = 0; s[i] && bi >= 0; i++) {
-        if (s[i] == '-') continue;
-        char buf[3] = { s[i], s[i+1], 0 };
-        bytes[bi--] = (uint8_t)strtoul(buf, NULL, 16);
-        i++;
-    }
-    memcpy(out->value, bytes, 16);
-}
-
 void ble_host_init(const char *name) {
     strlcpy(s_name, name, sizeof(s_name));
-    parse_uuid128(SERVICE_UUID, &s_service_uuid);
 
     ESP_ERROR_CHECK(nimble_port_init());
 
@@ -100,6 +80,7 @@ void ble_host_init(const char *name) {
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
+    gatt_svr_init();
     ble_svc_gap_device_name_set(s_name);
 
     nimble_port_freertos_init(host_task);
