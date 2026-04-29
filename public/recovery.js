@@ -131,10 +131,76 @@ function initOnce() {
   _initialized = true;
   $("recovery-close").addEventListener("click", () => $("recovery-modal").close());
   $("recovery-connect").addEventListener("click", () => _port ? disconnect() : connect());
+  $("recovery-flash").addEventListener("click", flashFlow);
   // No outside-click dismiss — terminal session is real work; accidental
   // clicks outside the modal used to kill the connection and scrollback.
   // Explicit × button is the only way out.
   $("recovery-modal").addEventListener("close", () => { if (_port) disconnect(); });
+}
+
+// Browser-side firmware flash. Disconnects any active serial console
+// session (esptool-js needs exclusive access to the port), runs the
+// flash sequence, then re-opens the console at 115200 to watch boot
+// of the freshly-flashed firmware.
+async function flashFlow() {
+  if (!("serial" in navigator)) {
+    setStatus("error", "unsupported browser");
+    log("Web Serial not supported — use Chrome or Edge on desktop");
+    return;
+  }
+  if (!confirm("Flash the latest firmware to the connected ESP32?\n\n"
+             + "This erases the chip's app + bootloader + partition table "
+             + "and replaces them with the build CI most recently published "
+             + "to public/firmware/bins/.")) return;
+  // Detach the live console session so esptool-js can claim the port.
+  const reconnectAfter = !!_port;
+  if (_port) await disconnect();
+
+  let port;
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+  } catch (err) {
+    if (err.name !== "NotFoundError") log(`Recovery flash port: ${err.message}`);
+    setStatus("");
+    return;
+  }
+  setStatus("connected", "flashing…");
+  $("recovery-flash").disabled = true;
+
+  // Need a terminal to render esptool-js's progress output; reuse the
+  // recovery-term pane. Pulls in xterm if not already loaded.
+  const { Terminal } = await ensureXtermLoaded();
+  const container = $("recovery-term");
+  container.innerHTML = "";
+  const term = new Terminal({
+    fontSize: 13,
+    fontFamily: '"SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace',
+    convertEol: true,
+    theme: { background: "#1e1e1e", foreground: "#e4e4e4", cursor: "#e4e4e4" },
+  });
+  term.open(container);
+
+  try {
+    const { flashFirmware } = await import("./flasher.js");
+    await flashFirmware(port, term, (fileIndex, pct) => {
+      setStatus("connected", `flashing file ${fileIndex} ${pct}%`);
+    });
+    setStatus("connected", "flash done");
+  } catch (err) {
+    log(`Flash failed: ${err.message}`);
+    term.writeln(`\r\n[flash error: ${err.message}]`);
+    setStatus("error", err.message);
+  } finally {
+    try { await port.close(); } catch {}
+    term.dispose();
+    $("recovery-flash").disabled = false;
+  }
+
+  // Re-open the live console so the operator can watch boot. If the
+  // chip auto-resets after flash (esptool-js's hardReset does this),
+  // they'll see the boot sequence land in the freshly-cleared term.
+  if (reconnectAfter) await connect();
 }
 
 export function openRecoveryDialog() {
