@@ -227,10 +227,14 @@ void webrtc_peer_init(const char *robot_name) {
     s_events = xQueueCreate(8, sizeof(event_t));
     if (!s_events) { ESP_LOGE(TAG, "queue create failed"); return; }
 
-    // 16 KB stack — peer_connection_loop dives into mbedTLS / SCTP /
-    // SRTP whose call chains aren't shallow. Empirically 8 KB is enough
-    // for steady state but cuts close during DTLS handshake.
-    xTaskCreate(loop_task_fn, "rtc_loop", 16384, NULL, 5, &s_loop_task);
+    // 8 KB stack — peer_connection_loop dives into mbedTLS / SCTP /
+    // SRTP. 16 KB was paranoia; a 16 KB grab here starves the websocket
+    // task's xTaskCreate on classic ESP32 because DRAM is fragmented by
+    // the time webrtc_peer_init runs (camera + BLE + WiFi already have
+    // their pools). 8 KB has been reported sufficient by other libpeer
+    // ESP32 integrations; bump back up if the DTLS handshake stack-
+    // overflows in practice.
+    xTaskCreate(loop_task_fn, "rtc_loop", 8192, NULL, 5, &s_loop_task);
 
     char url[160];
     snprintf(url, sizeof(url), "wss://%s/%s/ws", SIGNAL_HOST, s_room_id);
@@ -240,6 +244,11 @@ void webrtc_peer_init(const char *robot_name) {
         .reconnect_timeout_ms = 5000,
         .network_timeout_ms = 10000,
         .buffer_size = 4096,
+        // Task creation fails at the default 6 KB stack on classic
+        // ESP32-CAM by the time we get here — DRAM is fragmented after
+        // camera + BLE + WiFi alloc. 4 KB is enough for the wss frame
+        // pump (TLS context lives in mbedTLS heap, not the task stack).
+        .task_stack = 4096,
     };
     s_ws = esp_websocket_client_init(&cfg);
     if (!s_ws) { ESP_LOGE(TAG, "ws init failed"); return; }
