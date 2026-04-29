@@ -62,16 +62,6 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             if (event->connect.status == 0) {
                 s_conn_handle = event->connect.conn_handle;
                 conns_add(event->connect.conn_handle);
-                // Force the central to re-discover services on every
-                // connect. We're not using bonding, so NimBLE doesn't
-                // know the previous GATT hash and can't auto-fire
-                // Service Changed when the table actually changed across
-                // firmware updates. Without this, Chrome's cached
-                // enumeration from a half-failed boot can stick around
-                // and refuse access to chars the chip now has ("Origin
-                // is not allowed to access any service" with a valid
-                // optionalServices list).
-                ble_svc_gatt_changed(0x0001, 0xFFFF);
                 // Keep advertising even with active conns — phone-pair
                 // (Phase 2.F.2) needs the robot reachable to a SECOND
                 // central while desktop is already connected.
