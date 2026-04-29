@@ -1,7 +1,7 @@
 import { SERVICE_UUID, HEARTBEAT_SVC_UUID, HEARTBEAT_CHAR_UUID,
   FW_INFO_CHAR_UUID, ROBOT_STATUS_CHAR_UUID,
   OPS_RESPONSE_CHAR_UUID, TELEMETRY_CHAR_UUID, SIGNAL_CHAR_UUID,
-  PAIR_MAILBOX_CHAR_UUID,
+  PAIR_MAILBOX_CHAR_UUID, LOGS_CHAR_UUID,
   decodeJson } from "./ble.js";
 import { $, escapeHtml } from "./dom.js";
 import { log, logFor } from "./log.js";
@@ -535,6 +535,51 @@ async function connect(id) {
       await entry.pairMailboxChar.startNotifications();
     } catch {
       entry.pairMailboxChar = null;
+    }
+
+    // Logs streaming over BLE (Phase 2.G). Subscribing routes every
+    // ESP_LOG line into the per-robot log panel — same place fw-info /
+    // wifi-status surface their reads. Lets us debug the chip without
+    // a serial cable. Older firmware: char absent, silently skip.
+    try {
+      const logsChar = await service.getCharacteristic(LOGS_CHAR_UUID);
+      let total = 0, received = 0;
+      let chunks = [];
+      let lineCarry = "";
+      logsChar.addEventListener("characteristicvaluechanged", (e) => {
+        const data = new Uint8Array(e.target.value.buffer);
+        if (data.length === 0) return;
+        const op = data[0];
+        if (op === 0x01) {
+          if (data.length < 3) return;
+          total = (data[1] << 8) | data[2];
+          received = 0;
+          chunks = [];
+        } else if (op === 0x02) {
+          chunks.push(data.subarray(1));
+          received += data.length - 1;
+        } else if (op === 0x03) {
+          if (received !== total) { chunks = []; return; }
+          const merged = new Uint8Array(total);
+          let off = 0;
+          for (const c of chunks) { merged.set(c, off); off += c.length; }
+          chunks = [];
+          // Strip ANSI color escapes that ESP_LOG emits — they'd render
+          // as gibberish in the log panel.
+          const text = lineCarry + new TextDecoder().decode(merged).replace(/\x1b\[[0-9;]*m/g, "");
+          const parts = text.split("\n");
+          // Last fragment is incomplete unless the batch ended on \n;
+          // carry it to the next batch so split lines render whole.
+          lineCarry = parts.pop() || "";
+          for (const line of parts) {
+            const trimmed = line.trim();
+            if (trimmed) logFor(entry, "chip: " + trimmed);
+          }
+        }
+      });
+      await logsChar.startNotifications();
+    } catch {
+      // Optional cap — older firmware doesn't expose the logs char.
     }
 
     entry.runtimeCaps = [];

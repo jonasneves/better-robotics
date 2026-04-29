@@ -49,3 +49,11 @@ void gatt_svr_pair_mailbox_send(uint16_t conn_handle, const uint8_t *buf, size_t
 // SUBSCRIBE event hook to discriminate mailbox subscribes from
 // snapshot / signal-char subscribes.
 uint16_t gatt_svr_pair_mailbox_handle(void);
+
+// Logs streaming (Phase 2.G): chunked log lines pushed via NOTIFY. The
+// logs module owns the ring buffer + esp_log vprintf hook and asks
+// gatt_svr to emit notifies on its behalf so this header doesn't need
+// to leak the val_handle. ble_host's SUBSCRIBE hook calls
+// logs_replay_to when a central enables notifications on this char.
+void gatt_svr_logs_send(uint16_t conn, const uint8_t *buf, size_t len);
+uint16_t gatt_svr_logs_handle(void);

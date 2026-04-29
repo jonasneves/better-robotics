@@ -24,6 +24,7 @@ idf_component_register(
         "telemetry.c"
         "webrtc_peer.c"
         "pair_mailbox.c"
+        "logs.c"
     INCLUDE_DIRS
         "."
     PRIV_REQUIRES

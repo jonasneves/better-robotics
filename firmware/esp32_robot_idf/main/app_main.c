@@ -10,6 +10,7 @@
 #include "fw_info.h"
 #include "http_server.h"
 #include "led.h"
+#include "logs.h"
 #include "mdns_advertise.h"
 #include "motors.h"
 #include "ota.h"
@@ -40,6 +41,13 @@ static const char *TAG = "esp32_robot";
 //   9. mDNS
 
 void app_main(void) {
+    // Hook ESP_LOG into the BLE log-streaming ring before anything else
+    // runs, so the dashboard captures NVS / camera / pin-config errors
+    // that happen during the connection-first init order. Pre-NVS errors
+    // are extremely rare (NVS is just flash partition open) but if one
+    // ever fires, we'd want to see it.
+    logs_init();
+
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());

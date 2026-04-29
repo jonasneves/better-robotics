@@ -10,6 +10,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 #include "gatt_svr.h"
+#include "logs.h"
 #include "pair_mailbox.h"
 
 static const char *TAG = "ble_host";
@@ -89,6 +90,13 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             if (event->subscribe.cur_notify
                 && event->subscribe.attr_handle == gatt_svr_pair_mailbox_handle()) {
                 pair_mailbox_replay_to(event->subscribe.conn_handle);
+            }
+            // Logs subscribe → flush whatever's already buffered so the
+            // operator gets context for the boot/early-init lines they
+            // missed (especially the ones that fired before BLE came up).
+            if (event->subscribe.cur_notify
+                && event->subscribe.attr_handle == gatt_svr_logs_handle()) {
+                logs_replay_to(event->subscribe.conn_handle);
             }
             break;
         case BLE_GAP_EVENT_ADV_COMPLETE:
