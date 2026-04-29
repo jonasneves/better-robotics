@@ -149,13 +149,19 @@ async function streamOtaViaWebRTC(entry, bytes) {
       setTimeout(() => reject(new Error("staged ack timeout")), 60000);
     });
 
+    logFor(entry, `ota webrtc: channel state=${channel.readyState}, sending begin`);
     channel.send(JSON.stringify({ type: "begin", size: bytes.length }));
 
-    // Chunk size: keep below SCTP's default max-message limit (64 KB
-    // is universally safe; Chrome+aiortc both negotiate higher but
-    // 64 KB is the conservative floor and still gives ~25 round-trips
-    // for 1.6 MB — plenty fast).
-    const CHUNK = 64 * 1024;
+    // Give the begin message a moment to land before flooding chunks —
+    // helps observability of any "begin lost" failure mode by separating
+    // it in time from the bulk data sends.
+    await new Promise((r) => setTimeout(r, 50));
+    logFor(entry, `ota webrtc: post-begin state=${channel.readyState} buffered=${channel.bufferedAmount}`);
+
+    // Chunk size: keep below SCTP's default max-message limit (16 KB
+    // is the universal floor across Chrome / aiortc; both can negotiate
+    // higher via sctp.maxMessageSize but 16 KB always works).
+    const CHUNK = 16 * 1024;
     entry.otaSent = 0;
     patchOtaSection(entry);
     for (let i = 0; i < bytes.length; i += CHUNK) {
@@ -169,6 +175,7 @@ async function streamOtaViaWebRTC(entry, bytes) {
         await new Promise((r) => setTimeout(r, 10));
       }
     }
+    logFor(entry, `ota webrtc: all chunks sent, sending commit`);
     channel.send(JSON.stringify({ type: "commit" }));
     await stagedAck;
     entry.otaSent = bytes.length;

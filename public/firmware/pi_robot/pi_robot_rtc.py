@@ -274,6 +274,7 @@ class Session:
         # privileged apply via the existing BLE ops verb (apply-staged-ota
         # in pi_robot.py). Keeps RTC daemon at user privs while pi_robot.py
         # (root) does the file-system + systemctl work.
+        LOG.info("ota: wiring channel readyState=%s", channel.readyState)
         state = {"writer": None, "size": 0, "received": 0,
                  "path": "/tmp/pi-robot-staged-ota.json"}
 
@@ -294,10 +295,12 @@ class Session:
 
         @channel.on("message")
         def on_msg(message):
+            LOG.info("ota on_msg: type=%s len=%d", type(message).__name__, len(message) if hasattr(message, "__len__") else -1)
             if isinstance(message, str):
                 try:
                     ctrl = json.loads(message)
                 except json.JSONDecodeError:
+                    LOG.warning("ota: bad json: %r", message[:200])
                     return
                 t = ctrl.get("type")
                 if t == "begin":
