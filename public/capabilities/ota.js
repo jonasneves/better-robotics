@@ -1,6 +1,7 @@
-// Routes updates to the right data plane: ESP32 + WiFi joined → PNA-direct
-// HTTP POST to the robot's /ota endpoint (dashboard pushes over WiFi, seconds);
-// otherwise BLE stream with flow-controlled WithoutResponse chunk writes.
+// Routes updates: ESP32 → WebRTC OTA (seconds, P2P, no rendezvous)
+// with BLE-stream fallback (~30 s for 1.6 MB, works anywhere). Pi
+// follows its own bundle path. The legacy PNA-direct /ota POST was
+// retired in Phase 2.H along with the chip's HTTP server.
 import {
   OTA_DATA_CHAR_UUID, OTA_STATUS_CHAR_UUID,
   decodeJson, encodeJson,
@@ -262,72 +263,6 @@ async function buildBundle(entry, manifestUrl) {
   return { manifest, files: Object.fromEntries(entries) };
 }
 
-// Direct HTTP POST to the ESP32's /ota endpoint over the local network. First
-// call triggers Chrome's Private Network Access prompt when the target is a
-// private IP; on allow the POST proceeds, on deny/timeout/error we return false
-// and the caller falls back to BLE-stream.
-async function pnaOtaUpload(entry, bytes) {
-  const ip = entry.wifiStatus?.ip;
-  if (!ip) return false;
-  // Port 81 — the firmware's HTTP server runs on :81 (same listener that
-  // serves /stream). Default port 80 lands on nothing → ERR_CONNECTION_REFUSED.
-  const url = `http://${ip}:81/ota`;
-
-  // Render the OTA card immediately so the user sees the upload happen.
-  // Without this, PNA looks silent — BLE-stream gets per-chunk firmware
-  // notifies that drive entry.otaStatus.n; PNA doesn't, so the only
-  // feedback would be log lines. XHR over fetch() because XHR's
-  // upload.onprogress reports bytes-sent during the POST body —
-  // fetch() can't, without HTTP/2 streaming bodies that our plain
-  // HTTP/1.1 ESP32 server doesn't accept. Same PNA preflight + CORS
-  // semantics apply to XHR as to fetch.
-  entry.otaSent = 0;
-  entry.otaStatus = { st: "receiving (PNA)", n: 0, total: bytes.length };
-  patchOtaSection(entry);
-
-  logFor(entry, `PNA direct OTA → ${url} (${bytes.length} B)`);
-  try {
-    const status = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", url);
-      xhr.setRequestHeader("Content-Type", "application/octet-stream");
-      // 180 s — classic ESP32-CAM with 1-of-4 WiFi RX buffers under BLE
-      // coexistence sustains ~50-100 KB/s practical RX throughput. 1.6 MB
-      // ÷ 50 KB/s ≈ 32 s on a good day, but household WiFi with neighbour
-      // contention can drop the chip to 10-20 KB/s and a single retry
-      // burns most of the budget. 180 s gives both attempts headroom.
-      xhr.timeout = 180000;
-      xhr.upload.addEventListener("progress", (e) => {
-        if (!e.lengthComputable) return;
-        entry.otaSent = e.loaded;
-        patchOtaSectionThrottled(entry);
-      });
-      xhr.onload = () => resolve(xhr.status);
-      xhr.onerror = () => reject(new Error("network error"));
-      xhr.ontimeout = () => reject(new Error("timeout"));
-      xhr.onabort = () => reject(new Error("aborted"));
-      xhr.send(bytes);
-    });
-    if (status !== 200) {
-      logFor(entry, `PNA returned ${status}`);
-      entry.otaStatus = { st: "idle" };
-      patchOtaSection(entry);
-      return false;
-    }
-    entry.otaSent = bytes.length;
-    entry.otaStatus = { st: "committing", n: bytes.length, total: bytes.length };
-    patchOtaSection(entry);
-    logFor(entry, "PNA OTA committed — robot restarting");
-    _markExpectingReconnect(entry.id);
-    return true;
-  } catch (err) {
-    logFor(entry, `PNA failed: ${err.message}`);
-    entry.otaStatus = { st: "idle" };
-    patchOtaSection(entry);
-    return false;
-  }
-}
-
 export async function updateFirmware(id) {
   const entry = state.devices.get(id);
   if (!entry || !entry.otaDataChar) {
@@ -411,15 +346,16 @@ export async function updateFirmware(id) {
   }
   await acquireWakeLock();
   try {
-    // Three transports for ESP32 OTA, fastest first:
+    // Two transports for ESP32 OTA, fastest first:
     //   1. WebRTC P2P (BLE-signaled or wss): seconds, no Mixed-Content
     //      / PNA exposure. ESP32 firmware commits inline and restarts;
     //      we get a "staged" reply, then the BLE link drops as the chip
     //      reboots into the new firmware.
-    //   2. PNA HTTP /ota: seconds on a network that allows Private
-    //      Network Access. Fails with "PNA failed: network error" on
-    //      browsers / configurations that don't.
-    //   3. BLE-stream: slow (~30s for 1.6 MB) but works anywhere.
+    //   2. BLE-stream: slow (~30s for 1.6 MB) but works anywhere.
+    // PNA HTTP /ota retired with the chip's HTTP server (Phase 2.H);
+    // it was always brittle (Chrome's PNA prompt, mixed content from
+    // HTTPS dashboards) and the WebRTC + BLE-stream pair covers every
+    // case it ever solved.
     let webrtcOk = false;
     try {
       await streamOtaViaWebRTC(entry, bytes);
@@ -427,13 +363,7 @@ export async function updateFirmware(id) {
       logFor(entry, "OTA committed via WebRTC — robot restarting");
       _markExpectingReconnect(entry.id);
     } catch (err) {
-      logFor(entry, `WebRTC OTA failed: ${err.message} — trying PNA`);
-    }
-    if (!webrtcOk
-        && entry.fwInfo?.type === "esp32"
-        && entry.wifiStatus?.st === "joined"
-        && entry.wifiStatus?.ip) {
-      if (await pnaOtaUpload(entry, bytes)) return;
+      logFor(entry, `WebRTC OTA failed: ${err.message} — falling back to BLE`);
     }
     if (!webrtcOk) {
       logFor(entry, `OTA streaming over BLE (~30s for ~1.6 MB)…`);
