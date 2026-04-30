@@ -23,13 +23,9 @@ import { CamTabCoordinator } from "./cam-tab-coord.js";
 
 import { renderEntry } from "./render-bus.js";
 
-function streamUrl(entry, schema) {
-  const ip = entry.wifiStatus?.ip;
-  if (!ip) return null;
-  const port = schema.port || 81;
-  const path = schema.path || "/stream";
-  return `http://${ip}:${port}${path}`;
-}
+// Camera streaming needs the chip on WiFi for WebRTC ICE — BLE can
+// signal the SDP but the actual media path is P2P over the LAN.
+function hasWifi(entry) { return !!entry.wifiStatus?.ip; }
 
 // Render an ArrayBuffer JPEG frame into the <img> via blob URL,
 // revoking the previous URL only after the new one is assigned (else
@@ -142,27 +138,22 @@ export function makeMjpegStreamCap(schema) {
 
     renderSection(entry, { childHtml = "", sourceMember = null, alternativeMemberIds = [] } = {}) {
       if (entry.status !== "connected") return "";
-      const url = streamUrl(entry, schema);
+      const wifi = hasWifi(entry);
       const running = entry[runningField];
       const watching = entry[watchingField];
       let body = "";
-      if (!url) {
-        body = `<div class="meta">Waiting for the robot to join WiFi — stream needs a LAN IP.</div>`;
+      if (!wifi) {
+        body = `<div class="meta">Waiting for the robot to join WiFi — video needs a LAN IP.</div>`;
       } else if (running) {
-        // crossOrigin="anonymous" lets canvas read pixels (perception.js needs
-        // it). For ESP32 we try WebRTC video first (frames as binary on the
-        // `video` data channel, blob-URL'd into this img); HTTP /stream is
-        // the fallback. Render without a static src for ESP32 — the click
-        // handler decides which transport to attach.
-        const useWebRTCFirst = entry.fwType === "esp32";
-        body = useWebRTCFirst
-          ? `<img class="robot-camera" crossorigin="anonymous" data-cam-id="${entry.id}" alt="WebRTC video">`
-          : `<img class="robot-camera" crossorigin="anonymous" data-cam-id="${entry.id}" src="${escapeHtml(url)}" alt="MJPEG stream">`;
+        // crossOrigin lets perception.js's canvas read the pixels.
+        // No src at render time — the click handler attaches frames
+        // via blob URLs as the WebRTC data channel delivers them.
+        body = `<img class="robot-camera" crossorigin="anonymous" data-cam-id="${entry.id}" alt="WebRTC video">`;
       }
       // Stream URL omitted from idle body — it's debug info that leaked
       // into daily UX. The dashboard log echoes it on connect for anyone
       // who actually needs to copy it.
-      const action = !url
+      const action = !wifi
         ? `<button class="secondary sm" disabled>Start</button>`
         : running
           ? `<button class="secondary sm" data-action="${actionStop}">Stop</button>`
@@ -191,7 +182,7 @@ export function makeMjpegStreamCap(schema) {
       // says Start/Stop already; "ready"/"streaming" would just echo it.
       // "Waiting for WiFi" earns its place — the button is disabled and the
       // user needs to know why.
-      const stateText = !url ? "Waiting for WiFi" : "";
+      const stateText = !wifi ? "Waiting for WiFi" : "";
       return capSection({
         name,
         label,
@@ -213,24 +204,27 @@ export function makeMjpegStreamCap(schema) {
         const img = entry.node?.querySelector(`img.robot-camera[data-cam-id="${entry.id}"]`);
         if (!img) return;
 
-        // ESP32 path: try WebRTC video first. firmware/webrtc_peer.c routes
+        // ESP32 path: WebRTC video only. firmware/webrtc_peer.c routes
         // a `video` data channel into an esp_camera_fb_get loop, sending
-        // each JPEG as binary. Browser blob-URLs each frame into the img.
-        // perception's startMjpegForward still works (canvas reads from
-        // img regardless of how it's getting frames).
+        // each JPEG as binary. Browser blob-URLs each frame into the
+        // img. Same-origin tabs share the single peer slot via
+        // CamTabCoordinator (Phase 2.H step 1).
         if (entry.fwType === "esp32") {
           const ctrl = await startEsp32WebRTCVideo(entry, img);
           if (ctrl) {
             entry._webrtcVideo = ctrl;
-            // User may have clicked Stop while we were negotiating —
-            // dispose immediately if running flipped back to false.
             if (!entry[runningField]) { ctrl.dispose(); entry._webrtcVideo = null; return; }
             startMjpegForward(entry, img);
             return;
           }
-          // WebRTC failed — fall back to HTTP /stream.
-          logFor(entry, `video: falling back to HTTP /stream`);
-          img.src = streamUrl(entry, schema);
+          // WebRTC unavailable. No HTTP fallback — that would be mixed-
+          // content from HTTPS dashboards anyway, and wasn't actually
+          // saving anyone (Phase 2.H retired chip HTTP). Reset running
+          // so the Start button comes back instead of hanging.
+          logFor(entry, `video: WebRTC unavailable; cannot stream`);
+          entry[runningField] = false;
+          renderEntry(entry);
+          return;
         }
         startMjpegForward(entry, img);
       });
