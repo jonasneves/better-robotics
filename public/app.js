@@ -787,13 +787,13 @@ function updateQrHint() {
   if (show) $("qr-hint-name").textContent = hinted;
 }
 
-// Robot presence — probe each paired robot's :81/health endpoint. mDNS
-// resolves <name>.local on the same LAN (firmware-side: ESP32 advertises
-// via ESPmDNS, Pi via avahi). Cached live-IP from the BLE wifi-status
-// notify covers the same-NAT-but-mDNS-blocked case (iPhone hotspot,
-// strict guest WiFi). First OK response wins. No internet rendezvous
-// for robot presence — signal.neevs.io still hosts phone-pair, but
-// robots no longer publish there. See CLAUDE.md transport-discipline.
+// Robot presence — probe each paired robot's :81/health endpoint to show
+// "BR-XXXX on wifi" when the dashboard isn't BLE-connected to it. Pi-only
+// after Phase 2.H: ESP32 firmware no longer runs an HTTP server (everything
+// flows over BLE + WebRTC). ESP32 robots still appear in the panel when
+// BLE-connected via the wifi-status notify; they just don't surface
+// passively when only on WiFi. Pi continues to expose pi_robot_health.py
+// on :81 for service-crash detection (pi_robot_service field).
 const HEALTH_PORT = 81;
 const PROBE_TIMEOUT_MS = 4000;
 const PROBE_INTERVAL_MS = 30000;
@@ -812,8 +812,10 @@ async function _probeUrl(url) {
 }
 
 async function _probeRobot(known) {
-  // Race mDNS hostname against the live cached IP from BLE wifi-status.
-  // Promise.allSettled lets both run; we take the first non-null.
+  // Skip ESP32 robots — Phase 2.H removed their HTTP /health endpoint.
+  // Their presence shows up via the BLE wifi-status notify when paired,
+  // not via passive probing.
+  if (known.fwType === "esp32") return null;
   const candidates = [];
   if (known.name) {
     candidates.push(`http://${known.name.toLowerCase()}.local:${HEALTH_PORT}/health`);
