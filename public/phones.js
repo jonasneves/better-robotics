@@ -319,7 +319,7 @@ function _bleRendezvousHint() {
   return null;
 }
 
-export function notifyRobotConnected(entry) {
+export async function notifyRobotConnected(entry) {
   if (!entry || !entry.pairMailboxChar) return;
   if (_robotPairClients.has(entry.id)) return;
   let transport;
@@ -330,15 +330,20 @@ export function notifyRobotConnected(entry) {
   _robotPairClients.set(entry.id, { transport, client });
   // Republish Mac presence on this transport so phones connecting to
   // the same robot via BLE see us in their nearby list — same wire
-  // shape as the wss lobby's "better-robotics-mac" ad. The 60s TTL
-  // matches the wss path; bleMailbox's republish loop handles refresh.
-  if (_myPubkey) {
-    transport.publish("better-robotics-mac:" + _myPubkey, {
+  // shape as the wss lobby's "better-robotics-mac" ad. Auto-reconnect
+  // can fire before initPhones finishes its getMyPubkeyB64 await, so
+  // resolve it here directly to avoid the publish silently no-op'ing.
+  const myPk = _myPubkey || await getMyPubkeyB64();
+  _myPubkey = myPk;
+  try {
+    await transport.publish("better-robotics-mac:" + myPk, {
       app: "better-robotics-mac",
       label: deviceLabel(),
     }, 60000);
+    log(`pair-mailbox armed on ${entry.name || entry.id} (presence ad sent)`, "phone");
+  } catch (err) {
+    log(`pair-mailbox publish failed on ${entry.name || entry.id}: ${err.message}`, "phone");
   }
-  log(`pair-mailbox armed on ${entry.name || entry.id}`, "phone");
 }
 
 export function notifyRobotDisconnected(entry) {
