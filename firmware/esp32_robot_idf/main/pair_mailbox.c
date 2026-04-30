@@ -1,9 +1,7 @@
 #include "pair_mailbox.h"
 
-#include <stdlib.h>
 #include <string.h>
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -19,12 +17,7 @@ static const char *TAG = "mailbox";
 // upper bound — covers the signed-ad envelope (peer-key.js Ed25519
 // pubkey + sig + JSON payload of room id / role / timestamp).
 #define MAILBOX_DEPTH    8
-// Sized for the largest signed envelope we send: pair-request carries
-// target pubkey (88 B base64) + nonce (UUID 36 B) + label + _pubkey
-// (88 B) + _sig (88 B) + JSON overhead ≈ 480 B. 768 leaves headroom
-// for future fields without forcing a firmware bump every time the
-// signed-ad shape grows by a key.
-#define MAILBOX_AD_MAX   768
+#define MAILBOX_AD_MAX   384
 
 // Wire envelope on the mailbox char (matches SIGNAL_CHAR / OPS):
 //   0x01 [u16 BE total]   begin
@@ -52,31 +45,18 @@ typedef struct {
     uint8_t  buf[MAILBOX_AD_MAX];
 } mailbox_rx_t;
 
-// Ring + per-conn rx buffers live in PSRAM. At MAILBOX_AD_MAX=768 the
-// static BSS allocation (8×768 ring + 4×768 rx = 9 KB) was eating into
-// internal DRAM tightly enough to starve lwIP's pbuf pool — UDP sends
-// from libpeer (WebRTC video frames, ICE STUN) returned ENOMEM under
-// load. PSRAM access is slower but the mailbox is touched only during
-// pair signaling, well off the data hot path.
-static mailbox_ad_t *s_ring = NULL;
+static mailbox_ad_t s_ring[MAILBOX_DEPTH];
 static int s_count = 0;       // valid slots, clamped to MAILBOX_DEPTH
 static int s_next  = 0;       // next slot to overwrite (oldest)
 static SemaphoreHandle_t s_mutex;
-static mailbox_rx_t *s_rx = NULL;
+static mailbox_rx_t s_rx[BLE_HOST_MAX_CONNS];
 
 void pair_mailbox_init(void) {
     s_mutex = xSemaphoreCreateMutex();
-    s_ring = heap_caps_calloc(MAILBOX_DEPTH, sizeof(mailbox_ad_t), MALLOC_CAP_SPIRAM);
-    s_rx = heap_caps_calloc(BLE_HOST_MAX_CONNS, sizeof(mailbox_rx_t), MALLOC_CAP_SPIRAM);
-    if (!s_ring || !s_rx) {
-        ESP_LOGE(TAG, "PSRAM alloc failed for mailbox buffers");
-        return;
-    }
     for (int i = 0; i < BLE_HOST_MAX_CONNS; i++) s_rx[i].conn = BLE_HS_CONN_HANDLE_NONE;
 }
 
 static mailbox_rx_t *rx_for(uint16_t conn, bool create) {
-    if (!s_rx) return NULL;
     for (int i = 0; i < BLE_HOST_MAX_CONNS; i++) {
         if (s_rx[i].conn == conn) return &s_rx[i];
     }
@@ -99,7 +79,7 @@ static void rx_release(mailbox_rx_t *rx) {
 }
 
 static void store_ad(const uint8_t *buf, size_t len) {
-    if (len == 0 || len > MAILBOX_AD_MAX || !s_ring) return;
+    if (len == 0 || len > MAILBOX_AD_MAX) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_ring[s_next].len = (uint16_t)len;
     memcpy(s_ring[s_next].bytes, buf, len);
@@ -125,12 +105,6 @@ static void send_chunked(uint16_t conn, const uint8_t *buf, size_t len) {
 }
 
 static void broadcast_ad(uint16_t skip_conn, const uint8_t *buf, size_t len) {
-    // Skip the writer's own conn so they don't see their own ad echoed
-    // back. Two browsers on the same Mac sharing one CoreBluetooth GATT
-    // connection are an edge case (multi-window pair) that doesn't
-    // justify doubling the notify traffic for everyone — empirically,
-    // the extra mbuf pressure from the echo can starve the SIGNAL
-    // char's notify queue and break WebRTC ICE.
     uint16_t conns[BLE_HOST_MAX_CONNS];
     size_t n = ble_host_active_conns(conns, BLE_HOST_MAX_CONNS);
     for (size_t i = 0; i < n; i++) {
@@ -181,7 +155,6 @@ void pair_mailbox_handle_write(uint16_t from_conn, const uint8_t *buf, size_t le
 }
 
 void pair_mailbox_replay_to(uint16_t conn_handle) {
-    if (!s_ring) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     int sent = 0;
     int start = (s_count < MAILBOX_DEPTH) ? 0 : s_next;
