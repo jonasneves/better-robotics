@@ -19,7 +19,6 @@ import {
 } from "../../perception.js";
 import { capSection } from "./cap-section.js";
 import { startMjpegForward, stopMjpegForward } from "./mjpeg-restream.js";
-import { CamTabCoordinator } from "./cam-tab-coord.js";
 
 import { renderEntry } from "./render-bus.js";
 
@@ -27,51 +26,10 @@ import { renderEntry } from "./render-bus.js";
 // signal the SDP but the actual media path is P2P over the LAN.
 function hasWifi(entry) { return !!entry.wifiStatus?.ip; }
 
-// Render an ArrayBuffer JPEG frame into the <img> via blob URL,
-// revoking the previous URL only after the new one is assigned (else
-// the browser may release the bytes mid-decode).
-function makeFrameRenderer(img) {
-  let prevUrl = null;
-  return {
-    render(bytes) {
-      const blob = new Blob([bytes], { type: "image/jpeg" });
-      const url = URL.createObjectURL(blob);
-      img.src = url;
-      if (prevUrl) URL.revokeObjectURL(prevUrl);
-      prevUrl = url;
-    },
-    dispose() { if (prevUrl) URL.revokeObjectURL(prevUrl); },
-  };
-}
-
 // Open a WebRTC `video` data channel, ask the firmware for a stream at
 // 10 fps, render incoming binary frames into the existing <img> via
 // blob URLs. Returns a disposer; null on open failure.
-//
-// Same-origin tab coordination: the chip hosts exactly one WebRTC peer
-// at a time, so two tabs both opening WebRTC fight each other. The
-// CamTabCoordinator elects ONE primary per (origin, robot); secondaries
-// subscribe for frames over BroadcastChannel and skip the WebRTC dance
-// entirely. Cross-profile (incognito) and cross-machine cases aren't
-// covered — those fall through to the chip's first-window-wins.
 async function startEsp32WebRTCVideo(entry, img) {
-  const coord = new CamTabCoordinator(entry.id);
-  const role = await coord.claim();
-  const renderer = makeFrameRenderer(img);
-
-  if (role === 'secondary') {
-    logFor(entry, `video: another tab has the WebRTC session, mirroring frames`);
-    coord.onFrame((bytes) => renderer.render(bytes));
-    return {
-      dispose() {
-        coord.release();
-        renderer.dispose();
-      },
-    };
-  }
-
-  // Primary: open the actual WebRTC peer + broadcast each frame to
-  // any same-origin secondaries that have us pinging.
   const { openChannel, closePeer } = await import("../../webrtc-robot.js");
   let channel;
   try {
@@ -82,14 +40,19 @@ async function startEsp32WebRTCVideo(entry, img) {
     });
   } catch (err) {
     logFor(entry, `video webrtc open failed: ${err.message}`);
-    coord.release();
     return null;
   }
   channel.binaryType = "arraybuffer";
+  let prevUrl = null;
   const onMsg = (e) => {
     if (typeof e.data === "string") return;  // ignore control replies
-    coord.broadcastFrame(e.data);
-    renderer.render(e.data);
+    const blob = new Blob([e.data], { type: "image/jpeg" });
+    const url = URL.createObjectURL(blob);
+    img.src = url;
+    // Revoke the previous URL only after the new one is assigned —
+    // otherwise the browser may release the bytes while still decoding.
+    if (prevUrl) URL.revokeObjectURL(prevUrl);
+    prevUrl = url;
   };
   channel.addEventListener("message", onMsg);
   try { channel.send(JSON.stringify({ type: "start", fps: 10 })); } catch {}
@@ -100,8 +63,7 @@ async function startEsp32WebRTCVideo(entry, img) {
       channel.removeEventListener("message", onMsg);
       try { channel.send(JSON.stringify({ type: "stop" })); } catch {}
       try { channel.close(); } catch {}
-      coord.release();
-      renderer.dispose();
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
       closePeer(entry.id);
     },
   };
