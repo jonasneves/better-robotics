@@ -61,17 +61,19 @@ export class BleMailboxClient {
     if (!dv || dv.byteLength === 0) return;
     const op = dv.getUint8(0);
     if (op === 0x01) {
-      if (dv.byteLength < 3) return;
+      if (dv.byteLength < 3) { console.warn('[ble-mailbox] short begin frame'); return; }
       const total = dv.getUint16(1);
+      console.log('[ble-mailbox] begin total=' + total);
       this._rxExpected = total;
       this._rxGot = 0;
       this._rxBuf = new Uint8Array(total);
       return;
     }
     if (op === 0x02) {
-      if (!this._rxBuf) return;
+      if (!this._rxBuf) { console.warn('[ble-mailbox] chunk without begin'); return; }
       const payloadLen = dv.byteLength - 1;
       if (this._rxGot + payloadLen > this._rxExpected) {
+        console.warn(`[ble-mailbox] chunk overflow ${this._rxGot}+${payloadLen} > ${this._rxExpected}`);
         this._rxBuf = null;
         return;
       }
@@ -83,16 +85,18 @@ export class BleMailboxClient {
     }
     if (op === 0x03) {
       if (!this._rxBuf || this._rxGot !== this._rxExpected || this._rxGot === 0) {
+        console.warn(`[ble-mailbox] commit mismatch buf=${!!this._rxBuf} got=${this._rxGot} expected=${this._rxExpected}`);
         this._rxBuf = null;
         return;
       }
       const text = new TextDecoder().decode(this._rxBuf);
+      console.log('[ble-mailbox] commit ' + this._rxGot + 'B: ' + text.slice(0, 120));
       this._rxBuf = null;
       this._rxExpected = 0;
       this._rxGot = 0;
       let parsed;
-      try { parsed = JSON.parse(text); } catch { return; }
-      if (!parsed || !parsed.id || !parsed.data) return;
+      try { parsed = JSON.parse(text); } catch (err) { console.warn('[ble-mailbox] JSON parse failed:', err.message); return; }
+      if (!parsed || !parsed.id || !parsed.data) { console.warn('[ble-mailbox] missing id/data', parsed); return; }
       const ad = { id: parsed.id, data: parsed.data };
       this._maybeAccept(ad);
     }
@@ -100,14 +104,15 @@ export class BleMailboxClient {
 
   async _maybeAccept(ad) {
     if (this._sign) {
-      const ok = await _verifyAd(ad).catch(() => false);
-      if (!ok) return;
+      const ok = await _verifyAd(ad).catch((err) => { console.warn('[ble-mailbox] verify threw:', err.message); return false; });
+      if (!ok) { console.warn('[ble-mailbox] signature rejected for id=' + ad.id); return; }
     }
     if (this._closed) return;
+    console.log('[ble-mailbox] accepted ad id=' + ad.id + ' app=' + (ad.data?.app || '?') + ' listeners=' + this._listeners.size);
     this._ads.set(ad.id, ad);
     const snapshot = [...this._ads.values()];
     for (const fn of this._listeners) {
-      try { fn(snapshot); } catch {}
+      try { fn(snapshot); } catch (err) { console.warn('[ble-mailbox] listener threw:', err.message); }
     }
   }
 
