@@ -41,12 +41,9 @@ static const char *TAG = "esp32_robot";
 //   9. mDNS
 
 void app_main(void) {
-    // Hook ESP_LOG into the BLE log-streaming ring before anything else
-    // runs, so the dashboard captures NVS / camera / pin-config errors
-    // that happen during the connection-first init order. Pre-NVS errors
-    // are extremely rare (NVS is just flash partition open) but if one
-    // ever fires, we'd want to see it.
-    logs_init();
+    // logs_init() is currently disabled — the vprintf hook panicked
+    // the chip in early boot. Keeping the GATT char registered but
+    // inert until the hook is rewritten with a safer reentry strategy.
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -91,9 +88,5 @@ void app_main(void) {
     // WiFi gets an IP. Safe to start before the first GOT_IP event.
     webrtc_peer_init(ble_name);
 
-    // Logs drain task last so the websocket task gets first dibs on
-    // contiguous DRAM. Ring already filled with everything since
-    // logs_init at the top — subscribe-replay fires it down to a new
-    // dashboard subscriber.
-    logs_start();
+    // logs_start() disabled — see logs_init() note above.
 }
