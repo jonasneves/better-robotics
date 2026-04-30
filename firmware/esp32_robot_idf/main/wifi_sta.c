@@ -26,6 +26,11 @@ static const char *TAG = "wifi_sta";
 
 static bool s_has_ip = false;
 static bool s_attempting_join = false;
+// Set right before we call esp_wifi_disconnect() ourselves (network
+// switch). The next STA_DISCONNECTED event is ours, not a real failure
+// — without this flag the handler reads it as "join failed" and bails,
+// even though the new association completes ~50ms later.
+static bool s_self_disconnect = false;
 static bool s_scan_in_flight = false;
 static char s_pending_ssid[33];
 static char s_pending_pass[65];
@@ -163,6 +168,13 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_has_ip = false;
         wifi_event_sta_disconnected_t *ev = (wifi_event_sta_disconnected_t *)data;
+        if (s_self_disconnect) {
+            // We initiated this disconnect to switch networks. The new
+            // STA_CONNECTED for the target SSID will follow shortly;
+            // don't surface it as "join failed".
+            s_self_disconnect = false;
+            return;
+        }
         if (s_attempting_join) {
             s_attempting_join = false;
             esp_timer_stop(s_join_timeout_timer);
@@ -281,7 +293,8 @@ void wifi_sta_handle_join_write(const uint8_t *json, size_t len) {
     strlcpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
     strlcpy((char *)wc.sta.password, pass, sizeof(wc.sta.password));
     esp_wifi_set_config(WIFI_IF_STA, &wc);
-    esp_wifi_disconnect();      // event handler will reconnect with new creds
+    s_self_disconnect = true;   // suppress the next STA_DISCONNECTED — it's ours
+    esp_wifi_disconnect();
     esp_wifi_connect();
 
     esp_timer_stop(s_join_timeout_timer);
