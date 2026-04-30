@@ -14,6 +14,14 @@ import { renderEntry } from "./render-bus.js";
 // can take 7-12s. 30s gives headroom; longer = real failure.
 const SCAN_TIMEOUT_MS = 30000;
 
+// Auto-retry empty scan results. BLE/WiFi coex on classic ESP32 makes
+// passive scans flaky — the chip can return 0 entries even when networks
+// exist, especially right after a failed join (radio settling). Retry up
+// to MAX_EMPTY_RETRIES times with a small delay so the user doesn't have
+// to manually click Scan repeatedly.
+const MAX_EMPTY_RETRIES = 2;
+const RETRY_DELAY_MS = 1500;
+
 function summarize(status) {
   const { st, ssid, err, ip } = status || {};
   // Drop the "Connected to " prefix — the cap label is "WiFi" already, so
@@ -54,6 +62,7 @@ export function makeWifiScanCap(schema) {
   const scanningField = `${name}Scanning`;
   const scanTimerField = `${name}ScanTimer`;
   const scanStartedField = `${name}ScanStartedAt`;
+  const retriesField = `${name}ScanRetries`;
   const actionScan = `${name}-scan`;
   const actionJoin = `${name}-join`;
   const actionManualJoin = `${name}-join-manual`;
@@ -70,11 +79,12 @@ export function makeWifiScanCap(schema) {
     }
   }
 
-  async function scan(entry) {
+  async function scan(entry, isRetry = false) {
     if (!entry[scanField]) return;
     clearScanTimer(entry);
     entry[scanningField] = true;
     entry[scanStartedField] = Date.now();
+    if (!isRetry) entry[retriesField] = 0;
     renderEntry(entry);
     // Trigger the scan via read; results land via notify (set up in probe()).
     // The read returns whatever's currently cached on the firmware side, which
@@ -156,6 +166,7 @@ export function makeWifiScanCap(schema) {
       [scanningField]: false,
       [scanTimerField]: null,
       [scanStartedField]: 0,
+      [retriesField]: 0,
     }),
 
     async probe(entry, service) {
@@ -173,8 +184,22 @@ export function makeWifiScanCap(schema) {
         });
         await entry[scanField].startNotifications();
         entry[scanField].addEventListener("characteristicvaluechanged", (e) => {
-          entry[networksField] = decodeJson(e.target.value) || [];
+          const result = decodeJson(e.target.value) || [];
+          // BLE/WiFi coex on classic ESP32 returns 0 entries fairly often
+          // even when networks exist. Retry silently a couple of times
+          // before showing "No networks found" so the user doesn't have
+          // to click Scan repeatedly.
+          if (result.length === 0
+              && entry[scanningField]
+              && (entry[retriesField] || 0) < MAX_EMPTY_RETRIES) {
+            entry[retriesField] = (entry[retriesField] || 0) + 1;
+            logFor(entry, `${name} scan empty — retry ${entry[retriesField]}/${MAX_EMPTY_RETRIES}`);
+            setTimeout(() => scan(entry, true), RETRY_DELAY_MS);
+            return;
+          }
+          entry[networksField] = result;
           entry[scanningField] = false;
+          entry[retriesField] = 0;
           clearScanTimer(entry);
           renderEntry(entry);
         });

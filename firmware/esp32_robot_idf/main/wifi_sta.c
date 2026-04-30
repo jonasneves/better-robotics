@@ -191,6 +191,12 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
 }
 
 void wifi_sta_scan_start(void) {
+    // Stop any in-flight scan first. Without this a re-entrant scan_start
+    // returns ESP_ERR_WIFI_STATE and silently fails — dashboard waits the
+    // full 30s timeout for a notify that never comes. Stop is a no-op if
+    // nothing is running.
+    esp_wifi_scan_stop();
+
     wifi_scan_config_t cfg = {
         .ssid = NULL,
         .bssid = NULL,
@@ -203,7 +209,14 @@ void wifi_sta_scan_start(void) {
         .scan_time = { .passive = 500 },
     };
     esp_err_t rc = esp_wifi_scan_start(&cfg, false);
-    if (rc != ESP_OK) ESP_LOGW(TAG, "scan_start rc=0x%x", rc);
+    if (rc != ESP_OK) {
+        ESP_LOGW(TAG, "scan_start rc=0x%x; publishing empty so dashboard breaks out of spinner", rc);
+        // Surface the failure as an empty list. The dashboard's auto-retry
+        // will trigger another scan after a short delay, by which point
+        // the radio has usually settled (common after a failed join).
+        snprintf(s_scan_json, SCAN_BUF_SIZE, "[]");
+        gatt_svr_notify_wifi_scan();
+    }
 }
 
 // Tiny string-key extractor — matches the .ino's pattern. Returns true
