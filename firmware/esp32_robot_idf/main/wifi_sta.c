@@ -235,6 +235,20 @@ void wifi_sta_scan_start(void) {
         ESP_LOGI(TAG, "scan already in flight, ignoring duplicate");
         return;
     }
+    // Block scans during the critical join window (associated but not
+    // yet GOT_IP). Each passive scan tunes the radio off-channel for
+    // ~5s; the AP's beacons during that window are missed, the chip's
+    // TBTT estimate drifts, and the AP eventually disassociates the
+    // chip mid-DHCP. Saw this kill jonas/WhiteSky-Beckon joins at
+    // RSSI -34 — clearly not signal-related, beacons just weren't
+    // being heard. Dashboard's auto-poll keeps requesting scans while
+    // the WiFi panel is open; we silently no-op those during a join.
+    if (s_attempting_join || (s_associated && !s_has_ip)) {
+        ESP_LOGI(TAG, "scan blocked: join in progress");
+        snprintf(s_scan_json, SCAN_BUF_SIZE, "[]");
+        gatt_svr_notify_wifi_scan();
+        return;
+    }
 
     wifi_scan_config_t cfg = {
         .ssid = NULL,
