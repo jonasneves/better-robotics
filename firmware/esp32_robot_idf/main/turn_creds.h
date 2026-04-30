@@ -21,3 +21,8 @@ const char *turn_creds_credential(void);
 // signaling window — apartment-WiFi DNS can take 20+s and blow the 30s
 // timeout. Returns NULL until resolution succeeds.
 const char *turn_creds_url(void);
+
+// Last-error string from the most recent fetch attempt. Empty when no
+// attempt has been made yet or the most recent one succeeded. Surfaced
+// via telemetry so failures are debuggable without serial monitoring.
+const char *turn_creds_last_error(void);

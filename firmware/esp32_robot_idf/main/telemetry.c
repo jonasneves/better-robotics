@@ -63,6 +63,7 @@ static void on_tick(void *arg) {
     // failed. "none" = nothing fetched yet.
     const char *turn_url  = turn_creds_url();
     const char *turn_user = turn_creds_username();
+    const char *turn_err  = turn_creds_last_error();
     if (turn_url && turn_user) {
         o += snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o,
                       ",\"turn\":\"ready\",\"turn_url\":\"%s\"", turn_url);
@@ -70,6 +71,9 @@ static void on_tick(void *arg) {
         o += snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o, ",\"turn\":\"creds\"");
     } else {
         o += snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o, ",\"turn\":\"none\"");
+    }
+    if (turn_err && turn_err[0]) {
+        o += snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o, ",\"turn_err\":\"%s\"", turn_err);
     }
     snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o, "}");
     gatt_svr_notify_telemetry();

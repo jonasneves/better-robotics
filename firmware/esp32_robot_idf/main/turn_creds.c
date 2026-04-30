@@ -1,5 +1,6 @@
 #include "turn_creds.h"
 
+#include <stdarg.h>
 #include <string.h>
 #include <netdb.h>
 #include <arpa/inet.h>
@@ -25,6 +26,7 @@ static const char *TAG = "turn_creds";
 static char s_username[USER_BUF_SIZE];
 static char s_credential[CRED_BUF_SIZE];
 static char s_turn_url[64];   // "turn:<IPv4>:3478?transport=udp"
+static char s_last_error[96];
 static int64_t s_expires_at_us = 0;
 
 static char s_response[HTTP_BUF_SIZE];
@@ -33,6 +35,14 @@ static size_t s_response_len = 0;
 const char *turn_creds_username(void)   { return s_username[0]   ? s_username   : NULL; }
 const char *turn_creds_credential(void) { return s_credential[0] ? s_credential : NULL; }
 const char *turn_creds_url(void)        { return s_turn_url[0]   ? s_turn_url   : NULL; }
+const char *turn_creds_last_error(void) { return s_last_error;                          }
+
+static void set_err(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_last_error, sizeof(s_last_error), fmt, ap);
+    va_end(ap);
+}
 
 static bool resolve_turn_host(void) {
     struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_DGRAM };
@@ -42,6 +52,7 @@ static bool resolve_turn_host(void) {
     int64_t dt_ms = (esp_timer_get_time() - t0) / 1000;
     if (rc != 0 || !res) {
         ESP_LOGE(TAG, "resolve turn.cloudflare.com failed rc=%d (%lldms)", rc, dt_ms);
+        set_err("resolve_failed rc=%d", rc);
         if (res) freeaddrinfo(res);
         return false;
     }
@@ -77,7 +88,7 @@ static bool fetch_once(void) {
         .timeout_ms = 10000,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) { ESP_LOGE(TAG, "client init failed"); return false; }
+    if (!client) { ESP_LOGE(TAG, "client init failed"); set_err("client_init_failed"); return false; }
 
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, "{}", 2);
@@ -86,11 +97,19 @@ static bool fetch_once(void) {
     int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
 
-    if (err != ESP_OK) { ESP_LOGE(TAG, "perform: %s", esp_err_to_name(err)); return false; }
-    if (status != 200) { ESP_LOGE(TAG, "status %d body=%s", status, s_response); return false; }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "perform: %s", esp_err_to_name(err));
+        set_err("perform: %s", esp_err_to_name(err));
+        return false;
+    }
+    if (status != 200) {
+        ESP_LOGE(TAG, "status %d body=%s", status, s_response);
+        set_err("http %d", status);
+        return false;
+    }
 
     cJSON *root = cJSON_Parse(s_response);
-    if (!root) { ESP_LOGE(TAG, "json parse failed"); return false; }
+    if (!root) { ESP_LOGE(TAG, "json parse failed"); set_err("json_parse_failed"); return false; }
 
     bool ok = false;
     cJSON *servers = cJSON_GetObjectItem(root, "iceServers");
@@ -111,6 +130,7 @@ static bool fetch_once(void) {
 
     if (ok) {
         s_expires_at_us = esp_timer_get_time() + (int64_t)REFRESH_HOURS * 3600 * 1000 * 1000;
+        s_last_error[0] = 0;
         ESP_LOGI(TAG, "fetched TURN creds (user=%.8s..., refresh in %dh)",
                  s_username, REFRESH_HOURS);
         // Pre-resolve turn.cloudflare.com so libpeer's create_answer
@@ -118,6 +138,8 @@ static bool fetch_once(void) {
         // Best-effort: failure leaves s_turn_url empty and webrtc_peer
         // falls back to STUN-only.
         resolve_turn_host();
+    } else {
+        set_err("creds_missing_in_response");
     }
     return ok;
 }
@@ -151,8 +173,9 @@ static void fetch_task(void *arg) {
 }
 
 void turn_creds_init(void) {
-    // 12288 because esp_http_client + mbedTLS handshake + cJSON parsing
-    // peaks well above the 6144 we initially gave it (chip panicked on
-    // first fetch). esp-idf examples for HTTPS clients use 8-16K stacks.
-    xTaskCreate(fetch_task, "turn_creds", 12288, NULL, 5, NULL);
+    // 8192 is the sweet spot: enough for esp_http_client + mbedTLS
+    // handshake + cJSON parse (6144 panicked), small enough not to
+    // squeeze internal DRAM (12288 broke websocket_client + BLE on
+    // the ESP32-CAM's already-tight DRAM budget).
+    xTaskCreate(fetch_task, "turn_creds", 8192, NULL, 5, NULL);
 }

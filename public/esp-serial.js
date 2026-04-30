@@ -19,16 +19,56 @@ function setStatus(state, text = "") {
   if (el) el.textContent = text;
 }
 
+// Last-used port hint persisted as VID:PID. SerialPort objects themselves
+// can't be stored, but Chrome's getPorts() returns the granted set on the
+// next visit, so we just need to identify which one to prefer when more
+// than one is granted (e.g. ESP32 + Pi both connected at different times).
+const LAST_PORT_KEY = "esp-serial-last-port";
+function rememberPort(port) {
+  try {
+    const i = port.getInfo();
+    if (i.usbVendorId && i.usbProductId) {
+      localStorage.setItem(LAST_PORT_KEY, `${i.usbVendorId}:${i.usbProductId}`);
+    }
+  } catch {}
+}
+function pickKnown(ports) {
+  if (ports.length <= 1) return ports[0] || null;
+  let last = "";
+  try { last = localStorage.getItem(LAST_PORT_KEY) || ""; } catch {}
+  if (last) {
+    for (const p of ports) {
+      try {
+        const i = p.getInfo();
+        if (`${i.usbVendorId}:${i.usbProductId}` === last) return p;
+      } catch {}
+    }
+  }
+  return ports[0];
+}
+// Two-attempt open: macOS occasionally fails the first open() right after
+// a previous disconnect because the kernel hasn't fully released the
+// /dev/cu.usbserial node. A 200ms retry covers that without a user-visible
+// glitch (the previous symptom was "reconnect 2-3 times until it works").
+async function openWithRetry(port) {
+  try { await port.open({ baudRate: 115200 }); }
+  catch (err) {
+    await new Promise((r) => setTimeout(r, 200));
+    await port.open({ baudRate: 115200 });
+  }
+}
+
 async function connect() {
   if (_port) return;
   // Skip the picker when we already have permission for a port. Chrome
-  // persists the grant across dialog opens AND page reloads (per origin),
-  // so a user who picked "BetterPi" or "ESP32" once doesn't get prompted
-  // again. Only prompt when there are zero or multiple permitted ports.
+  // persists the grant across dialog opens AND page reloads (per origin).
+  // When more than one port is granted, prefer the one matching the
+  // last-used VID:PID instead of prompting — typical case is the same
+  // chip on the same machine, and the picker noise was the #1 friction.
   let known = [];
   try { known = await navigator.serial.getPorts(); } catch {}
-  if (known.length === 1) {
-    _port = known[0];
+  if (known.length >= 1) {
+    _port = pickKnown(known);
     setStatus("connecting", "opening…");
   } else {
     setStatus("connecting", "requesting port…");
@@ -40,17 +80,14 @@ async function connect() {
       return;
     }
   }
-  // Open the port BEFORE handing it to <ewt-console>. ewt-console assumes the
-  // port is already open and starts reading immediately on insert; without
-  // open() it just shows the empty pane (the dialog reads "connected" but
-  // nothing streams). 115200 8N1 matches the Arduino default Serial.begin.
   try {
-    await _port.open({ baudRate: 115200 });
+    await openWithRetry(_port);
   } catch (err) {
     setStatus("error", `open failed: ${err.message}`);
     _port = null;
     return;
   }
+  rememberPort(_port);
   // Create <ewt-console> fresh with port set BEFORE the element is inserted
   // into the DOM — its connectedCallback runs the moment we appendChild and
   // assumes a port exists. Static-HTML insertion crashes ewt internally.

@@ -37,15 +37,55 @@ async function ensureXtermLoaded() {
   return _xtermModule;
 }
 
+// Last-used port hint persisted as VID:PID — same purpose and shape as
+// esp-serial.js (kept inlined rather than shared to avoid a new module
+// for ~15 lines that don't otherwise leak between the two consoles).
+const LAST_PORT_KEY = "recovery-last-port";
+function rememberPort(port) {
+  try {
+    const i = port.getInfo();
+    if (i.usbVendorId && i.usbProductId) {
+      localStorage.setItem(LAST_PORT_KEY, `${i.usbVendorId}:${i.usbProductId}`);
+    }
+  } catch {}
+}
+function pickKnown(ports) {
+  if (ports.length <= 1) return ports[0] || null;
+  let last = "";
+  try { last = localStorage.getItem(LAST_PORT_KEY) || ""; } catch {}
+  if (last) {
+    for (const p of ports) {
+      try {
+        const i = p.getInfo();
+        if (`${i.usbVendorId}:${i.usbProductId}` === last) return p;
+      } catch {}
+    }
+  }
+  return ports[0];
+}
+
 async function connect() {
   if (!("serial" in navigator)) {
     log("Web Serial not supported — use Chrome or Edge on desktop");
     setStatus("error", "unsupported browser");
     return;
   }
+  // Skip the picker when permission is already granted for at least one
+  // port (Chrome persists across page reloads). Pick the last-used VID:PID
+  // when multiple are granted, falling back to the first.
+  let known = [];
+  try { known = await navigator.serial.getPorts(); } catch {}
   try {
-    _port = await navigator.serial.requestPort();
-    await _port.open({ baudRate: 115200 });
+    _port = known.length >= 1 ? pickKnown(known) : await navigator.serial.requestPort();
+    // Two-attempt open: macOS sometimes fails the first open() right
+    // after a prior disconnect (kernel /dev/cu.* not fully released).
+    // 200ms retry covers it without the user-visible "reconnect 2-3 times" glitch.
+    try { await _port.open({ baudRate: 115200 }); }
+    catch {
+      await new Promise((r) => setTimeout(r, 200));
+      await _port.open({ baudRate: 115200 });
+    }
+    rememberPort(_port);
   } catch (err) {
     if (err.name !== "NotFoundError") log(`Recovery connect error: ${err.message}`);
     setStatus("");
