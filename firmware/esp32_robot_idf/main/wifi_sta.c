@@ -16,7 +16,11 @@
 static const char *TAG = "wifi_sta";
 
 #define SCAN_MAX            10
-#define JOIN_TIMEOUT_MS     20000
+// 45s, not 20s. Apartment-WiFi-as-a-service (WhiteSky-Beckon and similar)
+// regularly takes 25-35s to associate + DHCP — 20s would mark a successful
+// join as failed before the AP finishes handshaking. Cost is at most 25s
+// of extra "Joining…" UX on a wrong-password attempt.
+#define JOIN_TIMEOUT_MS     45000
 #define STATUS_BUF_SIZE     192
 #define SCAN_BUF_SIZE       1280
 
