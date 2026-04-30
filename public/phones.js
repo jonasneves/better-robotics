@@ -276,18 +276,18 @@ function renderPhonePresence(ads) {
 let _wssPairClient = null;
 const _robotPairClients = new Map();   // entry.id → { transport, client }
 
-async function _onPairRequest(req) {
+async function _onPairRequest(req, sourceLobby) {
   const senderPubkey = req.senderPubkey;
   const senderLabel  = req.payload.label || 'Phone';
   if (!senderPubkey) return;
   if (_trust.isAutoAccept(senderPubkey)) {
     log(`auto-accepting paired phone "${senderLabel}"`, 'phone');
-    await _respondAndHostPair(true, senderPubkey, senderLabel, req, false);
+    await _respondAndHostPair(true, senderPubkey, senderLabel, req, false, sourceLobby);
     return;
   }
   const decision = await _showRequestPrompt(senderLabel, senderPubkey);
   if (!decision) { await req.deny(); return; }
-  await _respondAndHostPair(decision.accepted, senderPubkey, senderLabel, req, decision.trust);
+  await _respondAndHostPair(decision.accepted, senderPubkey, senderLabel, req, decision.trust, sourceLobby);
 }
 
 const _pairOnRequestOpts = {
@@ -300,7 +300,9 @@ const _pairOnRequestOpts = {
 function _initPairListener() {
   if (_wssPairClient) return;
   _wssPairClient = pairRequestClient({ app: 'better-robotics-pair', sign: true, lobby: getLobby() });
-  _wssPairClient.onRequest(_onPairRequest, _pairOnRequestOpts);
+  // wss source: no extra lobby (the WebRTC SDP exchange falls back to
+  // signal.neevs.io's room — that's the always-available default path).
+  _wssPairClient.onRequest((req) => _onPairRequest(req, null), _pairOnRequestOpts);
 }
 
 // Called from app.js when a robot connects with a working pair-mailbox
@@ -326,7 +328,10 @@ export async function notifyRobotConnected(entry) {
   try { transport = bleMailbox({ char: entry.pairMailboxChar, sign: true }); }
   catch (err) { log("ble-mailbox init failed: " + err.message, "phone"); return; }
   const client = pairRequestClient({ app: 'better-robotics-pair', sign: true, lobby: transport });
-  client.onRequest(_onPairRequest, _pairOnRequestOpts);
+  // BLE-mailbox source: pass the same transport as the extra lobby so
+  // hostPairingRoom can route the WebRTC SDP exchange through it too,
+  // not just the trust handshake (Phase 2.G plan B).
+  client.onRequest((req) => _onPairRequest(req, transport), _pairOnRequestOpts);
   _robotPairClients.set(entry.id, { transport, client });
   // Republish Mac presence on this transport so phones connecting to
   // the same robot via BLE see us in their nearby list — same wire
@@ -395,11 +400,16 @@ function _showRequestPrompt(label, pubkey) {
 }
 
 
-async function _respondAndHostPair(accepted, senderPubkey, senderLabel, req, autoTrust) {
+async function _respondAndHostPair(accepted, senderPubkey, senderLabel, req, autoTrust, sourceLobby = null) {
   if (!accepted) { await req.deny(); return; }
   let session;
   try {
-    session = await hostPairingRoom({ onStatus: () => {} });
+    // sourceLobby !== null means the request came in via BLE-mailbox —
+    // also route the WebRTC SDP exchange through the same lobby so
+    // signal.neevs.io stays out of the picture for that pair. wss
+    // remains the always-on default (covers iPhone + cross-network).
+    const extraLobbies = sourceLobby ? [sourceLobby] : [];
+    session = await hostPairingRoom({ onStatus: () => {}, extraLobbies });
   } catch (err) {
     log("hostPairingRoom failed: " + (err.message || err), "phone");
     await req.deny();

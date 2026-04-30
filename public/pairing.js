@@ -403,6 +403,96 @@ function openSignalWs(roomId) {
   return new WebSocket(`${SIGNAL_WS_URL}/${roomId}/ws`);
 }
 
+// Adapter that exposes a WebSocket-shaped surface backed by a lobby
+// (e.g. ble-mailbox.js or signal-sdk's discover). Lets pairing.js's
+// existing WebSocket-coupled code path carry WebRTC SDP/ICE through
+// the BLE-mailbox lobby — same flow, different transport.
+//
+// Maps:
+//   send(text)   → lobby.publish(unique-id, {app:'pairing-signal',
+//                  room, peer, data}) — only "signal" type messages;
+//                  pings/state are dropped (lobby pubsub doesn't need
+//                  keepalives, and the chip's ring serves as a small
+//                  state replay automatically).
+//   onmessage    ← lobby.onChange filtered by app+room, excluding
+//                  ourselves; reshaped into {type:'signal', peer, data}
+//                  to match server.js's wire format.
+//
+// readyState is set OPEN on the next microtask so listeners registered
+// synchronously after construction (wireIceTrickle, addEventListener
+// "open") still fire before any messages dispatch.
+class LobbySignalChannel {
+  constructor({ lobby, roomId, myPeerId }) {
+    this._lobby = lobby;
+    this._roomId = roomId;
+    this._myPeerId = myPeerId;
+    this._messageHandlers = new Set();
+    this._openHandlers = new Set();
+    this._closeHandlers = new Set();
+    this._closed = false;
+    this.readyState = 0; // CONNECTING
+    this._unsub = lobby.onChange((ads) => {
+      if (this._closed) return;
+      for (const ad of ads) {
+        const d = ad.data;
+        if (!d || d.app !== 'pairing-signal') continue;
+        if (d.room !== roomId) continue;
+        if (d.peer === myPeerId) continue;
+        const wsMsg = JSON.stringify({ type: 'signal', peer: d.peer, data: d.data });
+        // Microtask defer so consumers that addEventListener after
+        // construction still receive everything in order.
+        Promise.resolve().then(() => {
+          if (this._closed) return;
+          for (const fn of this._messageHandlers) {
+            try { fn({ data: wsMsg }); } catch {}
+          }
+        });
+      }
+    });
+    Promise.resolve().then(() => {
+      if (this._closed) return;
+      this.readyState = 1; // OPEN
+      for (const fn of this._openHandlers) { try { fn({}); } catch {} }
+    });
+  }
+  send(text) {
+    if (this._closed || this.readyState !== 1) return;
+    let msg; try { msg = JSON.parse(text); } catch { return; }
+    if (msg.type !== 'signal') return;  // pings/state — drop
+    const id = `pairing-signal:${this._roomId}:${this._myPeerId}:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    this._lobby.publish(id, {
+      app: 'pairing-signal',
+      room: this._roomId,
+      peer: this._myPeerId,
+      data: msg.data,
+    }, 30000);
+  }
+  close() {
+    if (this._closed) return;
+    this._closed = true;
+    this.readyState = 3; // CLOSED
+    if (this._unsub) try { this._unsub(); } catch {}
+    Promise.resolve().then(() => {
+      for (const fn of this._closeHandlers) { try { fn({}); } catch {} }
+    });
+  }
+  addEventListener(event, fn) {
+    if (event === 'message') this._messageHandlers.add(fn);
+    else if (event === 'close') this._closeHandlers.add(fn);
+    else if (event === 'open') {
+      this._openHandlers.add(fn);
+      if (this.readyState === 1) Promise.resolve().then(() => { if (!this._closed) try { fn({}); } catch {} });
+    }
+    // 'error' isn't synthesized — lobby drops on close, not on transient failures
+  }
+  removeEventListener(event, fn) {
+    if (event === 'message') this._messageHandlers.delete(fn);
+    else if (event === 'close') this._closeHandlers.delete(fn);
+    else if (event === 'open') this._openHandlers.delete(fn);
+  }
+}
+export { LobbySignalChannel };
+
 function wireIceTrickle(pc, ws, myPeerId) {
   pc.addEventListener("icecandidate", (e) => {
     if (e.candidate && ws.readyState === WebSocket.OPEN) {
@@ -416,22 +506,43 @@ function wireIceTrickle(pc, ws, myPeerId) {
 // onStatus fires at pre-Peer stages ("phone connected, negotiating…",
 // "establishing channel…") so the pair dialog can show distinct states
 // instead of a frozen "waiting for phone" when something's silently wedged.
-export async function hostPairingRoom({ onStatus = () => {} } = {}) {
+export async function hostPairingRoom({ onStatus = () => {}, extraLobbies = [] } = {}) {
   const roomId = crypto.randomUUID();
   const myPeerId = makePeerId("desktop");
   const otherRolePrefix = "phone";
   dbg("desktop: opening room", roomId, "peerId=", myPeerId);
   const iceServers = await fetchIceServers();
   const pc = new RTCPeerConnection({ iceServers });
+  // wss is the always-on default channel — covers iPhone (no Web BT)
+  // and any cross-network peer. Each extra lobby (Phase 2.F.2 BLE-mailbox
+  // is the first) adds a parallel signaling path; whichever transport
+  // delivers the offer becomes the active channel for the rest of the
+  // negotiation. Same room, same peerIds, same wire format.
   const ws = openSignalWs(roomId);
-  wireIceTrickle(pc, ws, myPeerId);
+  const channels = [ws];
+  for (const lobby of extraLobbies) {
+    channels.push(new LobbySignalChannel({ lobby, roomId, myPeerId }));
+  }
+  // Until the offer arrives we don't know which transport the phone is
+  // on. Trickle ICE goes through every channel; the phone receives one
+  // copy and ignores the rest (peer-id filter handles dedupe at the
+  // application layer; addIceCandidate is idempotent on duplicates).
+  pc.addEventListener("icecandidate", (e) => {
+    if (!e.candidate) return;
+    const text = JSON.stringify({ type: "signal", peer: myPeerId, data: { ice: e.candidate } });
+    for (const ch of channels) {
+      if (ch.readyState === 1 /* OPEN */) { try { ch.send(text); } catch {} }
+    }
+  });
   let resolvePeer, rejectPeer;
   const peerPromise = new Promise((res, rej) => { resolvePeer = res; rejectPeer = rej; });
   let resolved = false;
   const pendingIce = [];
+  // Once the phone's offer arrives, this is the channel we commit to —
+  // answer + post-handshake renegotiation/ICE-restart all flow through
+  // it, and we close the others so they don't burn battery.
+  let activeChannel = null;
 
-  // ICE timer — armed only when the phone's offer arrives (in applySignal).
-  // Until then the room is just a WebSocket waiting; no time pressure.
   let timeoutId = null;
   const armIceTimeout = () => {
     if (timeoutId) return;
@@ -439,7 +550,7 @@ export async function hostPairingRoom({ onStatus = () => {} } = {}) {
       if (resolved) return;
       resolved = true;
       dbg("desktop: ICE timeout");
-      try { ws.close(); } catch {}
+      for (const ch of channels) { try { ch.close(); } catch {} }
       try { pc.close(); } catch {}
       rejectPeer(new Error("Phone connected but couldn't establish a peer-to-peer link within 30s. Network may be blocking WebRTC."));
     }, ICE_TIMEOUT_MS);
@@ -458,22 +569,29 @@ export async function hostPairingRoom({ onStatus = () => {} } = {}) {
       resolved = true;
       clearTimeout(timeoutId);
       dbg("desktop: channel open, resolving peer");
-      resolvePeer(new Peer({ pc, channel: e.channel, ws, myPeerId, otherRolePrefix, roomId }));
+      resolvePeer(new Peer({ pc, channel: e.channel, ws: activeChannel || ws, myPeerId, otherRolePrefix, roomId }));
     });
   });
 
-  const applySignal = async (data) => {
+  const applySignal = async (data, sourceChannel) => {
     if (!data) return;
     if (data.offer) {
-      dbg("desktop: offer received");
+      dbg("desktop: offer received via", sourceChannel === ws ? "wss" : "lobby");
       try { onStatus("Phone connected, negotiating…"); } catch {}
+      // Commit to whichever transport delivered the offer. Close the
+      // others so they stop accepting ads from a different (stray) phone
+      // that might also be on the lobby.
+      activeChannel = sourceChannel;
+      for (const ch of channels) {
+        if (ch !== activeChannel) { try { ch.close(); } catch {} }
+      }
       armIceTimeout();
       await pc.setRemoteDescription(data.offer);
       for (const c of pendingIce) { try { await pc.addIceCandidate(c); } catch {} }
       pendingIce.length = 0;
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      ws.send(JSON.stringify({ type: "signal", peer: myPeerId, data: { answer } }));
+      activeChannel.send(JSON.stringify({ type: "signal", peer: myPeerId, data: { answer } }));
       dbg("desktop: answer sent");
     }
     if (data.ice) {
@@ -482,27 +600,29 @@ export async function hostPairingRoom({ onStatus = () => {} } = {}) {
     }
   };
 
-  ws.addEventListener("message", async (e) => {
-    let msg; try { msg = JSON.parse(e.data); } catch { return; }
-    if (msg.type === "signal") {
-      if (msg.peer === myPeerId) return;
-      // Accept signals from phone-prefixed peers OR, defensively, anything
-      // not prefixed with our own role — tolerates legacy clients on older
-      // code until both sides have updated.
-      if (msg.peer && msg.peer.startsWith("desktop-")) return;
-      await applySignal(msg.data);
-    } else if (msg.type === "state") {
-      // Pre-Peer state: only apply if phone already dropped a signal before
-      // we arrived. Ignore our own role's stale entries.
-      for (const d of extractFromState(msg.peers, myPeerId, otherRolePrefix)) {
-        dbg("desktop: replaying state entry");
-        await applySignal(d);
+  for (const ch of channels) {
+    ch.addEventListener("message", async (e) => {
+      let msg; try { msg = JSON.parse(e.data); } catch { return; }
+      if (msg.type === "signal") {
+        if (msg.peer === myPeerId) return;
+        if (msg.peer && msg.peer.startsWith("desktop-")) return;
+        await applySignal(msg.data, ch);
+      } else if (msg.type === "state") {
+        for (const d of extractFromState(msg.peers, myPeerId, otherRolePrefix)) {
+          dbg("desktop: replaying state entry");
+          await applySignal(d, ch);
+        }
       }
-    }
-  });
+    });
+  }
 
+  // wss-specific failure surfacing — extra lobbies don't fail loudly
+  // (they degrade silently to "no offer received"), but the wss path is
+  // worth distinguishing so the user knows whether to fix internet vs
+  // BLE proximity.
   ws.addEventListener("error", () => {
-    if (!resolved) {
+    if (!resolved && channels.length === 1) {
+      // wss-only host (no extra lobbies): a wss error means total signaling failure.
       resolved = true;
       clearTimeout(timeoutId);
       pc.close();
@@ -517,7 +637,11 @@ export async function hostPairingRoom({ onStatus = () => {} } = {}) {
   return {
     roomId,
     waitForPeer: () => peerPromise,
-    cancel: () => { clearTimeout(timeoutId); ws.close(); pc.close(); },
+    cancel: () => {
+      clearTimeout(timeoutId);
+      for (const ch of channels) { try { ch.close(); } catch {} }
+      pc.close();
+    },
   };
 }
 
@@ -525,15 +649,21 @@ export async function hostPairingRoom({ onStatus = () => {} } = {}) {
 // onStatus fires at each negotiation stage ("opening signal channel…",
 // "offer sent, waiting…", etc.) so phone.js can surface exactly where the
 // pair is — instead of a single "connecting…" blob that hides every stall.
-export async function joinPairingRoom(roomId, { onStatus = () => {} } = {}) {
+export async function joinPairingRoom(roomId, { onStatus = () => {}, lobby = null } = {}) {
   const myPeerId = makePeerId("phone");
   const otherRolePrefix = "desktop";
-  dbg("phone: joining room", roomId, "peerId=", myPeerId);
+  dbg("phone: joining room", roomId, "peerId=", myPeerId, "via=", lobby ? "lobby" : "wss");
   try { onStatus("Opening signal channel…"); } catch {}
   const iceServers = await fetchIceServers();
   const pc = new RTCPeerConnection({ iceServers });
   const channel = pc.createDataChannel("pip");
-  const ws = openSignalWs(roomId);
+  // When the caller hands us a lobby, route signaling through that
+  // instead of opening signal.neevs.io. Same wire format on both —
+  // LobbySignalChannel mimics enough WebSocket API that the rest of
+  // this function doesn't care which transport is underneath.
+  const ws = lobby
+    ? new LobbySignalChannel({ lobby, roomId, myPeerId })
+    : openSignalWs(roomId);
   wireIceTrickle(pc, ws, myPeerId);
 
   ws.addEventListener("close", () => dbg("phone ws: close"));

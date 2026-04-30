@@ -869,12 +869,18 @@ async function _requestPairWith(macAd) {
   });
   if (result.accepted && result.data && result.data.roomId) {
     _setNearbyStatus('Accepted — connecting…');
-    // Mac trusts us per its own "Trust this phone" checkbox decision;
-    // we don't auto-trust back because the phone has no surface for
-    // the reciprocal choice yet. Leave trust binding to the explicit
-    // QR path (phone.js init already calls _trust.trust when pk rides
-    // in on the QR hash, and the pair-keys data-channel handshake
-    // refreshes the label).
+    // BLE-source path: we already have _bleLobby alive and the desktop
+    // is plumbing the WebRTC SDP exchange through the same lobby (Phase
+    // 2.G plan B). Don't reload — that would lose the BLE connection
+    // and force a re-prompt. Transition to the connected state in
+    // place, passing the lobby to joinPairingRoom.
+    if (macAd._source === 'ble' && _bleLobby) {
+      _trust.trust(macAd.data._pubkey, macLabel);
+      await _connectAsPaired(result.data.roomId, _bleLobby);
+      return;
+    }
+    // wss path: the existing flow reloads the page so init() runs from
+    // a clean slate with the roomId in the URL hash.
     location.replace(location.pathname + '#pair=' + result.data.roomId);
     location.reload();
     return;
@@ -1089,22 +1095,25 @@ async function init() {
     // the desktop calls itself ("Mac", "Windows", …).
     _trust.trust(remotePk, "Computer");
   }
+  await _connectAsPaired(roomId);
+}
+
+// Common post-pair setup. Used by both the URL-hash flow (init) and
+// the in-place transition (the BLE-mailbox pair flow that has its
+// _bleLobby alive and shouldn't location.reload). `lobby` is optional
+// — when present, joinPairingRoom routes WebRTC SDP through it
+// instead of opening signal.neevs.io.
+async function _connectAsPaired(roomId, lobby = null) {
   try {
     setStatus("connecting", "");
-    _peer = await joinPairingRoom(roomId, {});
+    _peer = await joinPairingRoom(roomId, { lobby });
     setStatus("connected", "");
     hideReconnect();
-    // Send the desktop our pubkey + label so it can trust us on future
-    // discovery without re-scanning. Sent as soon as the channel is up.
     try {
       const myPk = await getMyPubkeyB64();
       _peer.send({ type: "pair-keys", pubkey: myPk, label: deviceLabel() });
     } catch {}
     _peer.onMessage((msg) => {
-      // Desktop may send its own pubkey + label as part of pair-keys —
-      // upgrade the trust entry from the placeholder label to the real
-      // one (and re-trust the pubkey if the QR didn't carry pk for some
-      // reason, e.g. a legacy QR from before signed mode).
       if (msg && msg.type === "pair-keys" && msg.pubkey) {
         _trust.trust(msg.pubkey, msg.label || "Computer");
         return;
@@ -1112,9 +1121,6 @@ async function init() {
       onPeerMessage(msg);
     });
     _peer.onTrack(onPeerTrack);
-    // Transient state: pairing.js handles ICE restart internally; just
-    // mirror the visible status. Terminal states render text; transient
-    // states ride the dot.
     _peer.onStatus((status) => {
       if (status === "connected") setStatus("connected", "");
       else if (status === "reconnecting") setStatus("connecting", "");
