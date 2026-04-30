@@ -20,7 +20,13 @@
 
 import { SIGNAL_WS_URL, fetchIceServers, makePeerId } from "./pairing.js";
 
-const ICE_TIMEOUT_MS = 30000;
+// 60s, not 30s. ESP32 + libpeer's ICE gather is slow (DNS resolve for
+// stun.l.google.com + STUN binding + DTLS handshake takes 30-50s on
+// classic ESP32 even on a healthy network). Saw the chip log "pc state:
+// connected" 3s after the previous 30s timeout fired — we were just
+// barely too tight. Pi/aiortc completes ICE in ~2-3s so this only
+// affects the bad-network failure-message UX (slightly slower error).
+const ICE_TIMEOUT_MS = 60000;
 const BLE_SIG_CHUNK  = 100;
 
 // Per-platform room prefix + accepted-peer prefix for the wss fallback.
@@ -291,7 +297,7 @@ async function openChannelViaWss(robotId, robotName, label, opts) {
       reject(err);
     };
     const timer = setTimeout(() => {
-      fail(new Error(`Couldn't reach the robot's WebRTC peer within 30 s. Is ${robotType === "esp32" ? "the ESP32" : "pi-robot-rtc.service"} running?`));
+      fail(new Error(`Couldn't reach the robot's WebRTC peer within 60 s. Is ${robotType === "esp32" ? "the ESP32" : "pi-robot-rtc.service"} running?`));
     }, ICE_TIMEOUT_MS);
 
     channel.addEventListener("open", () => {
