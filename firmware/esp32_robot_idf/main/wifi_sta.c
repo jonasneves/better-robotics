@@ -208,11 +208,13 @@ void wifi_sta_scan_start(void) {
         .bssid = NULL,
         .channel = 0,
         .show_hidden = false,
-        // Passive scan with a longer dwell — same reasoning as the .ino:
-        // BLE coex aggressively drops active probe responses on classic
-        // ESP32, so beacon-only listening is more reliable.
+        // Passive scan + default dwell. BLE coex aggressively drops
+        // active probe responses on classic ESP32, so beacon-only
+        // listening is more reliable. The earlier .passive=500 override
+        // tripped wifi's "Should use default passive scan time" warning
+        // — coex prefers its own dwell when BT is enabled because longer
+        // scans starve the BT radio. .scan_time omitted → ESP-IDF picks.
         .scan_type = WIFI_SCAN_TYPE_PASSIVE,
-        .scan_time = { .passive = 500 },
     };
     esp_err_t rc = esp_wifi_scan_start(&cfg, false);
     if (rc != ESP_OK) {

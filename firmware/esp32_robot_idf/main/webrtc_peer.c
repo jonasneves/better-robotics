@@ -595,6 +595,12 @@ void webrtc_peer_init(const char *robot_name) {
         // camera + BLE + WiFi alloc. 4 KB is enough for the wss frame
         // pump (TLS context lives in mbedTLS heap, not the task stack).
         .task_stack = 4096,
+        // Pin to App CPU. The 10s blocking TLS handshakes during
+        // reconnect (Cloudflare idle-kicks long-lived idle wss conns)
+        // were starving NimBLE's host task on Pro CPU, freezing GATT
+        // discovery mid-flight — robot card stuck at "Connecting…"
+        // until wss settled (often forever, since ICE timeouts cascade).
+        .task_core_id = 1,
     };
     s_ws = esp_websocket_client_init(&cfg);
     if (!s_ws) { ESP_LOGE(TAG, "ws init failed"); return; }
