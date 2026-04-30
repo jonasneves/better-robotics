@@ -125,6 +125,28 @@ export class BleMailboxClient {
     }
   }
 
+  // Per-window writes serialize via _writeChain, but two browser windows
+  // on the same macOS profile share one underlying GATT connection
+  // through CoreBluetooth — concurrent writes from either window collide
+  // with "GATT operation already in progress". Retry-with-backoff covers
+  // the contention window without needing cross-window coordination.
+  async _writeWithRetry(buf) {
+    const MAX_ATTEMPTS = 8;
+    let delay = 30;  // ms; doubles per retry, ~3.8s worst case before giving up
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        await this._char.writeValueWithResponse(buf);
+        return;
+      } catch (err) {
+        const msg = (err && err.message) || '';
+        if (!/already in progress/i.test(msg) || attempt === MAX_ATTEMPTS - 1) throw err;
+        // Tiny random jitter so two contending writers don't sync up.
+        await new Promise(r => setTimeout(r, delay + Math.random() * delay));
+        delay *= 2;
+      }
+    }
+  }
+
   async _sendChunked(bytes) {
     const total = bytes.length;
     if (total === 0 || total > 0xFFFF) return;
@@ -132,15 +154,15 @@ export class BleMailboxClient {
     begin[0] = 0x01;
     begin[1] = (total >> 8) & 0xff;
     begin[2] = total & 0xff;
-    await this._char.writeValueWithResponse(begin);
+    await this._writeWithRetry(begin);
     for (let off = 0; off < total; off += BLE_CHUNK) {
       const take = Math.min(BLE_CHUNK, total - off);
       const buf = new Uint8Array(1 + take);
       buf[0] = 0x02;
       buf.set(bytes.subarray(off, off + take), 1);
-      await this._char.writeValueWithResponse(buf);
+      await this._writeWithRetry(buf);
     }
-    await this._char.writeValueWithResponse(new Uint8Array([0x03]));
+    await this._writeWithRetry(new Uint8Array([0x03]));
   }
 
   async _publishOnce(id, data) {
