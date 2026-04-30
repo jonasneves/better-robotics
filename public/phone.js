@@ -921,16 +921,31 @@ async function startBluetoothPair() {
     server = await device.gatt.connect();
     const svc = await server.getPrimaryService(SERVICE_UUID);
     char = await svc.getCharacteristic(PAIR_MAILBOX_CHAR_UUID);
-    await char.startNotifications();
   } catch (err) {
     if (err.name === "NotFoundError") { _setNearbyStatus("", null); return; }
     _setNearbyStatus(`Bluetooth pair failed: ${err.message || err}`, "alert");
     return;
   }
   _bleDevice = device;
+  // Install the bleMailbox NOTIFY listener BEFORE enabling
+  // notifications. The chip's BLE_GAP_EVENT_SUBSCRIBE handler fires
+  // pair_mailbox_replay_to as soon as the CCCD write lands; if we
+  // turn on notifications first and add the listener after, the
+  // replayed Mac presence ad is delivered to the OS but the page
+  // has nothing listening — and the desktop only publishes once,
+  // so we never see it again.
   _bleLobby = bleMailbox({ char, sign: true });
   // Reset the ble pair client so it picks up the new lobby on next use.
   _blePairClient = null;
+  try {
+    await char.startNotifications();
+  } catch (err) {
+    _setNearbyStatus(`Bluetooth notify failed: ${err.message || err}`, "alert");
+    try { _bleLobby.close(); } catch {}
+    _bleLobby = null;
+    _bleDevice = null;
+    return;
+  }
 
   // Republish phone presence on this transport so the desktop sees us
   // via the robot relay even if it hasn't been on the wss lobby.
