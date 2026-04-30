@@ -70,7 +70,13 @@ const PROBE = typeof location !== "undefined" && /\bprobe\b/.test((location.sear
 // already covered by ?debug logging; this fills the gap that bit us on
 // 2026-04-30 — the candidate sets are usually what reveals whether STUN
 // succeeded, both sides gathered, etc. Resets per host/joinPairingRoom call.
-const _diag = { local: [], remote: [], iceServers: [], role: null, roomId: null, startedAt: 0 };
+//
+// `_pc` holds the active RTCPeerConnection so lastPairDiagnostic() can
+// pull a live pc.getStats() snapshot — same data chrome://webrtc-internals
+// shows (candidate-pair states, transport, certificates, dataChannel),
+// without the privileged-page hop. Snapshot is async; the getter returns
+// a Promise that DevTools console auto-awaits.
+const _diag = { local: [], remote: [], iceServers: [], role: null, roomId: null, startedAt: 0, _pc: null };
 function diagReset(role, roomId, iceServers) {
   _diag.local = [];
   _diag.remote = [];
@@ -78,12 +84,36 @@ function diagReset(role, roomId, iceServers) {
   _diag.role = role;
   _diag.roomId = roomId;
   _diag.startedAt = Date.now();
+  _diag._pc = null;
 }
 function diagLocal(c)  { const p = parseCandidate(c); if (p) _diag.local.push(p); }
 function diagRemote(c) { const p = parseCandidate(c); if (p) _diag.remote.push(p); }
+function diagPc(pc)    { _diag._pc = pc; }
 
 if (typeof window !== "undefined") {
-  window.lastPairDiagnostic = () => ({ ..._diag });
+  window.lastPairDiagnostic = async () => {
+    const { _pc, ...base } = _diag;
+    const out = { ...base };
+    if (_pc) {
+      try {
+        const report = await _pc.getStats();
+        const stats = [];
+        report.forEach((s) => stats.push(s));
+        out.stats = stats;
+        // Pull the current ICE/conn/signaling/dtls state up to top-level
+        // so the answer to "what happened?" is one glance, not a stats grep.
+        out.state = {
+          iceConnection: _pc.iceConnectionState,
+          connection: _pc.connectionState,
+          signaling: _pc.signalingState,
+          iceGathering: _pc.iceGatheringState,
+        };
+      } catch (err) {
+        out.statsError = err.message || String(err);
+      }
+    }
+    return out;
+  };
 }
 const _logSinks = new Set();
 export function onDebugLog(fn) { _logSinks.add(fn); return () => _logSinks.delete(fn); }
@@ -461,6 +491,7 @@ export async function hostPairingRoom({ onStatus = () => {} } = {}) {
   const iceServers = await fetchIceServers();
   diagReset("desktop", roomId, iceServers);
   const pc = new RTCPeerConnection({ iceServers });
+  diagPc(pc);
   pc.addEventListener("icecandidate", (e) => { if (e.candidate) diagLocal(e.candidate); });
   const ws = openSignalWs(roomId);
   wireIceTrickle(pc, ws, myPeerId);
@@ -573,6 +604,7 @@ export async function joinPairingRoom(roomId, { onStatus = () => {} } = {}) {
   const iceServers = await fetchIceServers();
   diagReset("phone", roomId, iceServers);
   const pc = new RTCPeerConnection({ iceServers });
+  diagPc(pc);
   pc.addEventListener("icecandidate", (e) => { if (e.candidate) diagLocal(e.candidate); });
   const channel = pc.createDataChannel("pip");
   const ws = openSignalWs(roomId);

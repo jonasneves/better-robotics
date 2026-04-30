@@ -24,7 +24,7 @@ Live on both desktop and phone while `pairing.js` is loaded.
 - `window.replayAll()` — resolves to the full in-memory array of records.
 - `window.replayClear()` — wipes the replay store. Destructive.
 - `window.replaySession` — the current session id (string).
-- `window.lastPairDiagnostic()` — local + remote ICE candidates from this side's most recent pair attempt, plus role/roomId/iceServers. Resets on each new `hostPairingRoom`/`joinPairingRoom` call. Reach for it when a pair fails — what each side gathered tells you whether STUN succeeded, what NAT shape, etc.
+- `window.lastPairDiagnostic()` — **async**, returns a Promise. Local + remote ICE candidates from this side's most recent pair attempt, plus role/roomId/iceServers, **plus a live `pc.getStats()` snapshot** (candidate-pair states, transport, certificates, dataChannel) and the four pc state strings. Same data `chrome://webrtc-internals/` shows, no privileged-page hop. Resets on each new `hostPairingRoom`/`joinPairingRoom` call. DevTools console auto-awaits the Promise — `await window.lastPairDiagnostic()` from elsewhere.
 - `window.probeNetwork({ timeoutMs })` — runs a unilateral STUN probe on demand and returns `{stunReachable, candidateTypes, publicIp, mdnsObfuscated, candidates, durationMs}`. Stashes the result in `window.lastNetProbe()`.
 - `window.lastNetProbe()` — last `probeNetwork()` result, or `null` if never run.
 
