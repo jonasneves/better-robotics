@@ -95,33 +95,16 @@ jobs:
         # then return ENOMEM and WebRTC video silently breaks (we hit this
         # exact failure with mailbox MAILBOX_AD_MAX 384→768 in DRAM-BSS).
         # Failing the build at PR-time beats finding out by re-flashing.
+        # Logic lives in tools/check-dram-budget.py — espressif's action
+        # wraps `command:` through bash -c, which doesn't pass embedded
+        # heredocs cleanly.
         if: steps.changes.outputs.esp_changed == 'true'
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.3.1
           target: esp32
           path: 'firmware/esp32_robot_idf'
-          command: |
-            idf.py size 2>&1 | tee /tmp/size-out.txt
-            python3 - <<'PY'
-            import re, sys
-            with open('/tmp/size-out.txt') as f: out = f.read()
-            m = re.search(r'DRAM\s+\|\s+(\d+)', out)
-            if not m:
-                print('::error::Could not parse DRAM size from idf.py size'); sys.exit(1)
-            dram = int(m.group(1))
-            BUDGET = 100_000  # 100 KB; ~25 KB margin on classic ESP32's 125 KB
-            margin = BUDGET - dram
-            print(f'::group::Static DRAM budget')
-            print(f'  used:    {dram:>7,} B')
-            print(f'  budget:  {BUDGET:>7,} B')
-            print(f'  margin:  {margin:>7,} B ({100*margin/BUDGET:+.1f}%)')
-            print(f'::endgroup::')
-            if dram > BUDGET:
-                over = dram - BUDGET
-                print(f'::error::Static DRAM {dram:,} B exceeds budget {BUDGET:,} B by {over:,} B. Move static buffers to PSRAM (heap_caps_calloc with MALLOC_CAP_SPIRAM) or shrink them.')
-                sys.exit(1)
-            PY
+          command: idf.py size 2>&1 | python3 ../../tools/check-dram-budget.py
 
       - name: Stage published artifacts
         if: steps.changes.outputs.esp_changed == 'true'
