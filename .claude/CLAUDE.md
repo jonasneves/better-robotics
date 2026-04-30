@@ -26,7 +26,7 @@ Two layers, kept cheap:
 
 Pattern for new pure helpers: extract from `app.js` / cap runtime into `format.js`, import where used, add a test.
 
-`make install-hooks` wires `.githooks/` as `core.hooksPath`. Pre-commit runs `make smoke` plus a gen-uuids drift check (only when `protocol/uuids.json` is staged). Bypassable with `--no-verify`; CI is the binding layer.
+`make install-hooks` wires `.githooks/` as `core.hooksPath`. Pre-commit runs `make smoke`, the gen-uuids drift check (when `protocol/uuids.json` is staged), and the sw.js VERSION stamp (when `public/*` excluding firmware bins / sw.js is staged — folds the stamp into the user's commit so the dashboard "Reload to update" banner fires on the right commit instead of a CI follow-up). Bypassable with `--no-verify`; CI is the binding layer.
 
 # Comment discipline
 

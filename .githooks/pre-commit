@@ -22,6 +22,33 @@ if git diff --cached --name-only | grep -q '^protocol/uuids\.json$'; then
     fi
 fi
 
-# 2. Pure-function smoke tests. Sub-second. Catches regressions in
+# 2. SW version stamp. Hashes the dashboard asset surface and rewrites
+# public/sw.js's VERSION when the hash changes — bumping VERSION is
+# what makes the browser see a new service worker and surface the
+# "Reload to update" banner. Mirrors .github/workflows/stamp-sw-version.yml
+# but folds the stamp into the user's own commit instead of a follow-up
+# bot-commit. Only fires when public/* (excluding firmware bins + sw.js
+# itself) is staged.
+if git diff --cached --name-only \
+    | grep -E '^public/' \
+    | grep -vE '^public/firmware/|^public/sw\.js$' \
+    | grep -q .; then
+    HASH=$(find public -type f \
+        \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' \) \
+        -not -path 'public/firmware/*' \
+        -not -name 'sw.js' \
+        | sort | xargs cat | shasum -a 256 | cut -c1-8)
+    CUR=$(grep -E '^const VERSION = ' public/sw.js | sed 's/.*"\(.*\)".*/\1/')
+    if [ "$HASH" != "$CUR" ]; then
+        # Rewrite-and-mv form is portable; `sed -i` differs between
+        # BSD (macOS) and GNU.
+        sed "s|^const VERSION = .*|const VERSION = \"$HASH\";|" public/sw.js > public/sw.js.tmp \
+            && mv public/sw.js.tmp public/sw.js
+        git add public/sw.js
+        echo "pre-commit: stamped sw.js VERSION = $HASH"
+    fi
+fi
+
+# 3. Pure-function smoke tests. Sub-second. Catches regressions in
 # format.js (and future pure helpers) before they reach CI.
 make -s smoke
