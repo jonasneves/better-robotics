@@ -402,17 +402,25 @@ static void handle_offer(const char *sdp, offer_src_t src) {
     // apartment WiFi-as-a-service, guest networks). Without TURN the chip
     // emits only its private host candidate, and ICE has nowhere to meet
     // when the LAN path is blocked — chrome://webrtc-internals confirmed
-    // this exact failure mode (2026-04-30). OpenRelay is a free public
-    // TURN service, fine for personal/dev use; swap to a deployment-time
-    // endpoint if this ever ships. libpeer is UDP-only, so we list two
-    // UDP ports rather than including ?transport=tcp variants.
+    // this exact failure mode (2026-04-30).
+    //
+    // libpeer's create_answer is synchronous over getaddrinfo() per ICE
+    // server. On a slow/flaky DNS (iPhone hotspot, captive portals),
+    // hostname-based ICE servers stretch create_answer past the BLE
+    // signaling timeout and the dashboard never receives an answer. So
+    // we bypass DNS for TURN by using a hardcoded IP literal — getaddrinfo
+    // returns immediately on those. STUN keeps a hostname (Google's DNS
+    // is fast everywhere). Cost: TURN IP rotation breaks until reflashed.
+    // Acceptable for personal/dev; swap for a deployment-time endpoint
+    // (and proper async resolver) if this ever ships.
+    //
+    // OpenRelay free TURN — IP from `host openrelay.metered.ca` on
+    // 2026-04-30. Single UDP port 80 (most permissive); libpeer is
+    // UDP-only so port 443 wouldn't add coverage.
     PeerConfiguration cfg = {
         .ice_servers = {
             { .urls = "stun:stun.l.google.com:19302" },
-            { .urls = "turn:openrelay.metered.ca:80",
-              .username = "openrelayproject",
-              .credential = "openrelayproject" },
-            { .urls = "turn:openrelay.metered.ca:443",
+            { .urls = "turn:15.235.47.158:80",
               .username = "openrelayproject",
               .credential = "openrelayproject" },
         },
