@@ -378,6 +378,72 @@ static void on_dc_close(void *ud) {
     stop_video_streaming();
 }
 
+// Strip lines libpeer can't process from the offer SDP. Dashboard now
+// emits Cloudflare TURN candidates (TCP + TLS, plus IPv6 if the host
+// has it); libpeer's UDP-only ICE agent panicked on LoadProhibited
+// while parsing them ("Only UDP transport is supported" was the last
+// error before the crash). Net-out: keep IPv4 UDP candidates only,
+// drop everything else. The output buffer is sized for the input plus
+// terminator — we only ever shrink. Caller frees out.
+static char *filter_sdp_for_libpeer(const char *sdp) {
+    size_t in_len = strlen(sdp);
+    char *out = malloc(in_len + 1);
+    if (!out) return NULL;
+    size_t o = 0;
+    const char *p = sdp;
+    int dropped = 0;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t line_len = eol ? (size_t)(eol - p + 1) : strlen(p);
+        // a=candidate:... <foundation> <component> <proto> <pri> <addr> <port> typ <type> ...
+        bool drop = false;
+        if (strncmp(p, "a=candidate:", 12) == 0) {
+            // Find the proto field (4th whitespace-separated token).
+            const char *q = p + 12;
+            int tok = 0;
+            while (q < p + line_len && tok < 2) {
+                while (q < p + line_len && *q != ' ') q++;
+                while (q < p + line_len && *q == ' ') q++;
+                tok++;
+            }
+            // q now points at proto. tcp/TCP candidates: drop.
+            if (q < p + line_len && (q[0] == 't' || q[0] == 'T')
+                                  && (q[1] == 'c' || q[1] == 'C')
+                                  && (q[2] == 'p' || q[2] == 'P')) {
+                drop = true;
+            } else {
+                // IPv6 detection: address comes 2 fields after proto. Walk
+                // to it and check for a colon (IPv4 has dots, IPv6 has colons).
+                int adv = 0;
+                while (q < p + line_len && adv < 3) {
+                    while (q < p + line_len && *q != ' ') q++;
+                    while (q < p + line_len && *q == ' ') q++;
+                    adv++;
+                }
+                if (q < p + line_len && memchr(q, ':',
+                        (size_t)((p + line_len) - q)) != NULL) {
+                    // Cheap heuristic: candidate addr field with a colon = IPv6.
+                    // (IPv4 dotted-quad never has ':'.) Dropping IPv6 even when
+                    // libpeer might have parsed it — UDP-only stack means we
+                    // don't gain anything from v6 anyway.
+                    drop = true;
+                }
+            }
+        }
+        if (drop) {
+            dropped++;
+        } else {
+            memcpy(out + o, p, line_len);
+            o += line_len;
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    out[o] = 0;
+    if (dropped) ESP_LOGI(TAG, "filtered SDP: dropped %d candidate line(s)", dropped);
+    return out;
+}
+
 static void handle_offer(const char *sdp, offer_src_t src) {
     ESP_LOGI(TAG, "handle_offer: src=%s, sdp len=%u",
              src == OFFER_SRC_BLE ? "BLE" : "WS", (unsigned)strlen(sdp));
@@ -420,7 +486,9 @@ static void handle_offer(const char *sdp, offer_src_t src) {
     peer_connection_ondatachannel(s_pc, on_dc_message, on_dc_open, on_dc_close);
 
     ESP_LOGI(TAG, "handle_offer: setting remote description");
-    peer_connection_set_remote_description(s_pc, sdp, SDP_TYPE_OFFER);
+    char *filtered = filter_sdp_for_libpeer(sdp);
+    peer_connection_set_remote_description(s_pc, filtered ? filtered : sdp, SDP_TYPE_OFFER);
+    free(filtered);
     ESP_LOGI(TAG, "handle_offer: creating answer");
     const char *answer = peer_connection_create_answer(s_pc);
     if (!answer || !answer[0]) {
