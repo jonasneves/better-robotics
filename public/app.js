@@ -32,7 +32,7 @@ import { initHelpers, setHelpersRobotRenderer, renderHelpers } from "./helpers.j
 import { startTracking as startArucoTracking, stopTracking as stopArucoTracking } from "./aruco.js";
 import {
   setupServiceWorker, wireInstallMenuItem, wireCheckUpdatesMenuItem,
-  wireHardRefresh, setReportIssueLink, readSwVersion,
+  wireHardRefresh, wireDiagnosticsMenuItem, setReportIssueLink, readSwVersion,
 } from "./app-menu.js";
 
 setDisconnectHandler((id) => onDisconnected(id));
@@ -1756,6 +1756,16 @@ document.addEventListener("DOMContentLoaded", () => {
     onClick: () => $("app-menu").hidePopover(),
   });
   wireCheckUpdatesMenuItem({ btnId: "menu-check-updates" });
+  wireDiagnosticsMenuItem({
+    openBtnId: "menu-diagnostics",
+    dialogId: "diagnostics-dialog",
+    closeBtnId: "diagnostics-close",
+    debugBtnId: "diagnostics-debug",
+    probeBtnId: "diagnostics-probe",
+    pairBtnId: "diagnostics-pair",
+    outputId: "diagnostics-output",
+    onBeforeOpen: () => $("app-menu").hidePopover(),
+  });
   wireHardRefresh({
     openBtnId: "menu-hard-refresh",
     dialogId: "hard-refresh-dialog",

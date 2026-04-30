@@ -9,7 +9,7 @@ import { bleMailbox } from "./ble-mailbox.js";
 import { SERVICE_UUID, PAIR_MAILBOX_CHAR_UUID } from "./uuids.js";
 import {
   setupServiceWorker, wireInstallMenuItem, wireCheckUpdatesMenuItem,
-  wireHardRefresh, setReportIssueLink, readSwVersion,
+  wireHardRefresh, wireDiagnosticsMenuItem, setReportIssueLink, readSwVersion,
 } from "./app-menu.js";
 const _trust = makeTrustStore("better-robotics:trust:v1");
 
@@ -797,6 +797,16 @@ function wireAppMenu() {
     onClick: () => menu.hidePopover(),
   });
   wireCheckUpdatesMenuItem({ btnId: "menu-check-updates" });
+  wireDiagnosticsMenuItem({
+    openBtnId: "menu-diagnostics",
+    dialogId: "diagnostics-dialog",
+    closeBtnId: "diagnostics-close",
+    debugBtnId: "diagnostics-debug",
+    probeBtnId: "diagnostics-probe",
+    pairBtnId: "diagnostics-pair",
+    outputId: "diagnostics-output",
+    onBeforeOpen: () => menu.hidePopover(),
+  });
   wireHardRefresh({
     openBtnId: "menu-hard-refresh",
     dialogId: "hard-refresh-dialog",

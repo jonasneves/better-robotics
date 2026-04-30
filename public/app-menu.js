@@ -269,6 +269,68 @@ export function setReportIssueLink(anchor, version) {
   anchor.href = `https://github.com/jonasneves/better-robotics/issues/new?body=${encodeURIComponent(body)}`;
 }
 
+// Wire the Diagnostics dialog. Three per-session actions: reload with
+// ?debug, run a unilateral STUN probe, capture last-pair-diagnostic
+// snapshot. Output renders inline in a <pre>. Nothing persists —
+// debug logs come back via reload, the rest are read-only inspections.
+// Same shape on both desktop and phone (DEV.md describes each handle).
+export function wireDiagnosticsMenuItem({
+  openBtnId, dialogId, closeBtnId,
+  debugBtnId, probeBtnId, pairBtnId, outputId,
+  onBeforeOpen,
+}) {
+  const dialog = document.getElementById(dialogId);
+  const open  = document.getElementById(openBtnId);
+  const close = document.getElementById(closeBtnId);
+  const debug = document.getElementById(debugBtnId);
+  const probe = document.getElementById(probeBtnId);
+  const pair  = document.getElementById(pairBtnId);
+  const out   = document.getElementById(outputId);
+  if (!dialog || !open) return;
+  open.addEventListener("click", () => { onBeforeOpen?.(); dialog.showModal(); });
+  close?.addEventListener("click", () => dialog.close());
+
+  const show = (obj) => {
+    if (!out) return;
+    out.style.display = "block";
+    out.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
+  };
+
+  debug?.addEventListener("click", () => {
+    // Append ?debug if not already present, preserving existing query
+    // and hash. Reload kicks pairing.js's URL-flag check, which surfaces
+    // the floating log panel.
+    const url = new URL(window.location.href);
+    if (!/\bdebug\b/.test(url.search + url.hash)) {
+      url.searchParams.set("debug", "1");
+    }
+    window.location.href = url.toString();
+  });
+
+  probe?.addEventListener("click", async () => {
+    if (typeof window.probeNetwork !== "function") {
+      show("probeNetwork() not loaded — pairing.js failed to import?");
+      return;
+    }
+    show("Running STUN probe…");
+    try { show(await window.probeNetwork({ timeoutMs: 4000 })); }
+    catch (err) { show("probe failed: " + (err.message || err)); }
+  });
+
+  pair?.addEventListener("click", async () => {
+    if (typeof window.lastPairDiagnostic !== "function") {
+      show("lastPairDiagnostic() not loaded — pairing.js failed to import?");
+      return;
+    }
+    show("Capturing pair diagnostic + getStats()…");
+    try {
+      const snap = await window.lastPairDiagnostic();
+      if (!snap.role) { show("No pair attempt yet this session — open a robot card first."); return; }
+      show(snap);
+    } catch (err) { show("snapshot failed: " + (err.message || err)); }
+  });
+}
+
 // Read VERSION from sw.js — CI stamps it on every dashboard-asset change.
 // Used both for the menu-meta display and the issue-body diagnostic.
 export async function readSwVersion() {
