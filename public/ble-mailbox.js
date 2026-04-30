@@ -135,15 +135,17 @@ export class BleMailboxClient {
   }
 
   async _publishOnce(id, data) {
-    if (this._closed) return;
+    if (this._closed) { console.warn('[ble-mailbox] publish on closed lobby, id=' + id); return; }
     let payload = data;
     if (this._sign) {
       try { payload = await _envelopeForPublish(id, data); }
-      catch { return; }
+      catch (err) { console.warn('[ble-mailbox] envelope/sign failed:', err.message); return; }
     }
     const wire = { id, data: payload };
     const bytes = new TextEncoder().encode(JSON.stringify(wire));
-    try { await this._sendChunked(bytes); } catch { /* drop frame; next republish covers it */ }
+    console.log('[ble-mailbox] publish ' + bytes.length + 'B id=' + id);
+    try { await this._sendChunked(bytes); console.log('[ble-mailbox] publish OK id=' + id); }
+    catch (err) { console.warn('[ble-mailbox] sendChunked failed:', err.message); }
   }
 
   // ── DiscoveryClient-shaped public API ────────────────────────────
