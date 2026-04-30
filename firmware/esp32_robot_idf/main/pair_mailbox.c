@@ -1,9 +1,7 @@
 #include "pair_mailbox.h"
 
-#include <stdlib.h>
 #include <string.h>
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -19,12 +17,12 @@ static const char *TAG = "mailbox";
 // upper bound — covers the signed-ad envelope (peer-key.js Ed25519
 // pubkey + sig + JSON payload of room id / role / timestamp).
 #define MAILBOX_DEPTH    8
-// Sized for plan B: WebRTC SDP exchange goes through the lobby, and
-// inline-ICE offers are 2-3 KB before the signed envelope wraps them.
-// 4 KB headroom covers the largest realistic ad. Per-slot cost is
-// 8 × 4 KB = 32 KB; the ring is heap-allocated in PSRAM at init so
-// internal DRAM stays available for the connectivity-first stack.
-#define MAILBOX_AD_MAX   4096
+// Sized for the largest signed envelope we send: pair-request carries
+// target pubkey (88 B base64) + nonce (UUID 36 B) + label + _pubkey
+// (88 B) + _sig (88 B) + JSON overhead ≈ 480 B. 768 leaves headroom
+// for future fields without forcing a firmware bump every time the
+// signed-ad shape grows by a key.
+#define MAILBOX_AD_MAX   768
 
 // Wire envelope on the mailbox char (matches SIGNAL_CHAR / OPS):
 //   0x01 [u16 BE total]   begin
@@ -52,29 +50,18 @@ typedef struct {
     uint8_t  buf[MAILBOX_AD_MAX];
 } mailbox_rx_t;
 
-// Ring + per-conn rx buffers live in PSRAM — internal DRAM is too tight
-// to absorb 8 × 4 KB ring + 4 × 4 KB rx slots = 48 KB. PSRAM access is
-// slower than DRAM but the mailbox is touched only during pair signaling,
-// well off the data hot path.
-static mailbox_ad_t *s_ring = NULL;
+static mailbox_ad_t s_ring[MAILBOX_DEPTH];
 static int s_count = 0;       // valid slots, clamped to MAILBOX_DEPTH
 static int s_next  = 0;       // next slot to overwrite (oldest)
 static SemaphoreHandle_t s_mutex;
-static mailbox_rx_t *s_rx = NULL;
+static mailbox_rx_t s_rx[BLE_HOST_MAX_CONNS];
 
 void pair_mailbox_init(void) {
     s_mutex = xSemaphoreCreateMutex();
-    s_ring = heap_caps_calloc(MAILBOX_DEPTH, sizeof(mailbox_ad_t), MALLOC_CAP_SPIRAM);
-    s_rx = heap_caps_calloc(BLE_HOST_MAX_CONNS, sizeof(mailbox_rx_t), MALLOC_CAP_SPIRAM);
-    if (!s_ring || !s_rx) {
-        ESP_LOGE(TAG, "PSRAM alloc failed for mailbox buffers");
-        return;
-    }
     for (int i = 0; i < BLE_HOST_MAX_CONNS; i++) s_rx[i].conn = BLE_HS_CONN_HANDLE_NONE;
 }
 
 static mailbox_rx_t *rx_for(uint16_t conn, bool create) {
-    if (!s_rx) return NULL;
     for (int i = 0; i < BLE_HOST_MAX_CONNS; i++) {
         if (s_rx[i].conn == conn) return &s_rx[i];
     }
@@ -97,7 +84,7 @@ static void rx_release(mailbox_rx_t *rx) {
 }
 
 static void store_ad(const uint8_t *buf, size_t len) {
-    if (len == 0 || len > MAILBOX_AD_MAX || !s_ring) return;
+    if (len == 0 || len > MAILBOX_AD_MAX) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_ring[s_next].len = (uint16_t)len;
     memcpy(s_ring[s_next].bytes, buf, len);
@@ -179,7 +166,6 @@ void pair_mailbox_handle_write(uint16_t from_conn, const uint8_t *buf, size_t le
 }
 
 void pair_mailbox_replay_to(uint16_t conn_handle) {
-    if (!s_ring) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     int sent = 0;
     int start = (s_count < MAILBOX_DEPTH) ? 0 : s_next;
