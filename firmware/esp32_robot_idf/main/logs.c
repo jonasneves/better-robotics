@@ -104,19 +104,36 @@ static int log_vprintf_hook(const char *fmt, va_list args) {
         if (s_orig_vprintf) return s_orig_vprintf(fmt, args);
         return 0;
     }
+
+    // Don't capture logs from the NimBLE host task or our own drain
+    // task. NimBLE logs every ATT op, including the notifies we issue
+    // for log delivery — capturing those would spin a feedback loop
+    // that fills the ring, floods the link, and starved the host
+    // task to the point of disconnect during connect setup. Both
+    // still hit UART via the chained vprintf below.
+    bool capture = true;
+    const char *tname = pcTaskGetName(NULL);
+    if (tname && (strcmp(tname, "ble") == 0
+               || strcmp(tname, "BLE Host") == 0
+               || strcmp(tname, "logs") == 0
+               || strcmp(tname, "btController") == 0)) {
+        capture = false;
+    }
+
     s_in_log_hook = true;
 
-    // Need two passes if we want to chain to the UART AND capture: vsnprintf
-    // is destructive on the va_list. Capture once via va_copy.
-    va_list args_copy;
-    va_copy(args_copy, args);
-
-    char buf[LOG_LINE_MAX];
-    int n = vsnprintf(buf, sizeof(buf), fmt, args_copy);
-    va_end(args_copy);
-    if (n > 0) {
-        size_t take = (n < (int)sizeof(buf)) ? (size_t)n : sizeof(buf) - 1;
-        ring_push((const uint8_t *)buf, take);
+    if (capture) {
+        // vsnprintf consumes the va_list; copy so we can chain to UART
+        // afterward with the original args still intact.
+        va_list args_copy;
+        va_copy(args_copy, args);
+        char buf[LOG_LINE_MAX];
+        int n = vsnprintf(buf, sizeof(buf), fmt, args_copy);
+        va_end(args_copy);
+        if (n > 0) {
+            size_t take = (n < (int)sizeof(buf)) ? (size_t)n : sizeof(buf) - 1;
+            ring_push((const uint8_t *)buf, take);
+        }
     }
 
     int r = 0;
