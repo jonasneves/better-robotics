@@ -48,8 +48,8 @@ function pickKnown(ports) {
 }
 // Two-attempt open: macOS occasionally fails the first open() right after
 // a previous disconnect because the kernel hasn't fully released the
-// /dev/cu.usbserial node. A 200ms retry covers that without a user-visible
-// glitch (the previous symptom was "reconnect 2-3 times until it works").
+// /dev/cu.usbserial node; and a SerialPort that came back already-open
+// from a prior tab/page session needs an explicit close() before retry.
 //
 // Then deassert DTR/RTS immediately. ESP32-CAM (and most ESP32 dev boards)
 // wire DTR/RTS through transistors to EN + GPIO0 — Chrome's default
@@ -59,6 +59,9 @@ function pickKnown(ports) {
 async function openWithRetry(port) {
   try { await port.open({ baudRate: 115200 }); }
   catch (err) {
+    if (err.name === "InvalidStateError") {
+      try { await port.close(); } catch {}
+    }
     await new Promise((r) => setTimeout(r, 200));
     await port.open({ baudRate: 115200 });
   }

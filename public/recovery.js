@@ -7,6 +7,7 @@ import { log } from "./log.js";
 let _port = null;
 let _reader = null;
 let _writer = null;
+let _readPump = null;
 let _term = null;
 let _fit = null;
 let _resizeObs = null;
@@ -78,10 +79,14 @@ async function connect() {
   try {
     _port = known.length >= 1 ? pickKnown(known) : await navigator.serial.requestPort();
     // Two-attempt open: macOS sometimes fails the first open() right
-    // after a prior disconnect (kernel /dev/cu.* not fully released).
-    // 200ms retry covers it without the user-visible "reconnect 2-3 times" glitch.
+    // after a prior disconnect (kernel /dev/cu.* not fully released);
+    // and a SerialPort that came back already-open from a prior tab/page
+    // session needs an explicit close() before the retry will take.
     try { await _port.open({ baudRate: 115200 }); }
-    catch {
+    catch (err) {
+      if (err.name === "InvalidStateError") {
+        try { await _port.close(); } catch {}
+      }
       await new Promise((r) => setTimeout(r, 200));
       await _port.open({ baudRate: 115200 });
     }
@@ -140,7 +145,7 @@ async function connect() {
 
   _writer = _port.writable.getWriter();
   _reader = _port.readable.getReader();
-  (async () => {
+  _readPump = (async () => {
     try {
       while (true) {
         const { value, done } = await _reader.read();
@@ -154,19 +159,21 @@ async function connect() {
 }
 
 async function disconnect() {
-  // Release order matters: cancel/release readable + writable streams
-  // BEFORE port.close(). reader.cancel() unblocks the read loop but
-  // leaves the lock on port.readable held — port.close() then rejects
-  // and the next port.open() fails with "port is already open" even
-  // though the previous session is logically gone.
+  // Release order matters: reader.cancel() resolves before the in-flight
+  // read() promise settles, so releaseLock() must wait for the read pump
+  // to actually exit — otherwise it throws "pending read", port.close()
+  // then rejects with "stream is locked", and the port stays open. The
+  // next port.open() (e.g. flashFlow's requestPort+open) fails with
+  // "port is already open" even though the session looks gone.
   try { await _reader?.cancel(); } catch {}
+  try { await _readPump; } catch {}
   try { _reader?.releaseLock(); } catch {}
   try { _writer?.releaseLock(); } catch {}
   try { await _port?.close(); } catch {}
   // Brief grace for the macOS kernel to release /dev/cu.usbserial-*.
   // Without this, an immediate flash-flow port.open() can still race.
   await new Promise((r) => setTimeout(r, 100));
-  _reader = _writer = _port = null;
+  _reader = _writer = _readPump = _port = null;
   _resizeObs?.disconnect();
   _resizeObs = null;
   _fit?.dispose();
@@ -213,7 +220,17 @@ async function flashFlow() {
   let port;
   try {
     port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 115200 });
+    try { await port.open({ baudRate: 115200 }); }
+    catch (err) {
+      // Same SerialPort instance can come back from requestPort() in an
+      // already-open state when a prior session (this tab or another) didn't
+      // fully release it. Close + retry recovers it without a page reload.
+      if (err.name === "InvalidStateError") {
+        try { await port.close(); } catch {}
+        await new Promise((r) => setTimeout(r, 200));
+        await port.open({ baudRate: 115200 });
+      } else throw err;
+    }
   } catch (err) {
     if (err.name !== "NotFoundError") log(`Recovery flash port: ${err.message}`);
     setStatus("");

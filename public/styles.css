@@ -1651,6 +1651,12 @@ details.tray.has-alert > summary::after {
   width: min(820px, calc(100vw - 32px));
   height: min(640px, calc(100vh - 64px));
 }
+/* Toolbar row: Connect + status grouped at the left, destructive Flash
+   firmware isolated on the right. Apple HIG separates destructive
+   actions from benign ones so the operator's eye lands on the safe
+   action by default. */
+.recovery-actions { margin: 0 0 12px; align-items: center; }
+.recovery-actions #recovery-flash { margin-left: auto; }
 .recovery-term {
   background: #1e1e1e;
   border-radius: 8px;
