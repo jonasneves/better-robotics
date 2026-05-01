@@ -1,16 +1,18 @@
 // Browser ↔ robot WebRTC peer manager.
 //
-// Two signaling transports, chosen at openChannel time:
+// Two signaling transports, chosen by robot type:
 //
-//  1. BLE-signaling (preferred when signalChar is present): chunked SDP
-//     write to SIGNAL_CHAR_UUID; chunked answer back via notify on the
-//     same char. ICE then runs P2P on the LAN — no internet rendezvous,
-//     no Mixed-Content / PNA exposure. The robot is already authenticated
-//     via the BLE pairing.
+//  - ESP32: BLE-signaling, single path. Chunked SDP write to
+//    SIGNAL_CHAR_UUID; chunked answer back via notify on the same char.
+//    ICE then runs P2P — no internet rendezvous needed for signaling.
+//    BLE pair is the precondition for using the dashboard at all, so
+//    "BLE works" is always true when we get here. The chip-side wss
+//    client was removed (~165 KB flash, ~4 KB DRAM saved); fallback
+//    has no peer on the other side.
 //
-//  2. wss://signal.neevs.io fallback: the original path. Used when
-//     signalChar isn't available (older firmware, or cross-network
-//     pairing where BLE isn't reachable).
+//  - Pi: wss://signal.neevs.io. The Pi has the resources to run a
+//    persistent wss client cleanly, and the eventual remote-control
+//    flow needs cross-network signaling. No BLE signal char exposed.
 //
 // Wire format on the SIGNAL char (both directions, mirrors OTA/snapshot):
 //   0x01 [u16 BE total]   begin
@@ -29,15 +31,9 @@ import { SIGNAL_WS_URL, fetchIceServers, makePeerId } from "./pairing.js";
 const ICE_TIMEOUT_MS = 60000;
 const BLE_SIG_CHUNK  = 100;
 
-// Per-platform room prefix + accepted-peer prefix for the wss fallback.
-// Pi rtc daemon presents as "desktop-<id>"; ESP32 as "esp32-<id>".
-const ROBOT_ROOM_CONFIG = {
-  pi:    { roomPrefix: "pi-rtc-",    accept: "desktop-" },
-  esp32: { roomPrefix: "esp32-rtc-", accept: "esp32-" },
-};
-function configFor(robotType) {
-  return ROBOT_ROOM_CONFIG[robotType] || ROBOT_ROOM_CONFIG.pi;
-}
+// wss-path peer-id prefixes. Pi rtc daemon presents as "desktop-<id>".
+// (ESP32 used to be "esp32-<id>" — that path was retired.)
+const PI_WSS_CONFIG = { roomPrefix: "pi-rtc-", accept: "desktop-" };
 
 // Per-robot peer connections, lazy-built. Keyed by robot id.
 const _peers = new Map();  // robotId → { pc, ws?, channels: Map<label, ch> }
@@ -47,26 +43,20 @@ const _peers = new Map();  // robotId → { pc, ws?, channels: Map<label, ch> }
 // per robot — opening a second time tears the prior peer down.
 //
 // opts:
-//   robotType:   "pi" | "esp32"   — picks wss room shape if BLE absent
-//   signalChar:  BluetoothRemoteGATTCharacteristic — if present, BLE path
+//   robotType:   "pi" | "esp32"   — picks the signaling path
+//   signalChar:  BluetoothRemoteGATTCharacteristic — required for ESP32
 //   onStatus:    (msg) => void    — progress messages for UI
 //
-// Selector: try BLE-signaling when signalChar is present. On any failure
-// (handshake timeout, char write rejected, BLE disconnect mid-flight),
-// fall through to wss. The wss path is the last-resort relay for
-// cross-network access; rolling out 2.F.1 means the BLE path covers the
-// daily LAN flow but transient BLE issues don't strand the operator.
+// Selector by robot type: ESP32 uses BLE-signaling (signalChar required);
+// Pi uses wss. No fallback — the chip-side wss client was retired, so
+// falling back from BLE-signaling has no peer on the other side. If BLE
+// fails on ESP32, surface it directly so the operator knows the BLE link
+// is the problem, not the signaling path.
 export async function openChannel(robotId, robotName, label, opts = {}) {
-  const { signalChar, onStatus = () => {} } = opts;
-  if (signalChar) {
-    try {
-      return await openChannelViaBLE(robotId, label, signalChar, opts);
-    } catch (err) {
-      onStatus(`BLE signaling failed (${err.message}); trying signal.neevs.io…`);
-      console.warn("[webrtc-robot] BLE signaling failed, falling back to wss:", err);
-      // Fall through to wss. closePeer(robotId) was already called inside
-      // openChannelViaBLE on its way out, so wss starts from a clean slate.
-    }
+  const { signalChar, robotType } = opts;
+  if (robotType === "esp32") {
+    if (!signalChar) throw new Error("ESP32 needs a BLE signal char — pair the robot first");
+    return openChannelViaBLE(robotId, label, signalChar, opts);
   }
   return openChannelViaWss(robotId, robotName, label, opts);
 }
@@ -244,14 +234,14 @@ function openWhenReady(channel, robotId) {
   });
 }
 
-// ── wss://signal.neevs.io fallback path ─────────────────────────────────
+// ── wss://signal.neevs.io path (Pi only) ────────────────────────────────
 
 async function openChannelViaWss(robotId, robotName, label, opts) {
-  const { onStatus = () => {}, robotType = "pi" } = opts;
+  const { onStatus = () => {} } = opts;
   closePeer(robotId);
 
   const myPeerId = makePeerId("dashboard");
-  const cfg = configFor(robotType);
+  const cfg = PI_WSS_CONFIG;
   const roomId = `${cfg.roomPrefix}${robotName}`;
   onStatus("Opening signal channel…");
   const iceServers = await fetchIceServers();
@@ -297,7 +287,7 @@ async function openChannelViaWss(robotId, robotName, label, opts) {
       reject(err);
     };
     const timer = setTimeout(() => {
-      fail(new Error(`Couldn't reach the robot's WebRTC peer within 60 s. Is ${robotType === "esp32" ? "the ESP32" : "pi-robot-rtc.service"} running?`));
+      fail(new Error("Couldn't reach the robot's WebRTC peer within 60 s. Is pi-robot-rtc.service running?"));
     }, ICE_TIMEOUT_MS);
 
     channel.addEventListener("open", () => {

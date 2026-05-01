@@ -24,7 +24,7 @@
 //   commit. For an intentional bump unrelated to assets (e.g. server-side
 //   change in an API contract), edit any cached asset (a comment will do)
 //   and the hook will pick up a new hash.
-const VERSION = "01039a67";
+const VERSION = "6e6c3dab";
 const CACHE = `dashboard-${VERSION}`;
 
 // Bootstrap files cached at install time so the dashboard can cold-boot
