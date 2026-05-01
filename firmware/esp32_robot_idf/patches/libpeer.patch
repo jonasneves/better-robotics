@@ -143,7 +143,7 @@
 
  #include "socket.h"
  #include "utils.h"
-@@ -124,9 +127,23 @@
+@@ -124,9 +127,28 @@
        break;
    }
 
@@ -165,7 +165,12 @@
 +    vTaskDelay(pdMS_TO_TICKS(3));
 +  }
 +  if (ret < 0) {
-+    LOGE("Failed to sendto: %s", strerror(errno));
++    if (errno == ENOMEM || errno == ENOBUFS) {
++      // Retries exhausted — DTLS/SCTP will retransmit anyway.
++      LOGD("sendto pool exhausted (retried %d): %s", retries, strerror(errno));
++    } else {
++      LOGE("Failed to sendto: %s", strerror(errno));
++    }
 +    return -1;
    }
 
