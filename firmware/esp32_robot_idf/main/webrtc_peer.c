@@ -26,6 +26,11 @@ static const char *TAG = "rtc";
 
 static esp_peer_handle_t s_peer;
 static uint16_t s_active_offer_conn = 0;
+// MID captured from the offer's a=group:BUNDLE line. esp_peer's answer
+// hardcodes mid="0" / BUNDLE "0" but Chrome strictly requires the
+// answer's BUNDLE/mid values to match the offer's (e.g. "datachannel").
+// We rewrite the answer SDP in on_peer_msg before forwarding over BLE.
+static char s_offer_mid[32] = "0";
 
 // Channel-id cache. esp_peer notifies us via on_channel_open with the
 // label and the SCTP stream id; we look up by label later when we
@@ -41,6 +46,7 @@ static QueueHandle_t s_events;
 static TaskHandle_t  s_loop_task;
 
 static void stop_video_streaming(void);
+static char *rewrite_answer_mid(const char *answer, const char *target_mid);
 
 // ── BLE signaling ────────────────────────────────────────────────────────
 
@@ -308,16 +314,47 @@ static int on_peer_state(esp_peer_state_t state, void *ctx) {
 // We ship SDP back over BLE; ignore trickle candidates because the
 // answer SDP includes them all by the time esp_peer emits it (with the
 // default impl, anyway).
+// Log m=, a=group:, a=mid: lines from an SDP for diagnosing m-line and
+// MID mismatch between offer and answer (Chrome rejects answers whose
+// m-lines or MIDs don't match the offer's order).
+static void log_sdp_mlines(const char *tag, const char *sdp) {
+    const char *p = sdp;
+    int n = 0;
+    const char *prefixes[] = { "\nm=", "\na=group:", "\na=mid:" };
+    while (*p) {
+        const char *next = NULL;
+        for (size_t i = 0; i < sizeof(prefixes)/sizeof(prefixes[0]); i++) {
+            const char *q = strstr(p, prefixes[i]);
+            if (q && (!next || q < next)) next = q;
+        }
+        if (!next) break;
+        p = next + 1;  // skip the \n
+        const char *eol = strchr(p, '\r');
+        if (!eol) eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        if (len > 100) len = 100;
+        ESP_LOGI(TAG, "  %s[%d]: %.*s", tag, n++, (int)len, p);
+        p = eol ? eol : p + len;
+    }
+}
+
 static int on_peer_msg(esp_peer_msg_t *msg, void *ctx) {
     if (!msg || !msg->data || msg->size <= 0) return 0;
     if (msg->type == ESP_PEER_MSG_TYPE_SDP) {
         ESP_LOGI(TAG, "esp_peer emitted SDP, %u B", (unsigned)msg->size);
-        // Null-terminate defensively; esp_peer is supposed to but no harm.
         char *sdp = malloc(msg->size + 1);
         if (!sdp) return -1;
         memcpy(sdp, msg->data, msg->size);
         sdp[msg->size] = 0;
-        send_answer_via_ble(sdp);
+        log_sdp_mlines("answer", sdp);
+        char *fixed = rewrite_answer_mid(sdp, s_offer_mid);
+        if (fixed) {
+            log_sdp_mlines("answer-fixed", fixed);
+            send_answer_via_ble(fixed);
+            free(fixed);
+        } else {
+            send_answer_via_ble(sdp);  // fallback if alloc failed
+        }
         free(sdp);
     } else if (msg->type == ESP_PEER_MSG_TYPE_CANDIDATE) {
         ESP_LOGD(TAG, "esp_peer emitted ICE candidate (ignored — no trickle over BLE)");
@@ -406,8 +443,60 @@ static char *filter_sdp_for_chip(const char *sdp) {
     return out;
 }
 
+// Pull the first MID out of "a=group:BUNDLE <mid>[ <mid>...]" so we can
+// substitute it into esp_peer's answer (which always uses "0").
+static void capture_offer_mid(const char *sdp) {
+    const char *gb = strstr(sdp, "a=group:BUNDLE ");
+    if (!gb) return;
+    gb += 15;
+    const char *eol = strchr(gb, '\r');
+    if (!eol) eol = strchr(gb, '\n');
+    if (!eol || eol <= gb) return;
+    size_t len = (size_t)(eol - gb);
+    const char *space = memchr(gb, ' ', len);
+    if (space) len = (size_t)(space - gb);
+    if (len == 0 || len >= sizeof(s_offer_mid)) return;
+    memcpy(s_offer_mid, gb, len);
+    s_offer_mid[len] = 0;
+    ESP_LOGI(TAG, "captured offer MID: %s", s_offer_mid);
+}
+
+// Rewrite "a=group:BUNDLE 0" and "a=mid:0" in esp_peer's answer to use
+// the offer's MID. Returns malloc'd buffer; caller frees. NULL on OOM.
+static char *rewrite_answer_mid(const char *answer, const char *target_mid) {
+    size_t old_len = strlen(answer);
+    size_t target_len = strlen(target_mid);
+    char *out = malloc(old_len + 64);
+    if (!out) return NULL;
+    size_t o = 0;
+    const char *p = answer;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t line_len = eol ? (size_t)(eol - p + 1) : strlen(p);
+        const char *prefix = NULL;
+        size_t prefix_len = 0;
+        if (strncmp(p, "a=group:BUNDLE ", 15) == 0) { prefix = "a=group:BUNDLE "; prefix_len = 15; }
+        else if (strncmp(p, "a=mid:", 6) == 0)       { prefix = "a=mid:";          prefix_len = 6;  }
+        if (prefix) {
+            memcpy(out + o, prefix, prefix_len);  o += prefix_len;
+            memcpy(out + o, target_mid, target_len); o += target_len;
+            if (eol && eol > p && *(eol - 1) == '\r') out[o++] = '\r';
+            out[o++] = '\n';
+        } else {
+            memcpy(out + o, p, line_len);
+            o += line_len;
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    out[o] = 0;
+    return out;
+}
+
 static void handle_offer(const char *sdp) {
     ESP_LOGI(TAG, "handle_offer: sdp len=%u", (unsigned)strlen(sdp));
+    log_sdp_mlines("offer", sdp);
+    capture_offer_mid(sdp);
     if (s_peer) {
         stop_video_streaming();
         esp_peer_close(s_peer);
@@ -507,9 +596,12 @@ static void loop_task_fn(void *arg) {
 
 void webrtc_peer_init(const char *robot_name) {
     (void)robot_name;
-    // Pre-generate DTLS cert at boot — moves the ~800 ms gen out of the
-    // 30 s BLE handshake window so the answer comes back fast.
-    esp_peer_pre_generate_cert();
+    // esp_peer_pre_generate_cert() intentionally NOT called: when called
+    // here at boot it monopolized the CPU long enough that NimBLE's host
+    // task got starved during the dashboard's post-connect GATT discovery
+    // — only attr=8 subscribed before Chrome timed out (reason 531). The
+    // cert will generate on first handle_offer instead; that's fine since
+    // BLE signaling already takes a few seconds.
 
     s_events = xQueueCreate(8, sizeof(event_t));
     if (!s_events) { ESP_LOGE(TAG, "queue create failed"); return; }
