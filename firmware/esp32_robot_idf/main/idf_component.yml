@@ -5,12 +5,17 @@
 ## SCTP usage in particular has been sensitive to mbedTLS version changes.
 
 dependencies:
-  # WebRTC peer (sepfy/libpeer). The same C library used by the Pi side
-  # decision in working.md item I, so the wire format / behavior matches.
-  # Component-manager source pulls from GitHub at the pinned commit.
-  libpeer:
-    git: https://github.com/sepfy/libpeer.git
-    version: "9319aa434cb9"
+  # WebRTC peer — Espressif's esp_peer (libpeer descendant maintained by
+  # Espressif with RTP/SRTP video, non-blocking send, triggered ICE
+  # checks, NACK + jitter buffer). Migrated from sepfy/libpeer in
+  # 2026-05 because libpeer's hand-rolled SCTP burst-send pattern hit
+  # ENOMEM on lwIP's pbuf pool, sequential ICE pairing took 60s+, and
+  # DTLS state machine was fragile on hostile networks.
+  # Pinned to 1.3.0 — highest version whose pre-built libpeer_default.a
+  # links against ESP-IDF v5.3.1. 1.3.1+ and 1.2.7 are built against
+  # IDF v5.5+ which exports `esp_log` as a function symbol; v5.3 doesn't.
+  # Either bump IDF or stay on 1.3.0; staying on 1.3.0 for now.
+  espressif/esp_peer: "1.3.0"
 
   # Camera driver. Espressif official component.
   espressif/esp32-camera: "^2.0.15"

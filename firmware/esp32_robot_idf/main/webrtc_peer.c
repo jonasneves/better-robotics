@@ -11,8 +11,9 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#include "peer.h"
-#include "peer_connection.h"
+#include "esp_peer.h"
+#include "esp_peer_default.h"
+#include "esp_peer_types.h"
 
 #include "esp_camera.h"
 
@@ -23,38 +24,29 @@
 
 static const char *TAG = "rtc";
 
-static PeerConnection *s_pc;
-
-// Loop task drains events from the BLE-signaling handler and pumps
-// libpeer. Single-threaded ownership of s_pc avoids a mutex around
-// every state-machine tick.
-typedef enum {
-    EV_OFFER_BLE,
-    EV_ICE,
-} event_type_t;
-
-// BLE-only: the conn handle of the central that wrote the offer. The
-// answer notify routes here, not to ble_host_active_conn() (which is
-// the most-recent connection — wrong when two browsers are both
-// BLE-connected concurrently).
+static esp_peer_handle_t s_peer;
 static uint16_t s_active_offer_conn = 0;
 
-typedef struct {
-    event_type_t type;
-    char *payload;   // malloc'd; freed by handler
-} event_t;
+// Channel-id cache. esp_peer notifies us via on_channel_open with the
+// label and the SCTP stream id; we look up by label later when we
+// need to send (e.g. video pump finds "video"'s sid).
+static uint16_t s_video_sid = 0;
+static bool     s_video_sid_known = false;
+static uint16_t s_ota_sid = 0;
+static bool     s_ota_sid_known = false;
 
+typedef enum { EV_OFFER_BLE } event_type_t;
+typedef struct { event_type_t type; char *payload; } event_t;
 static QueueHandle_t s_events;
-static TaskHandle_t s_loop_task;
+static TaskHandle_t  s_loop_task;
+
+static void stop_video_streaming(void);
 
 // ── BLE signaling ────────────────────────────────────────────────────────
 
-#define BLE_SIG_MAX_OFFER 8192    // SDP rarely exceeds 5 KB; cap defends RAM
-#define BLE_SIG_CHUNK     100     // small enough to fit any plausible MTU
+#define BLE_SIG_MAX_OFFER 8192
+#define BLE_SIG_CHUNK     100
 
-// Reassembly buffer for incoming chunked offer. Owned by the BLE host
-// task between begin and commit; ownership transfers to the loop task on
-// commit (queued via EV_OFFER_BLE).
 static char *s_ble_offer_buf = NULL;
 static size_t s_ble_offer_total = 0;
 static size_t s_ble_offer_received = 0;
@@ -86,9 +78,6 @@ static void send_answer_via_ble(const char *sdp) {
         memcpy(chunk + 1, sdp + offset, take);
         gatt_svr_signal_send(s_active_offer_conn, chunk, 1 + take);
         offset += take;
-        // Pace notifies — same reasoning as snapshot's 40 ms gap, but our
-        // chunk size is much smaller so 5 ms is enough for the BLE tx
-        // queue to drain between sends.
         vTaskDelay(pdMS_TO_TICKS(5));
     }
     uint8_t commit[1] = { 0x03 };
@@ -102,9 +91,6 @@ void webrtc_peer_handle_ble_signal_write(uint16_t from_conn, const uint8_t *buf,
     uint8_t op = buf[0];
     if (op == 0x01) {
         if (len < 3) { send_ble_signal_error("bad begin"); return; }
-        // Bind the answer to this writer's conn for the rest of the
-        // handshake. Captured here (not at op==0x03) so error frames
-        // sent during reassembly route to the right central.
         s_active_offer_conn = from_conn;
         size_t total = ((size_t)buf[1] << 8) | buf[2];
         ESP_LOGI(TAG, "ble signal: begin total=%u conn=%u",
@@ -115,19 +101,14 @@ void webrtc_peer_handle_ble_signal_write(uint16_t from_conn, const uint8_t *buf,
         }
         free(s_ble_offer_buf);
         s_ble_offer_buf = malloc(total + 1);
-        if (!s_ble_offer_buf) {
-            send_ble_signal_error("oom");
-            s_ble_offer_total = 0;
-            return;
-        }
+        if (!s_ble_offer_buf) { send_ble_signal_error("oom"); s_ble_offer_total = 0; return; }
         s_ble_offer_total = total;
         s_ble_offer_received = 0;
     } else if (op == 0x02) {
         if (!s_ble_offer_buf) return;
         size_t add = len - 1;
         if (s_ble_offer_received + add > s_ble_offer_total) {
-            free(s_ble_offer_buf);
-            s_ble_offer_buf = NULL;
+            free(s_ble_offer_buf); s_ble_offer_buf = NULL;
             send_ble_signal_error("chunk overflow");
             return;
         }
@@ -135,17 +116,13 @@ void webrtc_peer_handle_ble_signal_write(uint16_t from_conn, const uint8_t *buf,
         s_ble_offer_received += add;
     } else if (op == 0x03) {
         if (!s_ble_offer_buf || s_ble_offer_received != s_ble_offer_total) {
-            free(s_ble_offer_buf);
-            s_ble_offer_buf = NULL;
+            free(s_ble_offer_buf); s_ble_offer_buf = NULL;
             send_ble_signal_error("offer incomplete");
             return;
         }
         ESP_LOGI(TAG, "ble signal: commit, offer assembled %u B",
                  (unsigned)s_ble_offer_total);
         s_ble_offer_buf[s_ble_offer_total] = 0;
-        // Hand ownership to the loop task via the event queue. If queue
-        // send fails, free here; otherwise the loop task frees after
-        // handling.
         event_t ev = { .type = EV_OFFER_BLE, .payload = s_ble_offer_buf };
         if (xQueueSend(s_events, &ev, 0) != pdTRUE) {
             ESP_LOGW(TAG, "event queue full; dropping BLE offer");
@@ -157,33 +134,17 @@ void webrtc_peer_handle_ble_signal_write(uint16_t from_conn, const uint8_t *buf,
     }
 }
 
-// ── peer connection lifecycle ────────────────────────────────────────────
-
-static void stop_video_streaming(void);
-
-static void on_state_change(PeerConnectionState state, void *ud) {
-    ESP_LOGI(TAG, "pc state: %s", peer_connection_state_to_string(state));
-    if (state == PEER_CONNECTION_DISCONNECTED
-        || state == PEER_CONNECTION_FAILED
-        || state == PEER_CONNECTION_CLOSED) {
-        stop_video_streaming();
-    }
-}
-
 // ── data channels ────────────────────────────────────────────────────────
-//
-// libpeer's onmessage callback drops the SCTP PPID (text vs binary) before
-// invoking us — peer_connection.h's signature has no type field. We
-// disambiguate by content: control frames are JSON starting with `{`,
-// payload chunks are arbitrary bytes. ESP32 firmware bins start with the
-// 0xE9 magic; JPEG frames start with 0xFFD8; neither collides with `{`
-// (0x7B). Same heuristic as several other libpeer ESP32 integrations.
 
-static void send_dc_text(const char *label, const char *text) {
-    if (!s_pc) return;
-    uint16_t sid;
-    if (peer_connection_lookup_sid(s_pc, (char *)label, &sid) != 0) return;
-    peer_connection_datachannel_send_sid(s_pc, (char *)text, strlen(text), sid);
+static void send_dc_text(uint16_t sid, const char *text) {
+    if (!s_peer) return;
+    esp_peer_data_frame_t df = {
+        .type = ESP_PEER_DATA_CHANNEL_STRING,
+        .stream_id = sid,
+        .data = (uint8_t *)text,
+        .size = strlen(text),
+    };
+    esp_peer_send_data(s_peer, &df);
 }
 
 static void handle_ota_dc(const char *msg, size_t len) {
@@ -197,22 +158,16 @@ static void handle_ota_dc(const char *msg, size_t len) {
             if (strcmp(t, "begin") == 0) {
                 cJSON *size = cJSON_GetObjectItem(root, "size");
                 size_t total = cJSON_IsNumber(size) ? (size_t)size->valuedouble : 0;
-                if (ota_http_begin(total) != ESP_OK) {
-                    send_dc_text("ota", "{\"type\":\"error\",\"error\":\"ota_begin failed\"}");
+                if (ota_http_begin(total) != ESP_OK && s_ota_sid_known) {
+                    send_dc_text(s_ota_sid, "{\"type\":\"error\",\"error\":\"ota_begin failed\"}");
                 }
             } else if (strcmp(t, "commit") == 0) {
-                if (ota_http_commit() == ESP_OK) {
-                    // Match the Pi's reply shape so dashboard parsing
-                    // doesn't need a per-platform branch. The follow-up
-                    // BLE apply-staged-ota verb won't reach us before
-                    // schedule_restart fires (500 ms) — chip reboots
-                    // straight into the new firmware. Dashboard sees a
-                    // BLE write fail; the next reconnect shows the new
-                    // version. Acceptable until the dashboard branches
-                    // on fwType to skip the apply step for ESP32.
-                    send_dc_text("ota", "{\"type\":\"staged\"}");
-                } else {
-                    send_dc_text("ota", "{\"type\":\"error\",\"error\":\"ota_commit failed\"}");
+                if (s_ota_sid_known) {
+                    if (ota_http_commit() == ESP_OK) {
+                        send_dc_text(s_ota_sid, "{\"type\":\"staged\"}");
+                    } else {
+                        send_dc_text(s_ota_sid, "{\"type\":\"error\",\"error\":\"ota_commit failed\"}");
+                    }
                 }
             } else if (strcmp(t, "abort") == 0) {
                 ota_http_abort();
@@ -220,74 +175,43 @@ static void handle_ota_dc(const char *msg, size_t len) {
         }
         cJSON_Delete(root);
     } else {
-        // Binary chunk — append to OTA partition.
-        if (ota_http_write((const uint8_t *)msg, len) != ESP_OK) {
-            send_dc_text("ota", "{\"type\":\"error\",\"error\":\"ota_write failed\"}");
+        if (ota_http_write((const uint8_t *)msg, len) != ESP_OK && s_ota_sid_known) {
+            send_dc_text(s_ota_sid, "{\"type\":\"error\",\"error\":\"ota_write failed\"}");
         }
     }
 }
 
 // ── video over data channel ──────────────────────────────────────────────
 //
-// Browsers can't decode MJPEG WebRTC video tracks (only VP8/VP9/H.264/AV1
-// are negotiable codecs), so we route JPEG frames as binary on a data
-// channel instead. Dashboard receives ArrayBuffers and renders via
-// URL.createObjectURL or a 2D canvas. Same end-to-end behavior as
-// /stream over HTTP, but P2P + no Mixed Content / PNA fragility.
+// Chunked binary blobs on a data channel labeled "video". Browser
+// reassembles by frame_id (mjpeg-stream.js). esp_peer's send_data
+// returns ESP_PEER_ERR_WOULD_BLOCK on backpressure — we still pace
+// chunks with vTaskDelay(2) since the radio is the real bottleneck.
 //
-// Single SCTP message per frame; SCTP's universal floor is 16 KB, so the
-// camera profile must stay at compact (QVGA q=15, ~5-10 KB) for reliable
-// delivery. Standard/full can exceed the limit and fragment unreliably.
-//
-// The frame pump runs INSIDE rtc_loop_task instead of its own task — by
-// the time a video session starts, internal DRAM is fragmented enough
-// that no contiguous 4 KB block remains for a fresh task stack, and an
-// SPIRAM-stacked task panics during DTLS/SRTP encrypt (cache-coherence
-// quirks on classic ESP32). Pacing by esp_timer_get_time() keeps it
-// independent of vTaskDelay quantization.
+// Wire format per chunk:
+//   [0..1] frame_id u16 BE   [2] chunk_idx   [3] total_chunks   [4..] payload
 
-static volatile bool s_video_active = false;
-static int s_video_fps = 10;
-static int64_t s_video_last_frame_us = 0;
-static uint16_t s_video_frame_id = 0;
-
-// Chunk size below SCTP_MTU=1200 minus DTLS+header overhead — each
-// peer_connection_datachannel_send_sid hits one lwIP pbuf, no fragmentation
-// burst, no pool-exhaustion cascade. Browser reassembles by frame_id.
-//
-// Wire format per chunk (binary on data channel):
-//   [0..1] frame_id  u16 BE
-//   [2]    chunk_idx u8
-//   [3]    total_chunks u8
-//   [4..]  jpeg payload (≤ VIDEO_CHUNK_PAYLOAD bytes)
 #define VIDEO_CHUNK_PAYLOAD  900
 #define VIDEO_CHUNK_HEADER   4
 
-static int s_video_frame_count = 0;
+static volatile bool s_video_active = false;
+static int     s_video_fps = 10;
+static int64_t s_video_last_frame_us = 0;
+static uint16_t s_video_frame_id = 0;
+static int     s_video_frame_count = 0;
+
 static void video_pump_tick(void) {
-    if (!s_video_active || !camera_ready() || !s_pc) return;
+    if (!s_video_active || !camera_ready() || !s_peer || !s_video_sid_known) return;
     int64_t now = esp_timer_get_time();
     int64_t period_us = (int64_t)1000000 / (s_video_fps > 0 ? s_video_fps : 10);
     if (now - s_video_last_frame_us < period_us) return;
     s_video_last_frame_us = now;
 
     camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-        ESP_LOGW(TAG, "video pump: fb_get failed");
-        return;
-    }
-    uint16_t sid = 0;
-    int rc = peer_connection_lookup_sid(s_pc, "video", &sid);
-    if (rc != 0) {
-        ESP_LOGW(TAG, "video pump: lookup_sid rc=%d", rc);
-        esp_camera_fb_return(fb);
-        return;
-    }
+    if (!fb) { ESP_LOGW(TAG, "video pump: fb_get failed"); return; }
 
     size_t total_chunks = (fb->len + VIDEO_CHUNK_PAYLOAD - 1) / VIDEO_CHUNK_PAYLOAD;
     if (total_chunks > 255) {
-        // Frame too big for u8 chunk_idx field. Drop and warn — typical
-        // compact-profile JPEGs are 2-15 KB so this caps at ~225 KB.
         ESP_LOGW(TAG, "video pump: frame too big (%u B, %u chunks)",
                  (unsigned)fb->len, (unsigned)total_chunks);
         esp_camera_fb_return(fb);
@@ -306,11 +230,22 @@ static void video_pump_tick(void) {
         buf[2] = (uint8_t)chunk;
         buf[3] = (uint8_t)total_chunks;
         memcpy(buf + VIDEO_CHUNK_HEADER, fb->buf + off, plen);
-        int sent = peer_connection_datachannel_send_sid(
-            s_pc, (char *)buf, VIDEO_CHUNK_HEADER + plen, sid);
-        if (sent <= 0 || (size_t)sent < VIDEO_CHUNK_HEADER + plen) full_send = false;
-        // Yield between chunks so lwIP's pbuf pool drains. 2ms × ~5
-        // chunks = 10ms total send time, well within 200ms/frame at 5fps.
+        esp_peer_data_frame_t df = {
+            .type = ESP_PEER_DATA_CHANNEL_DATA,
+            .stream_id = s_video_sid,
+            .data = buf,
+            .size = VIDEO_CHUNK_HEADER + plen,
+        };
+        int rc = esp_peer_send_data(s_peer, &df);
+        // WOULD_BLOCK = esp_peer's tx queue full; brief yield + retry.
+        // After a few retries, drop the chunk (frame will be incomplete;
+        // browser drops by frame_id mismatch on next frame).
+        int retries = 0;
+        while (rc == ESP_PEER_ERR_WOULD_BLOCK && retries++ < 5) {
+            vTaskDelay(pdMS_TO_TICKS(3));
+            rc = esp_peer_send_data(s_peer, &df);
+        }
+        if (rc != ESP_PEER_ERR_NONE) full_send = false;
         if (chunk + 1 < total_chunks) vTaskDelay(pdMS_TO_TICKS(2));
     }
 
@@ -318,7 +253,7 @@ static void video_pump_tick(void) {
     if ((s_video_frame_count % 10) == 0) {
         ESP_LOGI(TAG, "video pump: frame #%d (id=%u), %u B in %u chunks → sid=%u %s",
                  s_video_frame_count, s_video_frame_id, (unsigned)fb->len,
-                 (unsigned)total_chunks, sid, full_send ? "ok" : "partial");
+                 (unsigned)total_chunks, s_video_sid, full_send ? "ok" : "partial");
     }
     esp_camera_fb_return(fb);
 }
@@ -326,7 +261,7 @@ static void video_pump_tick(void) {
 static void start_video_streaming(int fps) {
     s_video_fps = (fps > 0 && fps <= 30) ? fps : 10;
     s_video_active = true;
-    s_video_last_frame_us = 0;  // fire on the next loop tick
+    s_video_last_frame_us = 0;
     ESP_LOGI(TAG, "video stream started, fps=%d", s_video_fps);
 }
 
@@ -336,17 +271,12 @@ static void stop_video_streaming(void) {
 }
 
 static void handle_video_dc(const char *msg, size_t len) {
-    ESP_LOGI(TAG, "video dc msg: %.*s", (int)(len > 80 ? 80 : len), msg);
     if (len == 0 || msg[0] != '{') return;
     cJSON *root = cJSON_ParseWithLength(msg, len);
-    if (!root) {
-        ESP_LOGW(TAG, "video dc: bad json");
-        return;
-    }
+    if (!root) return;
     cJSON *type = cJSON_GetObjectItem(root, "type");
     if (cJSON_IsString(type)) {
         const char *t = type->valuestring;
-        ESP_LOGI(TAG, "video dc type=%s", t);
         if (strcmp(t, "start") == 0) {
             cJSON *fps = cJSON_GetObjectItem(root, "fps");
             int f = cJSON_IsNumber(fps) ? (int)fps->valuedouble : 10;
@@ -358,39 +288,79 @@ static void handle_video_dc(const char *msg, size_t len) {
     cJSON_Delete(root);
 }
 
-static void on_dc_message(char *msg, size_t len, void *ud, uint16_t sid) {
-    if (!s_pc) {
-        ESP_LOGW(TAG, "dc msg sid=%u len=%u: no PC", (unsigned)sid, (unsigned)len);
-        return;
+// ── esp_peer callbacks ───────────────────────────────────────────────────
+
+static int on_peer_state(esp_peer_state_t state, void *ctx) {
+    ESP_LOGI(TAG, "esp_peer state: %d", (int)state);
+    if (state == ESP_PEER_STATE_DISCONNECTED ||
+        state == ESP_PEER_STATE_CLOSED ||
+        state == ESP_PEER_STATE_CONNECT_FAILED ||
+        state == ESP_PEER_STATE_DATA_CHANNEL_CLOSED ||
+        state == ESP_PEER_STATE_DATA_CHANNEL_DISCONNECTED) {
+        stop_video_streaming();
+        s_video_sid_known = false;
+        s_ota_sid_known   = false;
     }
-    char *label = peer_connection_lookup_sid_label(s_pc, sid);
-    ESP_LOGI(TAG, "dc msg sid=%u len=%u label=%s",
-             (unsigned)sid, (unsigned)len, label ? label : "<null>");
-    if (!label) return;
-    if (strcmp(label, "ota") == 0) {
-        handle_ota_dc(msg, len);
-    } else if (strcmp(label, "video") == 0) {
-        handle_video_dc(msg, len);
-    }
-    // Other labels (logs, ops) drop here — wire in 2.D.2.x as needed.
+    return 0;
 }
 
-static void on_dc_open(void *ud)  { ESP_LOGI(TAG, "data channel opened"); }
-static void on_dc_close(void *ud) {
-    ESP_LOGI(TAG, "data channel closed");
-    // Stop video on any close — single-PC model means a closed channel
-    // is effectively session end.
+// Outbound message from esp_peer — answer SDP or trickle ICE candidate.
+// We ship SDP back over BLE; ignore trickle candidates because the
+// answer SDP includes them all by the time esp_peer emits it (with the
+// default impl, anyway).
+static int on_peer_msg(esp_peer_msg_t *msg, void *ctx) {
+    if (!msg || !msg->data || msg->size <= 0) return 0;
+    if (msg->type == ESP_PEER_MSG_TYPE_SDP) {
+        ESP_LOGI(TAG, "esp_peer emitted SDP, %u B", (unsigned)msg->size);
+        // Null-terminate defensively; esp_peer is supposed to but no harm.
+        char *sdp = malloc(msg->size + 1);
+        if (!sdp) return -1;
+        memcpy(sdp, msg->data, msg->size);
+        sdp[msg->size] = 0;
+        send_answer_via_ble(sdp);
+        free(sdp);
+    } else if (msg->type == ESP_PEER_MSG_TYPE_CANDIDATE) {
+        ESP_LOGD(TAG, "esp_peer emitted ICE candidate (ignored — no trickle over BLE)");
+    }
+    return 0;
+}
+
+static int on_peer_channel_open(esp_peer_data_channel_info_t *ch, void *ctx) {
+    if (!ch || !ch->label) return 0;
+    ESP_LOGI(TAG, "data channel open: label=%s sid=%u", ch->label, ch->stream_id);
+    if (strcmp(ch->label, "video") == 0) {
+        s_video_sid = ch->stream_id;
+        s_video_sid_known = true;
+    } else if (strcmp(ch->label, "ota") == 0) {
+        s_ota_sid = ch->stream_id;
+        s_ota_sid_known = true;
+    }
+    return 0;
+}
+
+static int on_peer_channel_close(esp_peer_data_channel_info_t *ch, void *ctx) {
+    if (ch && ch->label) ESP_LOGI(TAG, "data channel close: label=%s", ch->label);
     stop_video_streaming();
+    return 0;
 }
 
-// Strip lines libpeer can't process from the offer SDP. Dashboard now
-// emits Cloudflare TURN candidates (TCP + TLS, plus IPv6 if the host
-// has it); libpeer's UDP-only ICE agent panicked on LoadProhibited
-// while parsing them ("Only UDP transport is supported" was the last
-// error before the crash). Net-out: keep IPv4 UDP candidates only,
-// drop everything else. The output buffer is sized for the input plus
-// terminator — we only ever shrink. Caller frees out.
-static char *filter_sdp_for_libpeer(const char *sdp) {
+static int on_peer_data(esp_peer_data_frame_t *frame, void *ctx) {
+    if (!frame || !frame->data) return 0;
+    if (s_video_sid_known && frame->stream_id == s_video_sid) {
+        handle_video_dc((const char *)frame->data, frame->size);
+    } else if (s_ota_sid_known && frame->stream_id == s_ota_sid) {
+        handle_ota_dc((const char *)frame->data, frame->size);
+    }
+    return 0;
+}
+
+// ── peer connection lifecycle ────────────────────────────────────────────
+
+// Strip lines libpeer's parser couldn't process from the offer SDP. esp_peer
+// is more robust but we keep the filter — TCP candidates and IPv6 candidates
+// can't be used by the chip on this network (no v6, libpeer-era TURN client
+// was UDP-only). Cheap defensive cleanup.
+static char *filter_sdp_for_chip(const char *sdp) {
     size_t in_len = strlen(sdp);
     char *out = malloc(in_len + 1);
     if (!out) return NULL;
@@ -400,10 +370,8 @@ static char *filter_sdp_for_libpeer(const char *sdp) {
     while (*p) {
         const char *eol = strchr(p, '\n');
         size_t line_len = eol ? (size_t)(eol - p + 1) : strlen(p);
-        // a=candidate:... <foundation> <component> <proto> <pri> <addr> <port> typ <type> ...
         bool drop = false;
         if (strncmp(p, "a=candidate:", 12) == 0) {
-            // Find the proto field (4th whitespace-separated token).
             const char *q = p + 12;
             int tok = 0;
             while (q < p + line_len && tok < 2) {
@@ -411,14 +379,11 @@ static char *filter_sdp_for_libpeer(const char *sdp) {
                 while (q < p + line_len && *q == ' ') q++;
                 tok++;
             }
-            // q now points at proto. tcp/TCP candidates: drop.
             if (q < p + line_len && (q[0] == 't' || q[0] == 'T')
                                   && (q[1] == 'c' || q[1] == 'C')
                                   && (q[2] == 'p' || q[2] == 'P')) {
                 drop = true;
             } else {
-                // IPv6 detection: address comes 2 fields after proto. Walk
-                // to it and check for a colon (IPv4 has dots, IPv6 has colons).
                 int adv = 0;
                 while (q < p + line_len && adv < 3) {
                     while (q < p + line_len && *q != ' ') q++;
@@ -427,20 +392,12 @@ static char *filter_sdp_for_libpeer(const char *sdp) {
                 }
                 if (q < p + line_len && memchr(q, ':',
                         (size_t)((p + line_len) - q)) != NULL) {
-                    // Cheap heuristic: candidate addr field with a colon = IPv6.
-                    // (IPv4 dotted-quad never has ':'.) Dropping IPv6 even when
-                    // libpeer might have parsed it — UDP-only stack means we
-                    // don't gain anything from v6 anyway.
                     drop = true;
                 }
             }
         }
-        if (drop) {
-            dropped++;
-        } else {
-            memcpy(out + o, p, line_len);
-            o += line_len;
-        }
+        if (drop) dropped++;
+        else { memcpy(out + o, p, line_len); o += line_len; }
         if (!eol) break;
         p = eol + 1;
     }
@@ -451,88 +408,84 @@ static char *filter_sdp_for_libpeer(const char *sdp) {
 
 static void handle_offer(const char *sdp) {
     ESP_LOGI(TAG, "handle_offer: sdp len=%u", (unsigned)strlen(sdp));
-    if (s_pc) {
-        // Last-window-wins: a second browser opening WebRTC kicks the
-        // first one's session. The video pump references s_pc on every
-        // tick, so stop it BEFORE close/destroy or it'll dereference a
-        // freed handle. Brief delay lets libpeer's ICE/DTLS sockets
-        // unbind before the new agent gathers candidates on the same
-        // ports — without it the new ICE times out (observed on a 2nd
-        // incognito window post-2.F.2).
+    if (s_peer) {
         stop_video_streaming();
-        peer_connection_close(s_pc);
-        peer_connection_destroy(s_pc);
-        s_pc = NULL;
+        esp_peer_close(s_peer);
+        s_peer = NULL;
+        s_video_sid_known = false;
+        s_ota_sid_known   = false;
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
-    // STUN + Cloudflare TURN (UDP only — libpeer's TURN client doesn't
-    // do TCP). turn_creds runs in the background and may not have minted
-    // credentials yet (WiFi just up, proxy slow, etc.); on miss we fall
-    // through to STUN-only and the chip works on LAN-friendly networks
-    // but fails on apartment-WiFi-shaped client-isolated/CGNAT ones.
-    // turn_url is pre-resolved to an IP literal so libpeer's create_answer
-    // doesn't synchronously getaddrinfo() inside the BLE 30s window.
-    PeerConfiguration cfg = {
-        .video_codec = CODEC_NONE,    // 2.D.3 routes frames as binary on a data channel
-        .audio_codec = CODEC_NONE,
-        .datachannel = DATA_CHANNEL_BINARY,
+    // ICE servers — STUN baseline + Cloudflare TURN if creds are ready.
+    // turn_url is pre-resolved to an IP literal (turn_creds.c) so the
+    // peer's gather doesn't synchronously getaddrinfo() in the BLE
+    // signaling window.
+    static esp_peer_ice_server_cfg_t servers[2];
+    int n_servers = 0;
+    servers[n_servers++] = (esp_peer_ice_server_cfg_t){
+        .stun_url = (char *)"stun:stun.l.google.com:19302",
     };
-    cfg.ice_servers[0].urls = "stun:stun.l.google.com:19302";
     const char *turn_user = turn_creds_username();
     const char *turn_pass = turn_creds_credential();
     const char *turn_url  = turn_creds_url();
     if (turn_user && turn_pass && turn_url) {
-        cfg.ice_servers[1].urls       = turn_url;
-        cfg.ice_servers[1].username   = turn_user;
-        cfg.ice_servers[1].credential = turn_pass;
+        servers[n_servers++] = (esp_peer_ice_server_cfg_t){
+            .stun_url = (char *)turn_url,
+            .user     = (char *)turn_user,
+            .psw      = (char *)turn_pass,
+        };
         ESP_LOGI(TAG, "ice_servers: STUN + Cloudflare TURN(%s)", turn_url);
     } else {
         ESP_LOGW(TAG, "ice_servers: STUN-only (turn_creds not ready)");
     }
-    s_pc = peer_connection_create(&cfg);
-    if (!s_pc) {
-        ESP_LOGE(TAG, "peer_connection_create failed");
+
+    esp_peer_cfg_t cfg = {
+        .role                = ESP_PEER_ROLE_CONTROLLED,    // we're the answerer
+        .audio_dir           = ESP_PEER_MEDIA_DIR_NONE,
+        .video_dir           = ESP_PEER_MEDIA_DIR_NONE,     // video rides the data channel
+        .enable_data_channel = true,
+        .server_lists        = servers,
+        .server_num          = n_servers,
+        .on_state            = on_peer_state,
+        .on_msg              = on_peer_msg,
+        .on_data             = on_peer_data,
+        .on_channel_open     = on_peer_channel_open,
+        .on_channel_close    = on_peer_channel_close,
+    };
+
+    int rc = esp_peer_open(&cfg, esp_peer_get_default_impl(), &s_peer);
+    if (rc != ESP_PEER_ERR_NONE || !s_peer) {
+        ESP_LOGE(TAG, "esp_peer_open failed: %d", rc);
+        send_ble_signal_error("esp_peer_open failed");
         return;
     }
-    peer_connection_oniceconnectionstatechange(s_pc, on_state_change);
-    peer_connection_ondatachannel(s_pc, on_dc_message, on_dc_open, on_dc_close);
 
-    ESP_LOGI(TAG, "handle_offer: setting remote description");
-    char *filtered = filter_sdp_for_libpeer(sdp);
-    peer_connection_set_remote_description(s_pc, filtered ? filtered : sdp, SDP_TYPE_OFFER);
+    // Inject the remote offer. esp_peer will gather candidates and emit
+    // the local SDP via on_peer_msg → send_answer_via_ble (async).
+    char *filtered = filter_sdp_for_chip(sdp);
+    const char *sdp_in = filtered ? filtered : sdp;
+    esp_peer_msg_t msg = {
+        .type = ESP_PEER_MSG_TYPE_SDP,
+        .data = (uint8_t *)sdp_in,
+        .size = (int)strlen(sdp_in),
+    };
+    rc = esp_peer_send_msg(s_peer, &msg);
     free(filtered);
-    ESP_LOGI(TAG, "handle_offer: creating answer");
-    const char *answer = peer_connection_create_answer(s_pc);
-    if (!answer || !answer[0]) {
-        ESP_LOGE(TAG, "create_answer empty");
-        send_ble_signal_error("create_answer failed");
+    if (rc != ESP_PEER_ERR_NONE) {
+        ESP_LOGE(TAG, "esp_peer_send_msg(SDP) failed: %d", rc);
+        send_ble_signal_error("send_msg failed");
         return;
     }
-    ESP_LOGI(TAG, "handle_offer: answer ready, %u B", (unsigned)strlen(answer));
-    send_answer_via_ble(answer);
-}
 
-static void handle_ice(const char *candidate) {
-    if (!s_pc || !candidate || !candidate[0]) return;
-    // libpeer takes a non-const char *; the API doesn't mutate but we
-    // need a writable copy.
-    char *copy = strdup(candidate);
-    if (!copy) return;
-    peer_connection_add_ice_candidate(s_pc, copy);
-    free(copy);
-}
-
-// ── inbound dispatcher ───────────────────────────────────────────────────
-
-static void post_event(event_type_t t, const char *str) {
-    if (!str) return;
-    char *copy = strdup(str);
-    if (!copy) return;
-    event_t ev = { .type = t, .payload = copy };
-    if (xQueueSend(s_events, &ev, 0) != pdTRUE) {
-        free(copy);
+    rc = esp_peer_new_connection(s_peer);
+    if (rc != ESP_PEER_ERR_NONE) {
+        ESP_LOGE(TAG, "esp_peer_new_connection failed: %d", rc);
+        send_ble_signal_error("new_connection failed");
+        return;
     }
+
+    ESP_LOGI(TAG, "handle_offer: SDP injected, awaiting on_msg → BLE answer");
 }
 
 // ── loop task ────────────────────────────────────────────────────────────
@@ -541,13 +494,10 @@ static void loop_task_fn(void *arg) {
     event_t ev;
     while (1) {
         while (xQueueReceive(s_events, &ev, 0) == pdTRUE) {
-            switch (ev.type) {
-                case EV_OFFER_BLE: handle_offer(ev.payload);  break;
-                case EV_ICE:       handle_ice(ev.payload);    break;
-            }
+            if (ev.type == EV_OFFER_BLE) handle_offer(ev.payload);
             free(ev.payload);
         }
-        if (s_pc) peer_connection_loop(s_pc);
+        if (s_peer) esp_peer_main_loop(s_peer);
         video_pump_tick();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -557,16 +507,15 @@ static void loop_task_fn(void *arg) {
 
 void webrtc_peer_init(const char *robot_name) {
     (void)robot_name;
-    if (peer_init() != 0) {
-        ESP_LOGE(TAG, "peer_init failed");
-        return;
-    }
+    // Pre-generate DTLS cert at boot — moves the ~800 ms gen out of the
+    // 30 s BLE handshake window so the answer comes back fast.
+    esp_peer_pre_generate_cert();
 
     s_events = xQueueCreate(8, sizeof(event_t));
     if (!s_events) { ESP_LOGE(TAG, "queue create failed"); return; }
 
-    // 8 KB stack — peer_connection_loop dives into mbedTLS / SCTP /
-    // SRTP. Bump if the DTLS handshake stack-overflows in practice.
-    xTaskCreate(loop_task_fn, "rtc_loop", 8192, NULL, 5, &s_loop_task);
-    ESP_LOGI(TAG, "rtc init: BLE-signaled WebRTC ready");
+    // 12 KB stack — esp_peer's main_loop pulls in srtp + jitter buffer
+    // beyond what libpeer needed. Bump if DTLS handshake stack-overflows.
+    xTaskCreate(loop_task_fn, "rtc_loop", 12288, NULL, 5, &s_loop_task);
+    ESP_LOGI(TAG, "rtc init: BLE-signaled WebRTC ready (esp_peer)");
 }

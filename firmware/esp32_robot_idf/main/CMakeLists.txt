@@ -34,8 +34,8 @@ idf_component_register(
         bt
         # Camera (managed component esp32-camera)
         esp32-camera
-        # WebRTC (managed component libpeer)
-        libpeer
+        # WebRTC (managed component esp_peer — Espressif's libpeer fork)
+        espressif__esp_peer
         # OTA
         app_update
         esp_https_ota
