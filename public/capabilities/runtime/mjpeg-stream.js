@@ -143,14 +143,17 @@ export function makeMjpegStreamCap(schema) {
       // "Waiting for WiFi" earns its place — the button is disabled and the
       // user needs to know why.
       const stateText = !wifi ? "Waiting for WiFi" : "";
-      // ESP32 only: transport toggle when stopped (changing it mid-stream
-      // would be a re-establish), small label when running. Inline <img>
-      // for HTTP is mixed-content-blocked on HTTPS dashboards — surface
-      // a new-tab link only in that combination, where it'd actually help.
+      // ESP32 only: transport toggle when stopped, small "via …" badge
+      // when streaming. Description for the current pick lives beneath
+      // so the closed dropdown stays compact (HIG: concise primary
+      // labels, context revealed underneath).
       const httpStreamUrl = (wifi && entry.fwType === "esp32" && entry.wifiStatus?.ip)
         ? `http://${entry.wifiStatus.ip}:81/stream` : null;
       const httpsBlocked = typeof location !== "undefined" && location.protocol === "https:";
       const showNewTabLink = transport === "http" && httpsBlocked && httpStreamUrl;
+      const transportHint = transport === "http"
+        ? "LAN only, no encryption — fastest"
+        : "Encrypted, works cross-network";
       let transportRow = "";
       if (wifi && entry.fwType === "esp32") {
         if (running) {
@@ -159,11 +162,11 @@ export function makeMjpegStreamCap(schema) {
           transportRow = `<div class="cap-profile">
              <label>Transport
                <select data-action="${actionTransport}">
-                 <option value="webrtc" ${transport === "webrtc" ? "selected" : ""}>WebRTC — encrypted, works cross-network</option>
-                 <option value="http" ${transport === "http" ? "selected" : ""}>HTTP MJPEG — LAN only, faster</option>
+                 <option value="webrtc" ${transport === "webrtc" ? "selected" : ""}>WebRTC</option>
+                 <option value="http" ${transport === "http" ? "selected" : ""}>HTTP MJPEG</option>
                </select>
              </label>
-             ${showNewTabLink ? `<span class="meta">HTTPS pages block inline HTTP — <a href="${httpStreamUrl}" target="_blank" rel="noreferrer">open in new tab ↗</a></span>` : ""}
+             <span class="meta">${transportHint}${showNewTabLink ? ` — <a href="${httpStreamUrl}" target="_blank" rel="noreferrer">open in new tab ↗</a> (HTTPS blocks inline)` : ""}</span>
            </div>`;
         }
       }
