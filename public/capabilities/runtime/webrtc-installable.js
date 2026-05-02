@@ -1,13 +1,14 @@
-// Expected schema shape:
-//   { name: "camera", type: "webrtc-installable",
-//     chars: { signal: "…d9a", status: "…d9b" },
-//     install?: { pkg: "camera", confirm: "..." } }
-// Chunked opcode protocol used on both directions (browser→robot via signal,
-// robot→browser via status notify). Install routes through the `command` cap.
+// Schema: { name: "camera", type: "webrtc-installable",
+//           chars: { signal: "…d9a", status: "…d9b" },
+//           install?: { pkg: "camera", confirm: "..." } }
+// Chunked opcode protocol both ways (browser→robot via signal,
+// robot→browser via status notify). Install via the `command` cap.
 import { UUIDS_BY_CAP, encodeJson, decodeJson } from "../../ble.js";
 import { escapeHtml } from "../../dom.js";
 import { logFor } from "../../log.js";
 import { state } from "../../state.js";
+import { fetchIceServers } from "../../pairing.js";
+import { registerExternalPc, unregisterExternalPc } from "../../webrtc-robot.js";
 import { installPackage } from "./command.js";
 import { capSection } from "./cap-section.js";
 import {
@@ -103,16 +104,17 @@ export function makeWebrtcInstallableCap(schema) {
     if (!entry[signalField] || entry[pcField]) return;
     entry[statusState] = { st: "starting" };
     renderEntry(entry);
-    const pc = new RTCPeerConnection();
+    const iceServers = await fetchIceServers();
+    const pc = new RTCPeerConnection({ iceServers });
     entry[pcField] = pc;
+    registerExternalPc(entry.id, name, pc);
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.ontrack = (e) => {
       entry[streamField] = e.streams[0];
       const video = entry.node?.querySelector(`video[data-${name}-id="${entry.id}"]`);
       if (video) video.srcObject = entry[streamField];
-      // Forward the new stream to any paired phones. Camera cap name is
-      // "camera" in practice, so entry.cameraStream is what phones.js picks
-      // up via entry[streamField] -> entry.cameraStream.
+      // Forward to paired phones. Camera cap name is "camera", so
+      // entry.cameraStream is what phones.js picks up.
       if (streamField === "cameraStream") notifyRobotStreamChange(entry);
     };
     pc.onicecandidate = async (e) => {
@@ -150,11 +152,15 @@ export function makeWebrtcInstallableCap(schema) {
   }
 
   async function stop(entry) {
-    // Perception rides on the stream; kill it before we tear the stream down
-    // so the next frame grab doesn't trip on a null srcObject.
+    // Perception rides on the stream; kill it before tearing down so the
+    // next frame grab doesn't trip on null srcObject.
     if (entry[watchingField]) { visionStop(entry.id); entry[watchingField] = false; }
     try { await entry[signalField]?.writeValueWithResponse(new Uint8Array([OP_STOP])); } catch {}
-    if (entry[pcField]) { try { entry[pcField].close(); } catch {} entry[pcField] = null; }
+    if (entry[pcField]) {
+      unregisterExternalPc(entry.id, name);
+      try { entry[pcField].close(); } catch {}
+      entry[pcField] = null;
+    }
     entry[streamField] = null;
     if (streamField === "cameraStream") notifyRobotStreamChange(entry);
     entry[statusState] = { st: "idle" };
@@ -193,7 +199,11 @@ export function makeWebrtcInstallableCap(schema) {
 
     cleanup(entry) {
       entry[signalField] = entry[statusField] = null;
-      if (entry[pcField]) { try { entry[pcField].close(); } catch {} entry[pcField] = null; }
+      if (entry[pcField]) {
+        unregisterExternalPc(entry.id, name);
+        try { entry[pcField].close(); } catch {}
+        entry[pcField] = null;
+      }
       entry[streamField] = null;
       entry[statusState] = null;
     },
@@ -204,9 +214,9 @@ export function makeWebrtcInstallableCap(schema) {
       const meta = s.step
         ? `${s.st} — ${s.step}`
         : (s.err ? `${s.st} — ${s.err}` : s.st);
-      // Install path needs network (apt-get + pip). Don't gate the button —
-      // the user might be on Ethernet, about to join WiFi, etc. Just surface
-      // the dependency in a hint line so the failure mode isn't a surprise.
+      // Install needs network (apt-get + pip) but don't gate the button —
+      // user may be on Ethernet, about to join WiFi. Surface the dependency
+      // as a hint so failure isn't a surprise.
       const wifiOk = entry.wifiStatus?.st === "joined";
       const installHint = (s.st === "uninstalled" || s.st === "install_failed") && !wifiOk
         ? `<div class="meta">Needs WiFi (~150 MB from Debian + PyPI). Join a network first or be ready to retry.</div>`

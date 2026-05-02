@@ -39,6 +39,17 @@ const PI_WSS_CONFIG = { roomPrefix: "pi-rtc-", accept: "desktop-" };
 // Per-robot peer connections, lazy-built. Keyed by robot id.
 const _peers = new Map();  // robotId → { pc, ws?, channels: Map<label, ch> }
 
+// PCs owned by other modules (e.g. webrtc-installable's Pi camera path)
+// that want to appear in lastRobotWebRTCDiagnostic alongside the channels
+// _peers tracks. Keyed by `${robotId}::${label}`.
+const _externalPeers = new Map();
+export function registerExternalPc(robotId, label, pc) {
+  _externalPeers.set(`${robotId}::${label}`, { robotId, label, pc });
+}
+export function unregisterExternalPc(robotId, label) {
+  _externalPeers.delete(`${robotId}::${label}`);
+}
+
 // Open (or replace) a peer connection to the robot, ensure a DataChannel
 // with the requested label is open, return the channel. Single-PC model
 // per robot — opening a second time tears the prior peer down.
@@ -427,6 +438,26 @@ if (typeof window !== "undefined") {
       };
       try {
         const report = await entry.pc.getStats();
+        const stats = [];
+        report.forEach((s) => stats.push(s));
+        row.stats = stats;
+      } catch (err) {
+        row.statsError = err.message || String(err);
+      }
+      out.push(row);
+    }
+    for (const { robotId, label, pc } of _externalPeers.values()) {
+      const row = {
+        robotId, label,
+        state: {
+          iceConnection: pc?.iceConnectionState,
+          connection: pc?.connectionState,
+          signaling: pc?.signalingState,
+          iceGathering: pc?.iceGatheringState,
+        },
+      };
+      try {
+        const report = await pc.getStats();
         const stats = [];
         report.forEach((s) => stats.push(s));
         row.stats = stats;

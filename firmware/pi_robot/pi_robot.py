@@ -41,12 +41,10 @@ from bless import (
 )
 from gpiozero import LED, Motor
 
-# UUIDs are generated from protocol/uuids.json — see tools/gen-uuids.py.
-# Edit the JSON + run `make gen-uuids` to add a characteristic; both the
-# ESP32 firmware AND the dashboard pull from the same source so a typo in
-# one place can't silently desync the protocol. Channel role-comments now
-# live next to their handlers below; the constants themselves are pure
-# name → uuid bindings in the generated file.
+# UUIDs generated from protocol/uuids.json (tools/gen-uuids.py). Edit the
+# JSON + `make gen-uuids` to add a characteristic; ESP32 firmware AND the
+# dashboard pull from the same source so a typo can't silently desync the
+# protocol. Channel role-comments live next to their handlers below.
 from uuids import (  # noqa: F401 — re-exported for clarity / import sites elsewhere
     SERVICE_UUID,
     LED_CHAR_UUID,
@@ -66,15 +64,15 @@ from uuids import (  # noqa: F401 — re-exported for clarity / import sites els
     SIGNAL_CHAR_UUID,
 )
 
-# Capability schema — built at startup from config. Types name a UI/data
+# Capability schema, built at startup from config. Types name a UI/data
 # shape (toggle, signed-pair, wifi-scan, bundle-ota, webrtc-installable,
-# command). `pin` / `pins` declare physical GPIO header positions for the
-# dashboard's pinout view.
+# command). `pin` / `pins` declare GPIO header positions for the dashboard's
+# pinout view.
 def _build_caps() -> list:
-    # Schema stays LEAN — BLE char reads are capped at the ATT MTU (~180 B
-    # on macOS/Chrome), so carrying full UUIDs per capability blows past it
-    # and the dashboard gets truncated JSON. The dashboard maps capability
-    # name → char UUIDs via its own constants (see public/ble.js).
+    # Stay LEAN — BLE reads cap at ATT MTU (~180 B on macOS/Chrome), so
+    # carrying full UUIDs per capability blows past it and the dashboard
+    # gets truncated JSON. Dashboard maps cap name → char UUIDs via its own
+    # constants (public/ble.js).
     caps: list[dict] = []
     if LED_ENABLED:
         caps.append({"name": "led", "type": "toggle",
@@ -90,12 +88,11 @@ def _build_caps() -> list:
     return caps
 
 
-# fw-info is computed per-read via _fw_info_snapshot() (defined below the
-# config block). Not a module-level constant because `authorized` mutates
-# when the enroll-key op adds a new dashboard pubkey.
+# fw-info computed per-read via _fw_info_snapshot() — not a module constant
+# because `authorized` mutates when enroll-key adds a dashboard pubkey.
 
-# Motor watchdog: every write resets the timer; silence reverts to (0, 0).
-# Safe default on disconnect — no redundant channel required.
+# Every write resets the timer; silence reverts to (0, 0). Safe default on
+# disconnect; no redundant channel required.
 MOTOR_WATCHDOG_MS = 500
 
 # Control-loop invariants — see .claude/CLAUDE.md. LLM-issued motion comes
@@ -229,9 +226,10 @@ if CAMERA_ENABLED is not False:
         from picamera2 import Picamera2  # type: ignore
         from aiortc import (  # type: ignore
             RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
-            MediaStreamTrack,
+            RTCConfiguration, RTCIceServer, MediaStreamTrack,
         )
         from aiortc.rtcrtpsender import RTCRtpSender  # type: ignore
+        import aiohttp  # type: ignore
         import av  # type: ignore
         import fractions
         _camera_available = True
@@ -268,17 +266,16 @@ if _conflicts:
 
 led = LED(LED_PIN) if LED_ENABLED else None
 
-# gpiozero's Motor.stop() drives both pins LOW (coast) — matches the
-# watchdog's safe default.
+# gpiozero's Motor.stop() drives both pins LOW (coast) — matches watchdog's
+# safe default.
 _motor_left_drv: Motor | None = None
 _motor_right_drv: Motor | None = None
 if MOTORS_ENABLED:
     try:
-        # Optional ENA/ENB pins let the user control speed via the driver
-        # board's enable line instead of PWMing the direction pins. When
-        # set, gpiozero routes PWM to the enable pin; IN1/IN2 stay digital.
-        # When unset (default), PWM is on the direction pins and the
-        # board's ENA/ENB jumpers are expected to be on (always-enabled).
+        # Optional ENA/ENB pins let the user PWM the driver's enable line
+        # instead of the direction pins. When set, gpiozero PWMs the enable;
+        # IN1/IN2 stay digital. Default: PWM on direction pins, ENA/ENB
+        # jumpers on (always-enabled).
         _left_pins = MOTORS_PINS["left"]
         _right_pins = MOTORS_PINS["right"]
         _left_kwargs  = {"forward": _left_pins["in1"],  "backward": _left_pins["in2"]}
@@ -315,6 +312,40 @@ _cam_pc = None
 _cam_track = None
 _cam_buf: bytearray = bytearray()
 _cam_expected: int = 0
+
+CAM_TURN_ENDPOINT = "https://proxy.neevs.io/cloudflare/turn"
+
+
+async def _cam_fetch_ice_servers() -> list:
+    """Mirrors pairing.js — Cloudflare TURN creds via proxy.neevs.io,
+    STUN fallback if the proxy is down. Lets cross-network dashboards
+    pull camera frames when host candidates can't reach the Pi."""
+    if not _camera_available:
+        return []
+    fallback = [
+        RTCIceServer(urls="stun:stun.l.google.com:19302"),
+        RTCIceServer(urls="stun:stun.cloudflare.com:3478"),
+    ]
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(CAM_TURN_ENDPOINT, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                if r.status != 200:
+                    raise RuntimeError(f"turn: {r.status}")
+                payload = await r.json()
+        servers = list(fallback)
+        for entry in payload.get("iceServers", []):
+            urls = entry.get("urls")
+            if not urls:
+                continue
+            servers.append(RTCIceServer(
+                urls=urls,
+                username=entry.get("username"),
+                credential=entry.get("credential"),
+            ))
+        return servers
+    except Exception as e:
+        log.info("camera turn fetch failed, STUN-only: %s", e)
+        return fallback
 # Camera status states:
 #   "uninstalled" → stack absent, dashboard offers install.
 #   "installing"  → in-progress (step + log fields).
@@ -375,7 +406,7 @@ _signal_offer_total: int = 0
 
 
 def _signal_handle_write(data: bytes) -> None:
-    """Chunked-write reassembler. Same opcode protocol as OTA chars."""
+    """Chunked reassembler. Same opcode protocol as OTA."""
     global _signal_offer_buf, _signal_offer_total
     if not data:
         return
@@ -414,8 +445,8 @@ def _signal_handle_write(data: bytes) -> None:
 
 
 async def _signal_send_to_rtc(offer_sdp: str) -> None:
-    """One-shot RPC to pi-robot-rtc.service over a Unix socket. Send
-    the offer JSON, read the answer JSON, notify it back over BLE."""
+    """One-shot RPC to pi-robot-rtc.service over Unix socket: send offer JSON,
+    read answer JSON, notify back over BLE."""
     try:
         reader, writer = await asyncio.open_unix_connection(_LOCAL_RTC_SOCK)
     except (OSError, FileNotFoundError) as e:
@@ -448,7 +479,7 @@ async def _signal_send_to_rtc(offer_sdp: str) -> None:
 
 
 def _signal_publish_answer(sdp: str) -> None:
-    """Chunked notify: begin → chunks → commit. Same envelope OTA uses."""
+    """Chunked notify (begin → chunks → commit). Same envelope as OTA."""
     sdp_bytes = sdp.encode("utf-8")
     total = len(sdp_bytes)
     if total == 0 or total > 0xFFFF:
@@ -468,7 +499,7 @@ def _signal_publish_error(msg: str) -> None:
 
 
 def _set_robot_status(st: str, msg: str | None = None) -> None:
-    """Top-level robot state. Published on notify so the dashboard can render
+    """Top-level robot state. Published on notify so the dashboard renders
     'rebooting in 2s' instead of a mystery disconnect."""
     global _robot_status
     _robot_status = {"st": st}
@@ -479,7 +510,7 @@ def _set_robot_status(st: str, msg: str | None = None) -> None:
 
 
 def _wlan_ip() -> str | None:
-    """Current IPv4 on wlan0, without CIDR suffix. None on failure."""
+    """Current IPv4 on wlan0, no CIDR. None on failure."""
     try:
         proc = subprocess.run(
             ["nmcli", "-g", "IP4.ADDRESS", "dev", "show", "wlan0"],
@@ -510,7 +541,7 @@ def _set_status(st: str, ssid: str | None = None, err: str | None = None) -> Non
 
 
 async def _wifi_scan_task() -> None:
-    # Doesn't touch wifi-status — scan activity is orthogonal to connection state.
+    # Scan is orthogonal to connection state; doesn't touch wifi-status.
     global _wifi_scan
     try:
         _init_wifi_radio()  # belt-and-suspenders in case state changed
@@ -561,13 +592,12 @@ def _set_ota_status(st: str, n: int = 0, total: int = 0, err: str | None = None)
     log.info("ota-status → %s", _ota_status)
 
 
-# Destinations a bundle-OTA may write to. Anything outside is rejected so
-# a malicious manifest can't overwrite /etc/passwd or similar. Computed from
-# $HOME so OTAs work for any service-user name (pi, robot, ...), not just pi.
+# Bundle-OTA destination allowlist. Anything outside is rejected so a
+# malicious manifest can't overwrite /etc/passwd. Computed from $HOME so
+# OTAs work for any service-user name (pi, robot, ...).
 def _derive_install_home() -> str:
-    """pi-robot.service runs as root (bless needs it), so ~ would expand to
-    /root — wrong. Derive the actual install home from __file__ instead:
-    convention is <HOME>/better-robotics/firmware/pi_robot/pi_robot.py."""
+    """pi-robot.service runs as root (bless needs it) so ~ → /root. Wrong.
+    Derive from __file__: <HOME>/better-robotics/firmware/pi_robot/pi_robot.py."""
     parts = os.path.abspath(__file__).split(os.sep)
     try:
         idx = parts.index("better-robotics")
@@ -582,8 +612,7 @@ _OTA_ALLOWED_DEST_PREFIXES = (
     "/etc/systemd/system/",
     "/usr/local/bin/",
     "/boot/firmware/",
-    # avahi service files for the wifi-presence plane (mDNS publishing of
-    # the /health endpoint). Drop-in directory monitored by avahi-daemon.
+    # avahi-daemon's drop-in dir, for mDNS publishing of /health.
     "/etc/avahi/services/",
 )
 
@@ -604,8 +633,8 @@ async def _apply_bundle(bundle: dict) -> None:
     """Multi-file OTA. bundle shape:
         {"manifest": {"files": [...], "post_install": [...], "restart": "..."},
          "files":    {"<src>": "<base64>", ...}}
-    Atomicity across files is best-effort — there's a small window between
-    renames; good enough for our update cadence."""
+    Atomicity across files is best-effort: small window between renames,
+    good enough for our update cadence."""
     global _ota_buffer
     _set_robot_status("installing", "applying bundle")
     manifest = bundle.get("manifest") or {}
@@ -670,12 +699,10 @@ async def _apply_bundle(bundle: dict) -> None:
         os.replace(tmp, dest)
 
     for cmd in manifest.get("post_install") or []:
-        # $HOME/__HOME__/__USER__ get the same substitution as file dests +
-        # contents. shell=True so manifests can use redirection, ||, &&,
-        # globs — same trust boundary as the rest of the bundle (the
-        # manifest came from an authenticated dashboard upload, so anything
-        # capable of injecting a malicious command can already replace
-        # pi_robot.py wholesale).
+        # Same $HOME/__HOME__/__USER__ substitution as file dests/contents.
+        # shell=True for redirection, ||, &&, globs. Same trust boundary as
+        # the bundle: if you can inject here you can replace pi_robot.py
+        # wholesale.
         rc = subprocess.run(_ota_expand(cmd), shell=True, check=False, capture_output=True).returncode
         if rc != 0:
             _set_ota_status("failed", err=f"post_install: {cmd} rc={rc}"[:120])
@@ -685,8 +712,8 @@ async def _apply_bundle(bundle: dict) -> None:
     _ota_buffer = bytearray()
     await asyncio.sleep(0.5)  # let the notify flush
     if manifest.get("reboot"):
-        # Kernel module changes (cmdline.txt swaps) only take effect on reboot.
-        # A service restart won't pick them up.
+        # Kernel module changes (cmdline.txt swaps) need a reboot; service
+        # restart won't pick them up.
         _set_robot_status("rebooting", "post-install")
         subprocess.Popen(["systemctl", "reboot"])
     elif manifest.get("restart"):
@@ -751,7 +778,7 @@ def _ota_handle_write(data: bytearray) -> None:
 
 
 def _drive(motor: Motor | None, value: int) -> None:
-    """Map signed [-100, 100] → gpiozero Motor. Sign = direction, magnitude = PWM duty."""
+    """Signed [-100, 100] → gpiozero Motor. Sign = direction, magnitude = PWM duty."""
     if motor is None:
         return
     speed = max(-100, min(100, value)) / 100.0
@@ -765,9 +792,9 @@ def _drive(motor: Motor | None, value: int) -> None:
 
 def _apply_motors(left: int, right: int) -> None:
     global _motor_left, _motor_right
-    # Held joystick at constant speed re-publishes at full rate (~60 Hz from
-    # the dashboard); skip the BLE notify and PWM re-issue when nothing
-    # changed. Watchdog still resets on every char-write upstream.
+    # Dashboard re-publishes a held joystick at ~60 Hz; skip BLE notify +
+    # PWM re-issue when nothing changed. Watchdog still resets on every
+    # char-write upstream.
     if left == _motor_left and right == _motor_right:
         return
     _motor_left, _motor_right = left, right
@@ -817,7 +844,7 @@ async def _pulse_stop(duration_s: float, pulse_id: int) -> None:
 
 
 def _cam_send(obj: dict) -> None:
-    """Chunked notify on camera-status. 180 B per chunk sits under typical ATT MTU."""
+    """Chunked notify on camera-status. 180 B/chunk fits typical ATT MTU."""
     if _server is None:
         return
     data = json.dumps(obj, separators=(",", ":")).encode("utf-8")
@@ -1032,8 +1059,8 @@ def _read_soc_temp_c() -> float | None:
 
 
 async def _telemetry_task() -> None:
-    """Periodic vitals notify. 6s cadence — catches spikes without saturating
-    the BLE link. Payload stays under ~60 B so it fits comfortably in one ATT."""
+    """Periodic vitals notify. 6s cadence catches spikes without saturating
+    BLE. Payload < ~60 B fits one ATT."""
     while True:
         try:
             t: dict = {
@@ -1050,9 +1077,9 @@ async def _telemetry_task() -> None:
 
 
 async def _delayed_system_action(kind: str) -> None:
-    """Announce the upcoming disconnect on robot-status before firing the
-    action, so the dashboard can show 'was rebooting' instead of a blank drop.
-    The 2s pause is just enough for the BLE notify to flush."""
+    """Announce the upcoming disconnect on robot-status before firing, so
+    the dashboard shows 'was rebooting' instead of a blank drop. 2s lets
+    the BLE notify flush."""
     if kind == "reboot":
         _set_robot_status("rebooting", "in 2s")
         await asyncio.sleep(2)
@@ -1064,9 +1091,8 @@ async def _delayed_system_action(kind: str) -> None:
 
 
 def _enroll_key(pubkey_line: str) -> tuple[bool, str]:
-    """Add a dashboard pubkey to the trusted list. Idempotent — already-known
-    fingerprints return success without a rewrite. File name encodes the
-    fingerprint so it's findable by hand if needed."""
+    """Add a dashboard pubkey to trusted. Idempotent. Filename encodes the
+    fingerprint so it's findable by hand."""
     global _authorized_pubs
     try:
         fp = _ssh_fingerprint(pubkey_line)
@@ -1133,10 +1159,10 @@ def _ops_handle_write(data: bytearray) -> None:
         unit = str(args.get("unit") or "pi-robot")
         _schedule(_get_log(lines, unit))
     elif op == "get-config":
-        # Schedule on the asyncio loop rather than running inline in the BLE
-        # callback thread. _ops_respond fires multiple chunked notifies via
-        # _publish, and running that alongside the concurrent telemetry task
-        # from the callback thread glitched BlueZ enough to drop the link.
+        # Schedule on asyncio loop, not the BLE callback thread.
+        # _ops_respond fires multiple chunked notifies via _publish; running
+        # that alongside concurrent telemetry from the callback thread
+        # glitched BlueZ enough to drop the link.
         _schedule(_get_config_task())
     elif op == "apply-staged-ota":
         # Dashboard streamed a bundle JSON to pi_robot_rtc.py over WebRTC
@@ -1188,7 +1214,8 @@ async def _cam_handle_message(msg: dict) -> None:
         if t == "offer":
             if _cam_pc is not None:
                 await _cam_pc.close()
-            _cam_pc = RTCPeerConnection()
+            ice_servers = await _cam_fetch_ice_servers()
+            _cam_pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
             _cam_track = _PiCameraTrack()
             _cam_pc.addTrack(_cam_track)
 
@@ -1354,7 +1381,7 @@ def on_read(characteristic: BlessGATTCharacteristic, **_) -> bytearray:
     if uuid == MOTOR_CHAR_UUID:
         return bytearray([_motor_left & 0xff, _motor_right & 0xff])
     if uuid == CAMERA_STATUS_CHAR_UUID:
-        # Chunked protocol — no single value for a direct read. Status
+        # Chunked protocol — direct reads have no single value. Status
         # lands via notify on state changes.
         return bytearray()
     return characteristic.value
@@ -1402,8 +1429,8 @@ def on_write(characteristic: BlessGATTCharacteristic, value: bytearray, **_) -> 
 
 
 def _init_wifi_radio() -> None:
-    """Idempotent. Step failures are logged but not fatal — pi_robot must
-    come up for BLE even if WiFi is unavailable."""
+    """Idempotent. Step failures are logged but not fatal — BLE must come
+    up even when WiFi is unavailable."""
     steps = [
         ["rfkill", "unblock", "wifi"],
         ["rfkill", "unblock", "all"],
@@ -1461,10 +1488,10 @@ async def main() -> None:
     )
     await _server.add_new_characteristic(
         SERVICE_UUID, OTA_DATA_CHAR_UUID,
-        # write | write-without-response — without-response lets the dashboard
-        # stream chunks without per-frame ATT acks; spec rejects WithoutResponse
-        # if the char doesn't advertise the property, and Chrome's fallback
-        # behavior is inconsistent. Advertise both so the dashboard can pick.
+        # WithoutResponse lets the dashboard stream chunks without per-frame
+        # ATT acks; spec rejects WithoutResponse if not advertised, and
+        # Chrome's fallback is inconsistent. Advertise both so the dashboard
+        # can pick.
         GATTCharacteristicProperties.write | GATTCharacteristicProperties.write_without_response,
         bytearray(),
         GATTAttributePermissions.writeable,
@@ -1481,9 +1508,9 @@ async def main() -> None:
         _json_bytes(_fw_info_snapshot()),
         GATTAttributePermissions.readable,
     )
-    # Phase 2.F.1: chunked SDP exchange for WebRTC signaling. Bridges to
-    # pi-robot-rtc.service over /run/pi-robot-rtc.sock; that service runs
-    # aiortc and produces the answer. See _signal_handle_write above.
+    # Chunked SDP for WebRTC signaling. Bridges to pi-robot-rtc.service
+    # over /run/pi-robot-rtc.sock; that service runs aiortc and produces
+    # the answer. See _signal_handle_write.
     await _server.add_new_characteristic(
         SERVICE_UUID, SIGNAL_CHAR_UUID,
         GATTCharacteristicProperties.write | GATTCharacteristicProperties.notify,
@@ -1501,9 +1528,9 @@ async def main() -> None:
         )
 
     if CAMERA_ENABLED is not False:
-        # Register even without the stack installed, so the dashboard can
-        # trigger install-on-demand; after install the service restarts,
-        # imports succeed, signaling becomes functional.
+        # Register even without the stack installed so the dashboard can
+        # trigger install-on-demand. After install + service restart,
+        # imports succeed and signaling becomes functional.
         await _server.add_new_characteristic(
             SERVICE_UUID, CAMERA_SIGNAL_CHAR_UUID,
             GATTCharacteristicProperties.write,

@@ -24,64 +24,61 @@
 //   commit. For an intentional bump unrelated to assets (e.g. server-side
 //   change in an API contract), edit any cached asset (a comment will do)
 //   and the hook will pick up a new hash.
-const VERSION = "0464e43e";
+const VERSION = "bf9a24b7";
 const CACHE = `dashboard-${VERSION}`;
 
-// Bootstrap files cached at install time so the dashboard can cold-boot
-// offline AND so dynamically-imported dialogs (recovery, scripts, etc.)
-// are ready even before the user opens them. Relative paths because the
-// dashboard deploys at a subpath (neevs.io/better-robotics/) — absolute
-// "/" would resolve to the origin root, not the SW scope.
+// Cached at install time so the dashboard can cold-boot offline AND
+// dynamically-imported dialogs (recovery, scripts) are ready before the
+// user opens them. Relative paths because the dashboard deploys at a
+// subpath (neevs.io/better-robotics/); absolute "/" resolves to origin
+// root, not SW scope.
 const BOOTSTRAP = [
   "./", "./index.html", "./app.js", "./styles.css", "./icons.svg",
   // PWA install assets — home-screen icon + manifest must be cached for
   // an installed app to cold-boot offline.
   "./manifest.json", "./icon.svg",
-  // Phone companion is installable too (iOS A2HS target); phone.html is
-  // the scope-root start_url when installed from /phone.html.
+  // Phone companion is installable too (iOS A2HS); phone.html is the
+  // scope-root start_url when installed from /phone.html.
   "./phone.html", "./phone.js",
-  // Dynamic-imported by app.js. Precaching them means the first time the
-  // user opens Recovery / Scripts / Pinout / ESP serial / SD prep, the
-  // module loads from cache instead of doing a network round-trip — and
-  // it works offline.
+  // Dynamic-imported by app.js. Precache so first open of Recovery /
+  // Scripts / Pinout / ESP serial / SD prep loads from cache, and works
+  // offline.
   "./recovery.js", "./prepare.js", "./scripts.js", "./pinout.js", "./esp-serial.js",
 ];
 
-// Cross-origin URLs we deliberately DO cache. Default for cross-origin is
-// to pass through (their hosts own freshness), but ML models from HuggingFace
-// are large (50-200 MB) one-time downloads — vulnerable to browser cache
-// eviction under storage pressure. SW cache is durable. Caching them turns
-// "Watch with Pip" / grounding from "needs network for first session" into
-// "needs network for first model download, ever."
+// Cross-origin URLs we DO cache. Default is pass-through (host owns
+// freshness), but HuggingFace model files (50-200 MB, one-time) get
+// evicted under browser storage pressure. SW cache is durable. Caching
+// turns "Watch with Pip" / grounding from "needs network per session"
+// into "needs network for first model download, ever."
 function isCacheableCrossOrigin(url) {
-  // HuggingFace model files (.onnx, .safetensors, tokenizer.json, etc.).
-  // These come from the transformers.js client when from_pretrained() runs.
+  // HF model files (.onnx, .safetensors, tokenizer.json) from
+  // from_pretrained() in transformers.js.
   if (url.hostname === "huggingface.co") return true;
-  // The transformers.js library + its WebGPU/onnx-runtime assets.
+  // transformers.js library + WebGPU / onnx-runtime assets.
   if (url.hostname === "cdn.jsdelivr.net" && url.pathname.includes("@huggingface/")) return true;
   return false;
 }
 
 self.addEventListener("install", (e) => {
-  // Don't skipWaiting here — we want updates to be intentional. The page
-  // detects the waiting worker and surfaces a banner; user triggers the
-  // swap via a message below.
+  // No skipWaiting — updates are intentional. Page detects the waiting
+  // worker and surfaces a banner; user triggers the swap via message.
   e.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    // addAll is atomic — fail one, install fails. Keeps the cache from
-    // ending up half-populated if a bootstrap file 404s.
-    try { await cache.addAll(BOOTSTRAP); } catch { /* network may be flaky; lazy cache will catch */ }
+    // addAll is atomic — fail one, install fails. Keeps cache from ending
+    // up half-populated on a 404.
+    try { await cache.addAll(BOOTSTRAP); } catch { /* network flaky; lazy cache will catch */ }
   })());
 });
 
 self.addEventListener("activate", (e) => {
   e.waitUntil((async () => {
-    // Drop old version caches so disk doesn't accumulate forever.
+    // Drop old version caches.
     const keys = await caches.keys();
     await Promise.all(keys.filter(k => k.startsWith("dashboard-") && k !== CACHE).map(k => caches.delete(k)));
-    // Take control of pages that loaded under the previous SW (or none).
-    // Combined with the page's controllerchange→reload, this gives the
-    // user-clicked Reload a clean handoff.
+    // Take control of pages loaded under the previous SW. Paired with the
+    // page's controllerchange→reload, gives the user-clicked Reload a
+    // clean handoff.
     await self.clients.claim();
   })());
 });
@@ -90,10 +87,9 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  // Decide whether this request is one we manage. Cross-origin defaults to
-  // pass-through (their hosts own freshness); allowlist the ML model + lib
-  // CDNs so they get the persistence benefit. Same-origin: cache everything
-  // except OTA bundles (per-device freshness story).
+  // Cross-origin: pass through except allowlisted ML CDNs (durable cache
+  // for big one-time downloads). Same-origin: cache everything except OTA
+  // bundles (per-device freshness).
   if (url.origin !== location.origin) {
     if (!isCacheableCrossOrigin(url)) return;
   } else if (url.pathname.includes("/firmware/")) {

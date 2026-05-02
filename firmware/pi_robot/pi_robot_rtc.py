@@ -41,7 +41,10 @@ import termios
 
 try:
     import aiohttp
-    from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
+    from aiortc import (
+        RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
+        RTCConfiguration, RTCIceServer,
+    )
     from aiortc.contrib.signaling import object_from_string, object_to_string
 except ImportError as e:
     sys.stderr.write(f"[rtc] missing dependency: {e}. Run `pip install aiortc aiohttp`.\n")
@@ -49,11 +52,42 @@ except ImportError as e:
 
 SIGNAL_WS_URL = "wss://signal.neevs.io"
 LOCAL_SOCK_PATH = "/run/pi-robot-rtc.sock"
+TURN_ENDPOINT = "https://proxy.neevs.io/cloudflare/turn"
+STUN_FALLBACK = [
+    RTCIceServer(urls="stun:stun.l.google.com:19302"),
+    RTCIceServer(urls="stun:stun.cloudflare.com:3478"),
+]
 LOG = logging.getLogger("rtc")
 
 
+async def fetch_ice_servers() -> list:
+    """Mirrors pairing.js — Cloudflare TURN creds via proxy.neevs.io,
+    STUN fallback if the proxy is down. Cross-network shells / OTA need
+    relay candidates when host + srflx can't reach the dashboard."""
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(TURN_ENDPOINT, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                if r.status != 200:
+                    raise RuntimeError(f"turn: {r.status}")
+                payload = await r.json()
+        servers = list(STUN_FALLBACK)
+        for entry in payload.get("iceServers", []):
+            urls = entry.get("urls")
+            if not urls:
+                continue
+            servers.append(RTCIceServer(
+                urls=urls,
+                username=entry.get("username"),
+                credential=entry.get("credential"),
+            ))
+        return servers
+    except Exception as e:
+        LOG.info("turn fetch failed, STUN-only: %s", e)
+        return list(STUN_FALLBACK)
+
+
 def device_name() -> str:
-    """Match pi_robot_health._device_name() — BR-XXXX from /proc/cpuinfo serial."""
+    """BR-XXXX from /proc/cpuinfo serial. Mirrors pi_robot_health."""
     suffix = None
     try:
         with open("/proc/cpuinfo") as f:
@@ -70,16 +104,15 @@ def device_name() -> str:
 
 
 def make_peer_id(role: str) -> str:
-    """Mirrors pairing.js's makePeerId — `<role>-<6 hex>`."""
+    """`<role>-<6 hex>`. Mirrors pairing.js's makePeerId."""
     return f"{role}-{os.urandom(3).hex()}"
 
 
 # ── PTY bridge ────────────────────────────────────────────────────────────
 
 class ShellBridge:
-    """Forks bash under a PTY, pipes its stdout to a DataChannel, sends
-    DataChannel messages to its stdin. Cleanly disposes on channel close
-    or shell exit."""
+    """Forks bash under a PTY: stdout → DataChannel, DataChannel → stdin.
+    Disposes on channel close or shell exit."""
 
     def __init__(self, channel, loop):
         self.channel = channel
@@ -156,12 +189,9 @@ class ShellBridge:
             self.pid = None
 
 
-# ── Per-channel wiring (transport-agnostic) ───────────────────────────────
-#
-# Lifted out of Session so the Unix-socket signaling path can share the
-# same data-channel handlers without code duplication. `bridges` is the
-# per-PC dict that owns ShellBridges + log-tail tasks; the dispatcher
-# drops entries on channel close.
+# Per-channel wiring (transport-agnostic). Both wss + Unix-socket paths
+# share these. `bridges` is the per-PC dict owning ShellBridges + log-tail
+# tasks; dispatcher drops entries on channel close.
 
 def wire_channel(channel, bridges):
     LOG.info("datachannel opened: %s", channel.label)
@@ -182,9 +212,9 @@ def _wire_shell(channel, bridges):
 
     @channel.on("message")
     def on_msg(message):
-        # Binary = raw PTY bytes (stdin). Text = JSON control messages
-        # (resize, future: signals, env). WebRTC's native text/binary
-        # discriminator avoids inline escape-sequence games.
+        # Binary = raw PTY stdin. Text = JSON control (resize, future:
+        # signals, env). WebRTC's native discriminator avoids inline
+        # escape-sequence games.
         if isinstance(message, str):
             try:
                 ctrl = json.loads(message)
@@ -211,11 +241,10 @@ def _wire_shell(channel, bridges):
 
 
 def _wire_ota(channel, bridges):
-    # OTA staging path: dashboard streams a bundle JSON's bytes here, we
-    # write to a fixed file in /tmp; the dashboard then triggers the
-    # privileged apply via the existing BLE ops verb (apply-staged-ota
-    # in pi_robot.py). Keeps RTC daemon at user privs while pi_robot.py
-    # (root) does the file-system + systemctl work.
+    # OTA staging: dashboard streams bundle JSON bytes here, we write to a
+    # fixed /tmp file. Dashboard then triggers the privileged apply via
+    # apply-staged-ota in pi_robot.py. RTC daemon stays at user privs;
+    # pi_robot.py (root) does file-system + systemctl.
     LOG.info("ota: wiring channel readyState=%s", channel.readyState)
     state = {"writer": None, "size": 0, "received": 0,
              "path": "/tmp/pi-robot-staged-ota.json"}
@@ -294,10 +323,9 @@ def _wire_ota(channel, bridges):
 
 
 def _wire_logs(channel, bridges):
-    # journalctl -fu <unit> piped to channel as text lines. Dashboard
-    # sends {type:"follow", unit:"<service>"} to start; channel close
-    # (or new follow) terminates the subprocess. Allowlist the unit
-    # names so a malformed message can't shell out to arbitrary commands.
+    # journalctl -fu <unit> piped as text lines. Dashboard starts with
+    # {type:"follow", unit:"<service>"}; channel close (or new follow)
+    # kills the subprocess. Unit allowlist prevents arbitrary shell-out.
     ALLOWED_UNITS = (
         "pi-robot", "pi-robot.service",
         "pi-robot-heartbeat", "pi-robot-heartbeat.service",
@@ -375,9 +403,8 @@ def _wire_logs(channel, bridges):
 # ── wss signaling ─────────────────────────────────────────────────────────
 
 class Session:
-    """One peer connection's lifetime over the wss transport. Recreated
-    whenever the dashboard initiates a fresh offer (single-peer-at-a-time
-    model). ICE is trickled back to the dashboard over the same WS."""
+    """One peer connection over wss. Recreated on each new dashboard offer
+    (single-peer-at-a-time). ICE trickled back over the same WS."""
 
     def __init__(self, ws, my_peer_id, room_id):
         self.ws = ws
@@ -402,7 +429,8 @@ class Session:
             for b in self.bridges.values():
                 b.dispose()
             self.bridges.clear()
-        self.pc = RTCPeerConnection()
+        ice_servers = await fetch_ice_servers()
+        self.pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
 
         @self.pc.on("datachannel")
         def on_dc(channel):
@@ -485,17 +513,13 @@ def parse_candidate(line: str):
     )
 
 
-# ── Unix socket signaling ────────────────────────────────────────────────
+# Unix socket signaling. pi_robot.py (root, owns BLE GATT) forwards
+# BLE-signaled offers here as JSON-over-Unix-socket RPC. We answer
+# non-trickle (all candidates inline; aiortc's setLocalDescription waits
+# for ICE gathering); pi_robot.py notifies the answer back via BLE chunks.
 #
-# pi_robot.py owns the BLE GATT (root user) and gets BLE-signaled offers
-# from the dashboard. It forwards them here as JSON-over-Unix-socket
-# RPC. We generate a non-trickle answer (all candidates inline; aiortc's
-# setLocalDescription waits for ICE gathering) and return it. pi_robot.py
-# notifies it back to the dashboard via BLE chunks.
-#
-# Live peers are kept in _local_peers so they aren't GC'd between the
-# RPC reply and the actual ICE/data-channel traffic. Each peer self-
-# unregisters on connectionstatechange terminal.
+# Live peers stay in _local_peers so they aren't GC'd between RPC reply
+# and ICE/data-channel traffic. Each unregisters on terminal state.
 
 _local_peers = set()
 
@@ -520,7 +544,8 @@ async def handle_local_offer(reader, writer):
         writer.close()
         return
 
-    pc = RTCPeerConnection()
+    ice_servers = await fetch_ice_servers()
+    pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
     bridges = {}
 
     @pc.on("datachannel")
@@ -572,9 +597,8 @@ async def handle_local_offer(reader, writer):
 
 
 async def run_unix_server():
-    """Listen on /run/pi-robot-rtc.sock for BLE-signaled offers from
-    pi_robot.py. The socket is created with 0o666 perms so root (the
-    user pi_robot.py runs as) can connect even though we're `robot`."""
+    """Listen on /run/pi-robot-rtc.sock for offers from pi_robot.py. 0o666
+    perms so pi_robot.py (root) can connect to a `robot`-owned socket."""
     try:
         os.unlink(LOCAL_SOCK_PATH)
     except FileNotFoundError:
@@ -645,9 +669,8 @@ async def run_wss():
 # ── entry point ──────────────────────────────────────────────────────────
 
 async def run():
-    # wss + Unix-socket servers run concurrently. wss has its own
-    # reconnect loop so a flapping signal server doesn't hammer; the
-    # Unix server is start-once and runs forever.
+    # wss has its own reconnect loop so a flapping signal server doesn't
+    # hammer; the Unix server is start-once.
     await asyncio.gather(run_wss(), run_unix_server())
 
 
