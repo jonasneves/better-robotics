@@ -236,8 +236,10 @@ static void handle_ota_dc(const char *msg, size_t len) {
 
 // ── video over data channel ──────────────────────────────────────────────
 //
-// JPEG chunked into ≤900 B pieces with framing header so the browser
-// reassembles by frame_id. The RTP path (esp_peer_send_video MJPEG)
+// JPEG chunked into ≤1200 B pieces with framing header so the browser
+// reassembles by frame_id. Channel is unreliable + unordered (dashboard
+// opens it that way) so dropped chunks aren't retransmitted — the chip
+// just sends a fresh frame. The RTP path (esp_peer_send_video MJPEG)
 // triggered TWDT on classic ESP32 — esp_peer's binary lib blocks too
 // long inside packetization. Chunked DC stays the working path.
 //
@@ -246,7 +248,7 @@ static void handle_ota_dc(const char *msg, size_t len) {
 //   [2]    chunk_idx u8
 //   [3]    total_chunks u8
 //   [4..]  jpeg payload (≤ VIDEO_CHUNK_PAYLOAD bytes)
-#define VIDEO_CHUNK_PAYLOAD  900
+#define VIDEO_CHUNK_PAYLOAD  1200
 #define VIDEO_CHUNK_HEADER   4
 
 static volatile bool s_video_active = false;
@@ -293,12 +295,15 @@ static void video_pump_tick(void) {
         };
         int rc = esp_peer_send_data(s_peer, &df);
         int retries = 0;
-        while (rc == ESP_PEER_ERR_WOULD_BLOCK && retries++ < 20) {
-            vTaskDelay(pdMS_TO_TICKS(3));
+        while (rc == ESP_PEER_ERR_WOULD_BLOCK && retries++ < 5) {
+            vTaskDelay(pdMS_TO_TICKS(2));
             rc = esp_peer_send_data(s_peer, &df);
         }
         if (rc != ESP_PEER_ERR_NONE) full_send = false;
-        if (chunk + 1 < total_chunks) vTaskDelay(pdMS_TO_TICKS(5));
+        // 2 ms inter-chunk pacing — was 5 ms when WIFI_PS_MIN_MODEM was the
+        // default and the radio needed wake-up time. With PS_NONE restored,
+        // most of that delay is dead weight.
+        if (chunk + 1 < total_chunks) vTaskDelay(pdMS_TO_TICKS(2));
     }
 
     s_video_frame_count++;

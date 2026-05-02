@@ -76,7 +76,12 @@ async function openChannelViaBLE(robotId, label, signalChar, opts) {
   const entry = { pc, channels: new Map() };
   _peers.set(robotId, entry);
 
-  const channel = pc.createDataChannel(label, { ordered: true });
+  // Unreliable + unordered — video frames are independent; a lost chunk
+  // means the chip's next frame supersedes it anyway. Ordered/reliable
+  // channels stall the whole stream waiting for retransmits we'd throw
+  // away. The chip's reassembly already drops partial frames whose
+  // frame_id is older than a newer one in flight.
+  const channel = pc.createDataChannel(label, { ordered: false, maxRetransmits: 0 });
   entry.channels.set(label, channel);
 
   // Listener for chunked answer notify. Installed before we send the
@@ -318,7 +323,12 @@ async function openChannelViaWss(robotId, robotName, label, opts) {
     else if (s === "failed" || s === "disconnected" || s === "closed") closePeer(robotId);
   });
 
-  const channel = pc.createDataChannel(label, { ordered: true });
+  // Unreliable + unordered — video frames are independent; a lost chunk
+  // means the chip's next frame supersedes it anyway. Ordered/reliable
+  // channels stall the whole stream waiting for retransmits we'd throw
+  // away. The chip's reassembly already drops partial frames whose
+  // frame_id is older than a newer one in flight.
+  const channel = pc.createDataChannel(label, { ordered: false, maxRetransmits: 0 });
   entry.channels.set(label, channel);
 
   return new Promise((resolve, reject) => {
