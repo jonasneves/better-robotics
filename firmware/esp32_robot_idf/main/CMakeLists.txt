@@ -2,7 +2,8 @@
 # they grow past ~3 files (mirrors the public/ subsystem-promotion rule).
 #
 # uuids.h is generated from protocol/uuids.json by tools/gen-uuids.py.
-# version.h is stamped by `make publish-firmware` with the git short SHA.
+# Firmware version comes from esp_app_get_description()->version, which
+# IDF derives from `git describe --always` at build time.
 
 idf_component_register(
     SRCS

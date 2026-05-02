@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 
+#include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -9,7 +10,6 @@
 #include "esp_timer.h"
 
 #include "gatt_svr.h"
-#include "version.h"
 #include "webrtc_peer.h"
 
 static const char *TAG = "telemetry";
@@ -60,7 +60,7 @@ static void on_tick(void *arg) {
         (unsigned)esp_get_minimum_free_heap_size(),
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
         reset_reason_label(esp_reset_reason()),
-        GIT_SHA);
+        esp_app_get_description()->version);
     if (ip[0]) o += snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o, ",\"ip\":\"%s\"", ip);
     snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o, "}");
     gatt_svr_notify_telemetry();

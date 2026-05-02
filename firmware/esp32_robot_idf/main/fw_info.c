@@ -2,13 +2,13 @@
 
 #include <stdio.h>
 
+#include "esp_app_desc.h"
 #include "esp_log.h"
 
 #include "camera.h"
 #include "flash.h"
 #include "led.h"
 #include "motors.h"
-#include "version.h"
 
 static const char *TAG = "fw_info";
 
@@ -17,9 +17,15 @@ static char s_buf[FW_INFO_BUF_SIZE];
 
 void fw_info_init(const pin_config_t *pins) {
     int o = 0;
+    // Pull from esp_app_desc — populated by IDF's build system from
+    // `git describe --always` (with `-dirty` suffix on uncommitted
+    // changes). Was reading version.h's GIT_SHA macro which only got
+    // stamped by CI's `make publish-firmware`, so local flashes always
+    // reported a stale SHA to the dashboard.
+    const char *version = esp_app_get_description()->version;
     o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,
         "{\"type\":\"esp32\",\"url\":\"firmware/bins/esp32_robot.bin\","
-        "\"version\":\"%s\",\"caps\":[", GIT_SHA);
+        "\"version\":\"%s\",\"caps\":[", version);
 
     bool first = true;
     if (led_enabled()) {

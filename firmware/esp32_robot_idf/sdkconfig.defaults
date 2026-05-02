@@ -59,6 +59,10 @@ CONFIG_MBEDTLS_HARDWARE_SHA=y
 # Camera framebuffer in PSRAM
 CONFIG_CAMERA_TASK_STACK_SIZE=4096
 
+# ESP32-CAM modules often ship with Boya flash chips. Generic driver
+# works but the Boya-specific one has tuned read/write timings.
+CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y
+
 # Partition table — OTA needs two app slots + factory.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"

@@ -710,6 +710,10 @@ void webrtc_peer_init(const char *robot_name) {
     // frame — happens continuously during WebRTC video on classic ESP32
     // (single radio shared with BLE + SCTP). Not actionable, just noise.
     esp_log_level_set("wifi", ESP_LOG_ERROR);
+    // OV3660 emits "NO-SOI - JPEG start marker missing" on the first 1-2
+    // frames after sensor init while AGC/AEC settle. Self-corrects;
+    // suppress to keep the camera tag's actual errors visible.
+    esp_log_level_set("cam_hal", ESP_LOG_ERROR);
 
     s_events = xQueueCreate(8, sizeof(event_t));
     if (!s_events) { ESP_LOGE(TAG, "queue create failed"); return; }
