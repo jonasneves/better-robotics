@@ -54,14 +54,8 @@ void fw_info_init(const pin_config_t *pins) {
             pins->motor_r_in1, pins->motor_r_in2);
     }
     if (camera_ready()) {
-        // Phase 2.H: chip HTTP server retired. port/path removed from
-        // the cap schema; dashboard's mjpeg-stream runtime uses WebRTC
-        // exclusively. Cap type kept as "mjpeg-stream" for dashboard
-        // compatibility — it's the runtime that picks the transport.
         o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,
-            ",{\"name\":\"camera\",\"type\":\"mjpeg-stream\","
-            "\"profile\":\"%s\",\"profiles\":[\"compact\",\"standard\",\"full\"]}",
-            camera_profile_name(camera_get_profile()));
+            ",{\"name\":\"camera\",\"type\":\"mjpeg-stream\"}");
         // Snapshot is BLE-only and works without WiFi — distinct cap so the
         // dashboard renders it independently of the live-stream card.
         o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,

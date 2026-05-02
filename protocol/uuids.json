@@ -18,7 +18,6 @@
     "TELEMETRY_CHAR_UUID":        "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9f",
     "SNAPSHOT_REQUEST_CHAR_UUID": "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da0",
     "SNAPSHOT_DATA_CHAR_UUID":    "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da1",
-    "CAMERA_PROFILE_CHAR_UUID":   "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da2",
     "FLASH_CHAR_UUID":            "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da3",
     "PIN_CONFIG_CHAR_UUID":       "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da4",
     "SIGNAL_CHAR_UUID":           "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da5"

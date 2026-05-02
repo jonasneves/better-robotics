@@ -20,7 +20,6 @@
 #define TELEMETRY_CHAR_UUID              "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9f"
 #define SNAPSHOT_REQUEST_CHAR_UUID       "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da0"
 #define SNAPSHOT_DATA_CHAR_UUID          "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da1"
-#define CAMERA_PROFILE_CHAR_UUID         "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da2"
 #define FLASH_CHAR_UUID                  "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da3"
 #define PIN_CONFIG_CHAR_UUID             "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da4"
 #define SIGNAL_CHAR_UUID                 "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da5"

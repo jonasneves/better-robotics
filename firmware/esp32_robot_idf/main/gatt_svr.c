@@ -35,7 +35,6 @@ static ble_uuid128_t s_ota_data_uuid;
 static ble_uuid128_t s_ota_status_uuid;
 static ble_uuid128_t s_snapshot_request_uuid;
 static ble_uuid128_t s_snapshot_data_uuid;
-static ble_uuid128_t s_camera_profile_uuid;
 static ble_uuid128_t s_telemetry_uuid;
 static ble_uuid128_t s_fw_info_uuid;
 static ble_uuid128_t s_signal_uuid;
@@ -215,18 +214,6 @@ static int snapshot_data_access(uint16_t conn, uint16_t attr,
     return 0;
 }
 
-static int camera_profile_access(uint16_t conn, uint16_t attr,
-                                 struct ble_gatt_access_ctxt *ctxt, void *arg) {
-    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        uint8_t buf[64];
-        uint16_t copied = 0;
-        ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &copied);
-        if (copied > 0) camera_handle_profile_write(buf, copied);
-        return 0;
-    }
-    return BLE_ATT_ERR_UNLIKELY;
-}
-
 static int telemetry_access(uint16_t conn, uint16_t attr,
                             struct ble_gatt_access_ctxt *ctxt, void *arg) {
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
@@ -334,11 +321,6 @@ static const struct ble_gatt_chr_def s_chars[] = {
         .val_handle = &s_snapshot_data_handle,
     },
     {
-        .uuid = &s_camera_profile_uuid.u,
-        .access_cb = camera_profile_access,
-        .flags = BLE_GATT_CHR_F_WRITE,
-    },
-    {
         .uuid = &s_telemetry_uuid.u,
         .access_cb = telemetry_access,
         .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
@@ -381,7 +363,6 @@ void gatt_svr_init(void) {
     parse_uuid128(OTA_STATUS_CHAR_UUID,       &s_ota_status_uuid);
     parse_uuid128(SNAPSHOT_REQUEST_CHAR_UUID, &s_snapshot_request_uuid);
     parse_uuid128(SNAPSHOT_DATA_CHAR_UUID,    &s_snapshot_data_uuid);
-    parse_uuid128(CAMERA_PROFILE_CHAR_UUID,   &s_camera_profile_uuid);
     parse_uuid128(TELEMETRY_CHAR_UUID,        &s_telemetry_uuid);
     parse_uuid128(FW_INFO_CHAR_UUID,          &s_fw_info_uuid);
     parse_uuid128(SIGNAL_CHAR_UUID,           &s_signal_uuid);

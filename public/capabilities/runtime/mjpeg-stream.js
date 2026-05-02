@@ -1,14 +1,7 @@
-// Expected schema shape:
-//   { name: "camera", type: "mjpeg-stream", port: 81, path: "/stream",
-//     profile?: "compact|standard|full",
-//     profiles?: ["compact", "standard", "full"] }
-// Unlike the Pi webrtc-installable cap, there's no BLE signaling — the
-// dashboard just opens http://<ip>:<port><path> with a plain <img>. Works
-// only when the dashboard's browser and the robot share a network.
-// Profile picker is rendered when the schema carries a `profiles` list;
-// writes go to CAMERA_PROFILE_CHAR_UUID, firmware persists + restarts.
-import { CAMERA_PROFILE_CHAR_UUID, encodeJson } from "../../ble.js";
-import { escapeHtml } from "../../dom.js";
+// Schema: { name: "camera", type: "mjpeg-stream" }
+// ESP32 path uses BLE-signaled WebRTC by default and exposes an HTTP
+// MJPEG fallback on :81/stream (transport toggle below). Pi path uses
+// wss-signaled WebRTC.
 import { logFor } from "../../log.js";
 import {
   stopWatching as visionStop,
@@ -105,25 +98,16 @@ export function makeMjpegStreamCap(schema) {
   const actionPrompt = `${name}-prompt`;
   const label = name[0].toUpperCase() + name.slice(1);
 
-  const profileField = `${name}ProfileChar`;
-  const actionProfile = `${name}-profile`;
   const transportField = `${name}Transport`;
   const actionTransport = `${name}-transport`;
   return {
     name,
     schema,
-    initEntry: () => ({ [runningField]: false, [watchingField]: false, [profileField]: null, [transportField]: "webrtc" }),
-    async probe(entry, service) {
-      // Optional — only ESP32 advertises the profile schema, only ESP32
-      // exposes the char. Failure to find it just means no picker UI.
-      try { entry[profileField] = await service.getCharacteristic(CAMERA_PROFILE_CHAR_UUID); }
-      catch { entry[profileField] = null; }
-    },
+    initEntry: () => ({ [runningField]: false, [watchingField]: false, [transportField]: "webrtc" }),
     cleanup(entry)  {
       entry[runningField] = false;
       if (entry[watchingField]) { visionStop(entry.id); entry[watchingField] = false; }
       stopMjpegForward(entry);
-      entry[profileField] = null;
     },
 
     renderSection(entry, { childHtml = "", sourceMember = null, alternativeMemberIds = [] } = {}) {
@@ -154,44 +138,35 @@ export function makeMjpegStreamCap(schema) {
         running, watching, watchingAction: actionWatch,
       });
       const promptField = running ? renderPerceptionPromptField(entry, { editAction: actionPrompt }) : "";
-      // Profile picker: only when fw-info advertises profiles + the char
-      // probe found the write target. Compact dropdown right under the
-      // stream (or status); writes restart the device, so don't ship this
-      // for non-ESP32 caps.
-      const profiles = Array.isArray(schema.profiles) ? schema.profiles : null;
-      const currentProfile = schema.profile;
-      const profileRow = (profiles && entry[profileField])
-        ? `<div class="cap-profile">
-             <label>Camera profile
-               <select data-action="${actionProfile}">
-                 ${profiles.map(p => `<option value="${escapeHtml(p)}" ${p === currentProfile ? "selected" : ""}>${escapeHtml(p)}</option>`).join("")}
-               </select>
-             </label>
-             <span class="meta">changing profile restarts the robot</span>
-           </div>`
-        : "";
       // State string only when it adds info beyond the action verb. Action
       // says Start/Stop already; "ready"/"streaming" would just echo it.
       // "Waiting for WiFi" earns its place — the button is disabled and the
       // user needs to know why.
       const stateText = !wifi ? "Waiting for WiFi" : "";
-      // ESP32 only: transport toggle for benchmarking WebRTC vs HTTP.
-      // HTTP is way faster on LAN (no DTLS/SCTP) but inline <img> is
-      // mixed-content-blocked from an HTTPS dashboard — the new-tab
-      // link bypasses that since top-level navigation isn't blocked.
+      // ESP32 only: transport toggle when stopped (changing it mid-stream
+      // would be a re-establish), small label when running. Inline <img>
+      // for HTTP is mixed-content-blocked on HTTPS dashboards — surface
+      // a new-tab link only in that combination, where it'd actually help.
       const httpStreamUrl = (wifi && entry.fwType === "esp32" && entry.wifiStatus?.ip)
         ? `http://${entry.wifiStatus.ip}:81/stream` : null;
-      const transportRow = (wifi && entry.fwType === "esp32" && !running)
-        ? `<div class="cap-profile">
+      const httpsBlocked = typeof location !== "undefined" && location.protocol === "https:";
+      const showNewTabLink = transport === "http" && httpsBlocked && httpStreamUrl;
+      let transportRow = "";
+      if (wifi && entry.fwType === "esp32") {
+        if (running) {
+          transportRow = `<div class="meta">via ${transport === "http" ? "HTTP MJPEG" : "WebRTC"}</div>`;
+        } else {
+          transportRow = `<div class="cap-profile">
              <label>Transport
                <select data-action="${actionTransport}">
-                 <option value="webrtc" ${transport === "webrtc" ? "selected" : ""}>WebRTC (encrypted, cross-network)</option>
-                 <option value="http" ${transport === "http" ? "selected" : ""}>HTTP MJPEG (LAN, faster)</option>
+                 <option value="webrtc" ${transport === "webrtc" ? "selected" : ""}>WebRTC — encrypted, works cross-network</option>
+                 <option value="http" ${transport === "http" ? "selected" : ""}>HTTP MJPEG — LAN only, faster</option>
                </select>
              </label>
-             ${httpStreamUrl ? `<span class="meta"><a href="${httpStreamUrl}" target="_blank" rel="noreferrer">Open HTTP stream in new tab ↗</a></span>` : ""}
-           </div>`
-        : "";
+             ${showNewTabLink ? `<span class="meta">HTTPS pages block inline HTTP — <a href="${httpStreamUrl}" target="_blank" rel="noreferrer">open in new tab ↗</a></span>` : ""}
+           </div>`;
+        }
+      }
       return capSection({
         name,
         label,
@@ -200,7 +175,7 @@ export function makeMjpegStreamCap(schema) {
         // Child caps (Flash, Snapshot — schema-flat, conceptually camera
         // sub-controls) render here so the operator sees one Camera section
         // hosting everything camera-shaped instead of three peers in a flat list.
-        body: `${body}${watchRow}${promptField}${profileRow}${transportRow}${childHtml}`,
+        body: `${body}${watchRow}${promptField}${transportRow}${childHtml}`,
         transport: "wifi",
         sourceMember, alternativeMemberIds,
       });
@@ -273,25 +248,6 @@ export function makeMjpegStreamCap(schema) {
         watchingAction: actionWatch, watchingField, onRender: renderEntry,
       });
       wirePerceptionPrompt(entry, node, { editAction: actionPrompt, onRender: renderEntry });
-      // Profile picker: write the new profile JSON; firmware restarts so
-      // the BLE link drops shortly after the ack. Confirm before firing —
-      // restart is a heavy thing and the user might have hit it by mistake.
-      const sel = node.querySelector(`[data-action="${actionProfile}"]`);
-      if (sel) sel.addEventListener("change", async () => {
-        const next = sel.value;
-        if (next === schema.profile) return;
-        if (!confirm(`Switch camera to "${next}" profile?\n\nRobot will restart to apply (~30 s).`)) {
-          sel.value = schema.profile || "";
-          return;
-        }
-        try {
-          await entry[profileField].writeValueWithResponse(encodeJson({ profile: next }));
-          logFor(entry, `camera profile → ${next} (robot restarting)`);
-        } catch (err) {
-          logFor(entry, `profile write failed: ${err.message}`);
-          sel.value = schema.profile || "";
-        }
-      });
     },
   };
 }

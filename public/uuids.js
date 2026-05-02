@@ -19,7 +19,6 @@ export const OPS_RESPONSE_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9e";
 export const TELEMETRY_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4d9f";
 export const SNAPSHOT_REQUEST_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da0";
 export const SNAPSHOT_DATA_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da1";
-export const CAMERA_PROFILE_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da2";
 export const FLASH_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da3";
 export const PIN_CONFIG_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da4";
 export const SIGNAL_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da5";
