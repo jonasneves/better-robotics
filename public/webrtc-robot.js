@@ -79,14 +79,6 @@ async function openChannelViaBLE(robotId, label, signalChar, opts) {
   const channel = pc.createDataChannel(label, { ordered: true });
   entry.channels.set(label, channel);
 
-  // Sibling "control" DC, opened alongside whatever channel was requested.
-  // sendControl() below routes JSON verbs through it; chip-side dispatch
-  // is webrtc_peer.c → handle_control_dc.
-  if (label !== "control" && !entry.channels.has("control")) {
-    const controlCh = pc.createDataChannel("control", { ordered: true });
-    entry.channels.set("control", controlCh);
-  }
-
   // Listener for chunked answer notify. Installed before we send the
   // offer so we can't miss a fast reply.
   let answerResolve, answerReject;
@@ -332,18 +324,6 @@ async function openChannelViaWss(robotId, robotName, label, opts) {
       if (!resolved) fail(new Error("Signal channel closed before peer connected"));
     });
   });
-}
-
-// Returns true on a successful send. Callers fall back to BLE GATT (or
-// surface a "no peer up" error) when this returns false. Verb shape
-// lives in firmware/esp32_robot_idf/main/webrtc_peer.c → handle_control_dc.
-export function sendControl(robotId, verb) {
-  const entry = _peers.get(robotId);
-  if (!entry) return false;
-  const ch = entry.channels.get("control");
-  if (!ch || ch.readyState !== "open") return false;
-  try { ch.send(JSON.stringify(verb)); return true; }
-  catch { return false; }
 }
 
 export function closePeer(robotId) {

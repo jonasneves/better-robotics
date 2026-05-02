@@ -4,23 +4,11 @@
 // anything reading `entry.ledOn` from the previous hand-written LED module keeps working.
 import { UUIDS_BY_CAP } from "../../ble.js";
 import { logFor } from "../../log.js";
-import { sendControl } from "../../webrtc-robot.js";
 import { capSection } from "./cap-section.js";
 
 import { renderEntry } from "./render-bus.js";
 
-// Caps the chip dispatches over the WebRTC "control" channel. Routing
-// here saves a BLE round-trip and reuses the existing peer's DTLS.
-const CONTROL_TOGGLES = new Set(["led"]);
-
 export async function setToggleValue(entry, capName, value) {
-  if (entry.fwType === "esp32" && CONTROL_TOGGLES.has(capName)) {
-    if (sendControl(entry.id, { type: capName, value: value ? 1 : 0 })) {
-      entry[`${capName}On`] = !!value;
-      renderEntry(entry);
-      return;
-    }
-  }
   const ch = entry[`${capName}Char`];
   if (!ch) return;
   try {

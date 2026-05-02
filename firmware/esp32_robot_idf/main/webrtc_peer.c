@@ -19,7 +19,6 @@
 
 #include "camera.h"
 #include "gatt_svr.h"
-#include "led.h"
 #include "ota.h"
 #include "turn_creds.h"
 
@@ -40,8 +39,6 @@ static uint16_t s_video_sid = 0;
 static bool     s_video_sid_known = false;
 static uint16_t s_ota_sid = 0;
 static bool     s_ota_sid_known = false;
-static uint16_t s_control_sid = 0;
-static bool     s_control_sid_known = false;
 
 typedef enum { EV_OFFER_BLE } event_type_t;
 typedef struct { event_type_t type; char *payload; } event_t;
@@ -280,34 +277,6 @@ static void stop_video_streaming(void) {
     s_video_active = false;
 }
 
-// ── control channel ──────────────────────────────────────────────────────
-//
-// JSON verbs from the dashboard, one object per message. Source of truth
-// for the verb shape — dashboard sendControl() mirrors these.
-//   {"type":"led","value":1}
-//   {"type":"motor","l":50,"r":-50,"duration_ms":200}
-
-static void handle_control_dc(const char *msg, size_t len) {
-    if (len == 0 || msg[0] != '{') return;
-    cJSON *root = cJSON_ParseWithLength(msg, len);
-    if (!root) { ESP_LOGW(TAG, "control: bad json"); return; }
-    cJSON *type = cJSON_GetObjectItem(root, "type");
-    if (cJSON_IsString(type)) {
-        const char *t = type->valuestring;
-        if (strcmp(t, "led") == 0) {
-            cJSON *v = cJSON_GetObjectItem(root, "value");
-            if (cJSON_IsNumber(v) || cJSON_IsBool(v)) {
-                bool on = cJSON_IsTrue(v) || (cJSON_IsNumber(v) && v->valuedouble != 0);
-                led_apply(on);
-                ESP_LOGI(TAG, "control: led=%d", on ? 1 : 0);
-            }
-        } else {
-            ESP_LOGW(TAG, "control: unknown verb '%s'", t);
-        }
-    }
-    cJSON_Delete(root);
-}
-
 static void handle_video_dc(const char *msg, size_t len) {
     if (len == 0 || msg[0] != '{') return;
     cJSON *root = cJSON_ParseWithLength(msg, len);
@@ -338,7 +307,6 @@ static int on_peer_state(esp_peer_state_t state, void *ctx) {
         stop_video_streaming();
         s_video_sid_known = false;
         s_ota_sid_known   = false;
-        s_control_sid_known = false;
     }
     return 0;
 }
@@ -404,9 +372,6 @@ static int on_peer_channel_open(esp_peer_data_channel_info_t *ch, void *ctx) {
     } else if (strcmp(ch->label, "ota") == 0) {
         s_ota_sid = ch->stream_id;
         s_ota_sid_known = true;
-    } else if (strcmp(ch->label, "control") == 0) {
-        s_control_sid = ch->stream_id;
-        s_control_sid_known = true;
     }
     return 0;
 }
@@ -423,8 +388,6 @@ static int on_peer_data(esp_peer_data_frame_t *frame, void *ctx) {
         handle_video_dc((const char *)frame->data, frame->size);
     } else if (s_ota_sid_known && frame->stream_id == s_ota_sid) {
         handle_ota_dc((const char *)frame->data, frame->size);
-    } else if (s_control_sid_known && frame->stream_id == s_control_sid) {
-        handle_control_dc((const char *)frame->data, frame->size);
     }
     return 0;
 }
