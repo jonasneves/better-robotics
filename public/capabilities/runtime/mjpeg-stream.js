@@ -107,10 +107,12 @@ export function makeMjpegStreamCap(schema) {
 
   const profileField = `${name}ProfileChar`;
   const actionProfile = `${name}-profile`;
+  const transportField = `${name}Transport`;
+  const actionTransport = `${name}-transport`;
   return {
     name,
     schema,
-    initEntry: () => ({ [runningField]: false, [watchingField]: false, [profileField]: null }),
+    initEntry: () => ({ [runningField]: false, [watchingField]: false, [profileField]: null, [transportField]: "webrtc" }),
     async probe(entry, service) {
       // Optional — only ESP32 advertises the profile schema, only ESP32
       // exposes the char. Failure to find it just means no picker UI.
@@ -129,14 +131,16 @@ export function makeMjpegStreamCap(schema) {
       const wifi = hasWifi(entry);
       const running = entry[runningField];
       const watching = entry[watchingField];
+      const transport = entry[transportField] || "webrtc";
       let body = "";
       if (!wifi) {
         body = `<div class="meta">Waiting for the robot to join WiFi — video needs a LAN IP.</div>`;
       } else if (running) {
         // crossOrigin lets perception.js's canvas read the pixels.
-        // No src at render time — the click handler attaches frames
-        // via blob URLs as the WebRTC data channel delivers them.
-        body = `<img class="robot-camera" crossorigin="anonymous" data-cam-id="${entry.id}" alt="WebRTC video">`;
+        // For WebRTC: no src at render time — click handler attaches
+        // frames via blob URLs. For HTTP: the click handler sets src
+        // to http://<ip>:81/stream directly.
+        body = `<img class="robot-camera" crossorigin="anonymous" data-cam-id="${entry.id}" alt="${transport} video">`;
       }
       // Stream URL omitted from idle body — it's debug info that leaked
       // into daily UX. The dashboard log echoes it on connect for anyone
@@ -171,13 +175,22 @@ export function makeMjpegStreamCap(schema) {
       // "Waiting for WiFi" earns its place — the button is disabled and the
       // user needs to know why.
       const stateText = !wifi ? "Waiting for WiFi" : "";
-      // ESP32 only: link to the chip's HTTP MJPEG stream on :81/stream as
-      // a comparison path against WebRTC. Top-level navigation, so mixed
-      // content doesn't bite from an HTTPS dashboard.
+      // ESP32 only: transport toggle for benchmarking WebRTC vs HTTP.
+      // HTTP is way faster on LAN (no DTLS/SCTP) but inline <img> is
+      // mixed-content-blocked from an HTTPS dashboard — the new-tab
+      // link bypasses that since top-level navigation isn't blocked.
       const httpStreamUrl = (wifi && entry.fwType === "esp32" && entry.wifiStatus?.ip)
         ? `http://${entry.wifiStatus.ip}:81/stream` : null;
-      const httpRow = httpStreamUrl
-        ? `<div class="meta"><a href="${httpStreamUrl}" target="_blank" rel="noreferrer">Open HTTP stream ↗</a> (compare with WebRTC)</div>`
+      const transportRow = (wifi && entry.fwType === "esp32" && !running)
+        ? `<div class="cap-profile">
+             <label>Transport
+               <select data-action="${actionTransport}">
+                 <option value="webrtc" ${transport === "webrtc" ? "selected" : ""}>WebRTC (encrypted, cross-network)</option>
+                 <option value="http" ${transport === "http" ? "selected" : ""}>HTTP MJPEG (LAN, faster)</option>
+               </select>
+             </label>
+             ${httpStreamUrl ? `<span class="meta"><a href="${httpStreamUrl}" target="_blank" rel="noreferrer">Open HTTP stream in new tab ↗</a></span>` : ""}
+           </div>`
         : "";
       return capSection({
         name,
@@ -187,7 +200,7 @@ export function makeMjpegStreamCap(schema) {
         // Child caps (Flash, Snapshot — schema-flat, conceptually camera
         // sub-controls) render here so the operator sees one Camera section
         // hosting everything camera-shaped instead of three peers in a flat list.
-        body: `${body}${watchRow}${promptField}${profileRow}${httpRow}${childHtml}`,
+        body: `${body}${watchRow}${promptField}${profileRow}${transportRow}${childHtml}`,
         transport: "wifi",
         sourceMember, alternativeMemberIds,
       });
@@ -200,12 +213,27 @@ export function makeMjpegStreamCap(schema) {
         const img = entry.node?.querySelector(`img.robot-camera[data-cam-id="${entry.id}"]`);
         if (!img) return;
 
-        // ESP32 path: WebRTC video only. firmware/webrtc_peer.c routes
-        // a `video` data channel into an esp_camera_fb_get loop, sending
-        // each JPEG as binary. Browser blob-URLs each frame into the
-        // img. Same-origin tabs share the single peer slot via
-        // CamTabCoordinator (Phase 2.H step 1).
         if (entry.fwType === "esp32") {
+          const transport = entry[transportField] || "webrtc";
+          if (transport === "http") {
+            // HTTP MJPEG — bypass DTLS/SCTP entirely. Browser will block
+            // mixed content if the dashboard is on HTTPS; users in that
+            // case get the new-tab link in the toggle row instead.
+            const ip = entry.wifiStatus?.ip;
+            if (!ip) {
+              logFor(entry, `video: chip has no IP yet`);
+              entry[runningField] = false;
+              renderEntry(entry);
+              return;
+            }
+            img.src = `http://${ip}:81/stream`;
+            startMjpegForward(entry, img);
+            logFor(entry, `video: HTTP MJPEG ${img.src}`);
+            return;
+          }
+          // WebRTC — firmware/webrtc_peer.c routes a `video` data channel
+          // into an esp_camera_fb_get loop, sending each JPEG as binary.
+          // Browser blob-URLs each frame into the img.
           const ctrl = await startEsp32WebRTCVideo(entry, img);
           if (ctrl) {
             entry._webrtcVideo = ctrl;
@@ -213,10 +241,6 @@ export function makeMjpegStreamCap(schema) {
             startMjpegForward(entry, img);
             return;
           }
-          // WebRTC unavailable. No HTTP fallback — that would be mixed-
-          // content from HTTPS dashboards anyway, and wasn't actually
-          // saving anyone (Phase 2.H retired chip HTTP). Reset running
-          // so the Start button comes back instead of hanging.
           logFor(entry, `video: WebRTC unavailable; cannot stream`);
           entry[runningField] = false;
           renderEntry(entry);
@@ -240,6 +264,11 @@ export function makeMjpegStreamCap(schema) {
           startMjpegForward(entry, img);
         }
       }
+      const transportSel = node.querySelector(`[data-action="${actionTransport}"]`);
+      if (transportSel) transportSel.addEventListener("change", () => {
+        entry[transportField] = transportSel.value;
+        logFor(entry, `video transport → ${transportSel.value}`);
+      });
       wirePerceptionToggle(entry, node, {
         watchingAction: actionWatch, watchingField, onRender: renderEntry,
       });
