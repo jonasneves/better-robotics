@@ -107,7 +107,12 @@ bool camera_init(void) {
         case CAM_PROFILE_COMPACT:
             cfg.frame_size = FRAMESIZE_QVGA;
             cfg.jpeg_quality = 18;
-            cfg.fb_count = 1;
+            // fb_count=2 with PSRAM lets the driver capture frame N+1
+            // while the pump is still sending N. Bumped from 1 because
+            // QVGA frames (~5-15kB) easily fit two in PSRAM and the
+            // overlap roughly halves per-frame latency on the camera
+            // path. Falls back to 1 when no PSRAM (rare on ESP32-CAM).
+            cfg.fb_count = psram ? 2 : 1;
             break;
         case CAM_PROFILE_FULL:
             cfg.frame_size = FRAMESIZE_SVGA;

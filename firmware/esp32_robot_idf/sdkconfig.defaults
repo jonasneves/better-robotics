@@ -5,6 +5,12 @@
 # both want PSRAM. PSRAM mode is set per-target since classic ESP32 uses
 # external SPI PSRAM and S3 uses Octal PSRAM.
 
+# CPU clock — classic ESP32's max. DTLS encryption + SCTP packing are
+# CPU-bound on this chip (no HW AES-GCM); 240 MHz is a free linear
+# speedup over IDF's 160 MHz default. No peripheral implications at our
+# pin assignments.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
 # Logging — IDF v5.5 disabled colors by default; restore them so the
 # recovery console renders I/W/E lines green/yellow/red.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
