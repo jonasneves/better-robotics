@@ -1,6 +1,6 @@
 # Competitors
 
-External systems that compete for the same user decision as Better Robotics — *"how do I pair, control, and give a brain to a small robot from a browser."* Not an encyclopedia; filtered for what would change a decision.
+External systems that compete for the same user decision as Better Robotics — *"how do I write code for a small robot from a browser tab without installing anything."* Not an encyclopedia; filtered for what would change a decision.
 
 ## schematik.io — not in this lane
 
@@ -37,11 +37,18 @@ External systems that compete for the same user decision as Better Robotics — 
 - **Decision impact:** directly validates bet #1 — WiFi-first classroom stories *do* break.
 
 ### Viam
-- **Competes for:** "platform to run software on a robot you own." Different buyer (software engineer, fleet operator) but same keyword space.
-- **Overlap:** browser dashboard, camera streaming, live control ([viam.com](https://www.viam.com/product/platform-overview)). gRPC/WebRTC to a device-resident `viam-server`.
-- **Divergence:** cloud-account anchored. `viam-server` fetches config from Viam cloud at startup ([docs.viam.com](https://docs.viam.com/operate/reference/viam-server/)). Not BLE-first; no offline-classroom story. "Cloud infra for hardware" is their thesis; "no server in the critical path" is ours.
+- **Competes for:** *closest framing rhyme.* Tagline "build robots like you build software" — same dev-environment-shape pitch, different audience and distribution model.
+- **Overlap:** browser dashboard, camera streaming, live control ([viam.com](https://www.viam.com/product/platform-overview)). gRPC/WebRTC to a device-resident `viam-server`. Modular components, multi-language SDKs.
+- **Divergence:** server-resident B2B cloud SaaS. `viam-server` fetches config from Viam cloud at startup ([docs.viam.com](https://docs.viam.com/operate/reference/viam-server/)). Different buyer (software engineer at an industrial outfit, fleet operator), different distribution shape (account-anchored cloud product vs. fork-and-run static site).
 - **Better than us today:** data capture/sync, fleet management, funding, UR partnership.
-- **Decision impact:** clearest head-on conflict in *philosophy*. Worth naming Viam explicitly as "what we are not" so positioning is unmistakable. If Viam ever ships a BLE-first no-account free tier, the moat gets squeezed — they haven't, and it doesn't look like their direction.
+- **Decision impact:** **inspiration, not competition.** Same transport stack we ship; treats the same problem space at industrial scale. Watching their feature surface tells us what becomes table-stakes for "robotics dev environment." Our distribution shape (browser-only, no backend, MIT, fork-and-run) is the moat — they can ship features in 18 months; restructuring their cloud-product distribution model to match would be a different company.
+
+### Freedom Robotics
+- **Competes for:** browser-based teleop and remote operation of fielded robots.
+- **Overlap:** WebRTC video + control via browser; SDK/agent runs on the robot ([freedomrobotics.com](https://www.freedomrobotics.com/)).
+- **Divergence:** server-resident B2B cloud SaaS, TURN-relay-anchored teleop, account + fleet model. No fork-and-run, no offline mode, no LLM/scripting surface.
+- **Better than us today:** production teleop UX for industrial deployments, observability tooling, customer base in delivery + service robotics.
+- **Decision impact:** same audience-shape conflict as Viam — enterprise/industrial vs. consumer/education/hobbyist. Worth tracking for transport / observability conventions; not a wedge threat.
 
 ### Improv Wi-Fi (open standard)
 - **Competes for:** the onboarding moment — "how does a fresh device join Wi-Fi."
@@ -75,16 +82,17 @@ External systems that compete for the same user decision as Better Robotics — 
 
 ## Concluding read
 
-**Is schematik.io the best thing out there for this shape of problem?** No, and not because it's beaten — it's in a different category entirely (AI hardware codegen, not browser-paired runtime control). For the actual shape — *pair a robot in a browser tab, control and brain it, no account, no server* — **there is no clean head-on competitor.** The closest cousins split the problem: **MicroBlocks** and **XRPCode** own browser-IDE-to-hardware but deploy code *to* the device and have no LLM/VLM layer; **LEGO SPIKE** and **Sphero EDU** own classroom-web-app experience but are walled gardens with accounts; **Viam** owns "browser dashboard for robot" but hard-anchors to a cloud account; **ESP RainMaker** and **Improv Wi-Fi** own the BLE-provisioning primitive but stop there; **LeRobot** owns the VLA/LLM orchestration layer but has no browser runtime or BLE story. The project sits at the intersection none of them occupy.
+**Is there a clean head-on competitor for the actual shape — *write code for a robot in a browser tab, no install, AI assist optional, fork-and-run*?** No. The closest cousins split the problem: **MicroBlocks** and **XRPCode** own browser-IDE-to-hardware but deploy code *to* the device and have no in-browser AI layer; **LEGO SPIKE** and **Sphero EDU** own classroom-web-app experience but are walled gardens with accounts; **Viam** and **Freedom Robotics** are the closest framing rhymes (server-resident dev environments for robots) but anchor to industrial cloud, accounts, and fleet ops; **ESP RainMaker** and **Improv Wi-Fi** own the BLE-provisioning primitive but stop there; **LeRobot** owns the VLA/LLM orchestration layer but has no browser runtime or BLE story.
 
-**Does anything here say change direction?** No. The closest scare is Viam's "robotics is cloud infra for hardware" — opposite bet, well-funded — but the moat is *exactly* not going that way. The nearest tactical move is to implement the **Improv Wi-Fi** BLE onboarding characteristic alongside ours so anything Improv-aware (ESPHome Dashboard, WLED config, Home Assistant tools) can provision our robots out of the box. Interop win, not a strategy shift.
+**Does anything here say change direction?** No. The nearest tactical move is to implement the **Improv Wi-Fi** BLE onboarding characteristic alongside ours so anything Improv-aware (ESPHome Dashboard, WLED config, Home Assistant tools) can provision our robots out of the box. Interop win, not a strategy shift.
 
-**What's the moat, given the landscape?**
-- **No-account-no-server** is genuinely rare here. Sphero, Viam, Particle, RainMaker all account-anchor. MicroBlocks and esptool-js run accountless but aren't runtime-control planes.
-- **Three-plane discipline** (control/data/recovery as independent systemd units, USB-CDC recovery, separate heartbeat service) has no analog in the hobby/classroom stacks — openpilot-caliber discipline in a niche that doesn't usually do it.
-- **Browser-as-brain for runtime and user code** (not just authoring) is the one genuinely contrarian bet. Every competitor that does "browser IDE" pushes code to the device; every competitor that does "cloud brain" assumes an account. The combination — LLM-orchestrated runtime in the browser, user scripts also in the browser, Pi as typed-primitive actuator — is the shape no one else is shipping.
+**What's the moat, given the landscape?** Ranked by erosion runway (slowest first):
+- **Browser-native dev surface.** Write code in a tab, no install, no SDK download. Every "robotics platform" worth naming requires *some* install — `viam-server`, ESP-IDF, gpiozero on Pi, the Arduino IDE. The fork-and-run static-site distribution model is structurally hard to copy without restructuring a whole company's product surface.
+- **Browser-resident model serving.** VLM, open-vocab detector, ArUco fiducial pose all client-side. No GPU server, no inference bill, no cloud-API dependency. Viam, Freedom Robotics, and LeRobot all assume server-side or per-device GPU. The combination "browser IDE + browser ML inference" is the shape no one is shipping.
+- **Layered safety.** Firmware-bounded motors that the IDE-level planner (user code or Pip) can't bypass. Ask-human as the terminal cascade rung. Standard practice in driving (openpilot-panda) but rare in hobby/classroom robotics.
+- **Fork-and-run.** GitHub-Pages deployable, no backend, no accounts, no data leaving the browser. MIT-licensed. Sphero, Viam, Particle, RainMaker, Freedom — all account-anchor.
 
-Keep the scope lines loud in the README. The market reads "robotics kit" and expects either Sphero (closed, accountful, kid-friendly) or Viam (cloud, engineer-facing, fleet-y). The project is neither. Naming what it *isn't* — "not autonomous, not real-time, not spatially aware, not a code-deploy target, not a remote-shell host" — does more positioning work than any feature comparison could.
+Keep the scope lines loud in the README. The market reads "robotics platform" and expects Sphero (closed, accountful, kid-friendly) or Viam (cloud, engineer-facing, fleet-y). The project is neither. Naming what it *isn't* — *not a teleop dashboard, not a fleet manager, not "AI does everything autonomously," not real-time, not spatially aware* — does more positioning work than any feature comparison could.
 
 ## Sources
 
@@ -97,6 +105,7 @@ Keep the scope lines loud in the README. The market reads "robotics kit" and exp
 - [Experiential Robotics XRP Code](https://www.experiential.bot/code)
 - [Viam Platform Overview](https://www.viam.com/product/platform-overview)
 - [viam-server reference](https://docs.viam.com/operate/reference/viam-server/)
+- [Freedom Robotics homepage](https://www.freedomrobotics.com/)
 - [Improv Wi-Fi homepage](https://www.improv-wifi.com/)
 - [ESPHome 2025.10.0 changelog — Improv BLE improvements](https://esphome.io/changelog/2025.10.0/)
 - [ESP RainMaker provisioning docs](https://docs.rainmaker.espressif.com/docs/sdk/rainmaker-base-sdk/DeviceManagement/provisioning/)

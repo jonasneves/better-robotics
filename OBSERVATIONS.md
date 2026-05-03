@@ -11,7 +11,7 @@ Inputs, all same-origin, all already in the browser:
 - Replay records (`replay.js`) — what Pip has been asked to do lately, what errored, what never completed.
 - Robot telemetry — firmware version drift, last-seen timestamps, which robots are `firmware-down` vs `connected`, which capabilities have never been exercised.
 - User scripts (`scripts.js` + localStorage) — scripts saved but never run, scripts that errored on last run, scripts related to a stalled goal.
-- Project intent — `.claude/direction.md` and `.claude/working.md` when present. The user's own statement of what they're trying to build is the highest-signal input.
+- Project intent — `.claude/CLAUDE.md` (wedge + anti-drift guards) and `.claude/working.md` when present. The user's own statement of what they're trying to build is the highest-signal input.
 
 One short observation at a time, tied to a user-activity boundary (session start, session end, robot reconnect after > 24h), not a wall-clock cron. Dismissable without consequence.
 
@@ -36,7 +36,7 @@ Pip runs in the browser; every input that would meaningfully change what Pip say
 
 What you get for free:
 
-- **Zero new infrastructure.** No cron, no scraper, no CI job, no JSON corpus, no filter pipeline. Just `assistant.js` plus a small `pip-observations.js` reading existing state.
+- **Zero new infrastructure.** No cron, no scraper, no CI job, no JSON corpus, no filter pipeline. Just `assistant.js` plus a small observation reader for existing state.
 - **Zero new trust boundary.** Same-origin reads of the dashboard's own stores. Nothing crosses the network that doesn't already cross it.
 - **High signal by construction.** An observation referencing the user's own script by name clears the "is this relevant?" bar before it's written. A trending-reddit link does not.
 - **Dismissal is free.** Observations are ephemeral; ignoring one costs nothing and doesn't build unread debt.
