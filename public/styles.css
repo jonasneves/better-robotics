@@ -325,6 +325,19 @@ button.icon:hover { background: var(--line); color: var(--ink); }
 .menu-item.destructive .icon-svg { color: var(--danger); }
 .menu-item.destructive:hover { background: rgba(215, 0, 21, 0.08); }
 a.menu-item { text-decoration: none; }
+/* Menu groups: visual separator between conceptual sections (lifecycle /
+   update / info / composition / connection). Border-top on every group
+   except the first creates the divider; :has() hides any group whose
+   items are all currently hidden so empty groups don't leave stray
+   separators. */
+.menu-group + .menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.menu-group:not(:has(.menu-item:not([hidden]))) {
+  display: none;
+}
 .menu-meta {
   display: flex;
   justify-content: space-between;

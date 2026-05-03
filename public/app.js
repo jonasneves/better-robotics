@@ -1341,9 +1341,10 @@ function openMenu(triggerBtn, id) {
   // makes the item available. The handler picks among matching members.
   $("menu-pinout").hidden  = !anyMember(m => m.status === "connected" && m.fwInfo);
   // Update firmware: any member with otaDataChar (both Pi and ESP32 have it
-  // on connect). Composite robots get a per-member picker on click.
+  // on connect). Composite robots get a per-member picker on click. The
+  // dialog the click opens then offers latest-from-CI vs file-picker; one
+  // menu entry instead of two for the same goal.
   $("menu-update").hidden       = !anyMember(m => !!m.otaDataChar);
-  $("menu-update-file").hidden  = !anyMember(m => !!m.otaDataChar);
   // Disconnect is robot-level — applies to ALL connected members. Hide
   // when no member is connected.
   $("menu-disconnect").hidden = !anyMember(m => m.status === "connected");
@@ -1523,13 +1524,34 @@ document.addEventListener("DOMContentLoaded", () => {
   $("menu-update").addEventListener("click", async () => {
     closeMenu();
     const id = await chooseMemberForAction("Update firmware", m => !!m.otaDataChar);
-    if (id) updateFirmware(id);
+    if (id) openUpdateDialog(id);
   });
-  $("menu-update-file").addEventListener("click", async () => {
-    closeMenu();
-    const id = await chooseMemberForAction("Update from file", m => !!m.otaDataChar);
-    if (id) updateFromFile(id);
-  });
+  function openUpdateDialog(id) {
+    const entry = state.devices.get(id);
+    if (!entry) return;
+    const dialog = $("update-fw-dialog");
+    const sourceEl = $("update-fw-source");
+    const latestBtn = $("update-fw-latest");
+    // Mirror the source-resolution logic in updateFirmware: Pi falls back to
+    // the default manifest path when fwInfo is partial; ESP32 uses fwInfo.url.
+    const bundleUrl = entry.fwInfo?.bundle_url
+      || (entry.otaDataChar && !entry.fwInfo?.url ? "firmware/pi_robot/ota-manifest.json" : null);
+    const url = bundleUrl || entry.fwInfo?.url;
+    if (url) {
+      sourceEl.textContent = url;
+      sourceEl.hidden = false;
+      latestBtn.disabled = false;
+    } else {
+      sourceEl.textContent = "(no published source — pick a local file instead)";
+      sourceEl.hidden = false;
+      latestBtn.disabled = true;
+    }
+    latestBtn.onclick = () => { dialog.close(); updateFirmware(id); };
+    $("update-fw-file").onclick = () => { dialog.close(); updateFromFile(id); };
+    dialog.showModal();
+  }
+  $("update-fw-close").addEventListener("click", () => $("update-fw-dialog").close());
+  $("update-fw-cancel").addEventListener("click", () => $("update-fw-dialog").close());
   $("menu-restart").addEventListener("click", async () => {
     closeMenu();
     const id = await chooseMemberForAction("Restart service", m => !!m.opsChar);

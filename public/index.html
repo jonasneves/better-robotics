@@ -129,6 +129,20 @@
   <button class="menu-item destructive" id="menu-hard-refresh"><svg class="icon-svg"><use href="icons.svg#icon-trash-2"/></svg>Hard refresh…</button>
 </div>
 
+<dialog id="update-fw-dialog" class="prepare-dialog">
+  <div class="modal-header">
+    <div class="label">Update firmware</div>
+    <button class="icon" id="update-fw-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
+  </div>
+  <p style="margin: 0 0 6px;">Pull the latest published firmware, or pick a local file.</p>
+  <div class="meta mono" id="update-fw-source" style="margin: 0 0 16px; word-break: break-all;"></div>
+  <div class="modal-footer">
+    <button class="secondary sm" id="update-fw-cancel">Cancel</button>
+    <button class="secondary sm" id="update-fw-file">Choose a file…</button>
+    <button class="primary sm" id="update-fw-latest">Update from latest</button>
+  </div>
+</dialog>
+
 <dialog id="diagnostics-dialog" class="prepare-dialog">
   <div class="modal-header">
     <div class="label">Diagnostics</div>
@@ -172,18 +186,27 @@
 
 <div id="robot-menu" class="menu" popover="manual">
   <div class="menu-header" id="robot-menu-header" hidden></div>
-  <button class="menu-item" id="menu-label"><svg class="icon-svg"><use href="icons.svg#icon-tag"/></svg>Show label</button>
-  <button class="menu-item" id="menu-update"><svg class="icon-svg"><use href="icons.svg#icon-download-cloud"/></svg>Update firmware</button>
-  <button class="menu-item" id="menu-update-file"><svg class="icon-svg"><use href="icons.svg#icon-file-up"/></svg>Update from file…</button>
-  <button class="menu-item" id="menu-restart"><svg class="icon-svg"><use href="icons.svg#icon-refresh-cw"/></svg>Restart service</button>
-  <button class="menu-item" id="menu-reboot"><svg class="icon-svg"><use href="icons.svg#icon-power"/></svg>Reboot robot</button>
-  <button class="menu-item" id="menu-log"><svg class="icon-svg"><use href="icons.svg#icon-scroll-text"/></svg>View log</button>
-  <button class="menu-item" id="menu-shell" hidden><svg class="icon-svg"><use href="icons.svg#icon-terminal"/></svg>Shell</button>
-  <button class="menu-item" id="menu-pinout"><svg class="icon-svg"><use href="icons.svg#icon-cpu"/></svg>Pinout (GPIO)</button>
-  <button class="menu-item" id="menu-merge"><svg class="icon-svg"><use href="icons.svg#icon-git-merge"/></svg>Merge with…</button>
-  <button class="menu-item" id="menu-split" hidden><svg class="icon-svg"><use href="icons.svg#icon-git-branch"/></svg>Split this device into its own robot</button>
-  <button class="menu-item" id="menu-disconnect"><svg class="icon-svg"><use href="icons.svg#icon-unplug"/></svg>Disconnect</button>
-  <button class="menu-item destructive" id="menu-forget"><svg class="icon-svg"><use href="icons.svg#icon-trash-2"/></svg>Forget this robot</button>
+  <div class="menu-group">
+    <button class="menu-item" id="menu-log"><svg class="icon-svg"><use href="icons.svg#icon-scroll-text"/></svg>View log</button>
+    <button class="menu-item" id="menu-restart"><svg class="icon-svg"><use href="icons.svg#icon-refresh-cw"/></svg>Restart service</button>
+    <button class="menu-item" id="menu-reboot"><svg class="icon-svg"><use href="icons.svg#icon-power"/></svg>Reboot robot</button>
+    <button class="menu-item" id="menu-shell" hidden><svg class="icon-svg"><use href="icons.svg#icon-terminal"/></svg>Shell</button>
+  </div>
+  <div class="menu-group">
+    <button class="menu-item" id="menu-update"><svg class="icon-svg"><use href="icons.svg#icon-download-cloud"/></svg>Update firmware…</button>
+  </div>
+  <div class="menu-group">
+    <button class="menu-item" id="menu-pinout"><svg class="icon-svg"><use href="icons.svg#icon-cpu"/></svg>Pinout</button>
+    <button class="menu-item" id="menu-label"><svg class="icon-svg"><use href="icons.svg#icon-tag"/></svg>Show QR…</button>
+  </div>
+  <div class="menu-group">
+    <button class="menu-item" id="menu-merge"><svg class="icon-svg"><use href="icons.svg#icon-git-merge"/></svg>Merge with…</button>
+    <button class="menu-item" id="menu-split" hidden><svg class="icon-svg"><use href="icons.svg#icon-git-branch"/></svg>Split…</button>
+  </div>
+  <div class="menu-group">
+    <button class="menu-item" id="menu-disconnect"><svg class="icon-svg"><use href="icons.svg#icon-unplug"/></svg>Disconnect</button>
+    <button class="menu-item destructive" id="menu-forget"><svg class="icon-svg"><use href="icons.svg#icon-trash-2"/></svg>Forget this robot</button>
+  </div>
 </div>
 
 <dialog id="log-dialog" class="prepare-dialog log-dialog">
