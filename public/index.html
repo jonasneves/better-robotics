@@ -112,8 +112,7 @@
   <div class="menu-header" id="avatar-menu-name">Not set</div>
   <button class="menu-item" id="menu-settings"><svg class="icon-svg"><use href="icons.svg#icon-settings"/></svg>Settings</button>
   <button class="menu-item" id="menu-gpio-ref"><svg class="icon-svg"><use href="icons.svg#icon-book-open"/></svg>GPIO reference</button>
-  <button class="menu-item" id="menu-recovery"><svg class="icon-svg"><use href="icons.svg#icon-life-buoy"/></svg>Recovery console</button>
-  <button class="menu-item" id="menu-esp-serial"><svg class="icon-svg"><use href="icons.svg#icon-terminal"/></svg>ESP32 serial</button>
+  <button class="menu-item" id="menu-console"><svg class="icon-svg"><use href="icons.svg#icon-terminal"/></svg>Console</button>
   <button class="menu-item" id="menu-scripts"><svg class="icon-svg"><use href="icons.svg#icon-file-code"/></svg>Scripts</button>
 </div>
 
@@ -323,36 +322,39 @@
   <div id="scripts-output" class="scripts-output"></div>
 </dialog>
 
-<dialog id="esp-serial-modal" class="prepare-dialog">
-  <div class="modal-header">
-    <div class="label"><svg class="icon-svg modal-title-icon"><use href="icons.svg#icon-usb"/></svg>ESP32 serial monitor</div>
-    <button class="icon" id="esp-serial-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
-  </div>
-  <div class="row" style="margin: 0 0 12px;">
-    <button class="secondary sm" id="esp-serial-connect">Connect</button>
-    <span class="status-row"><span class="dot" id="esp-serial-status-dot"></span><span class="meta" id="esp-serial-status"></span></span>
-  </div>
-  <!-- Host for <ewt-console>. We don't put the element here statically — its
-       connectedCallback fires on page load with no port set and crashes
-       inside esp-web-tools (Cannot read properties of undefined / 'debug').
-       Created dynamically in esp-serial.js on Connect, with port already
-       assigned. -->
-  <div id="esp-serial-console-host" class="esp-serial-console"></div>
-</dialog>
-
-<dialog id="recovery-modal" class="prepare-dialog"
-  data-pip-context="USB serial console to a Pi, used when BLE is dead or pi-robot.service has crashed. Typical rescue flow: check `journalctl -u pi-robot -n 50`, reset a stuck wifi (rfkill unblock), kill wedged capture processes."
+<dialog id="console-modal" class="prepare-dialog"
+  data-pip-context="USB serial console to a Pi or ESP32. Pi mode (USB-CDC ACM) yields a real bash prompt; ESP32 mode (USB UART) yields boot log + serial output. Used when BLE is dead or for low-level debugging. Mode picker at the top of the dialog selects which one."
   data-pip-fallback="First thing to check on a broken Pi: `journalctl -u pi-robot -n 50` — tells you if the service crashed.">
   <div class="modal-header">
-    <div class="label"><svg class="icon-svg modal-title-icon"><use href="icons.svg#icon-usb"/></svg>Recovery console</div>
-    <button class="icon" id="recovery-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
+    <div class="label"><svg class="icon-svg modal-title-icon"><use href="icons.svg#icon-terminal"/></svg>Console</div>
+    <button class="icon" id="console-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
-  <div class="row recovery-actions">
-    <button class="secondary sm" id="recovery-connect">Connect</button>
-    <span class="status-row"><span class="dot" id="recovery-status-dot"></span><span class="meta" id="recovery-status"></span></span>
-    <button class="secondary sm danger" id="recovery-flash">Flash firmware</button>
+  <div class="console-mode-row">
+    <label for="console-mode" class="meta">Connect to</label>
+    <select id="console-mode">
+      <option value="pi">Raspberry Pi (USB-C)</option>
+      <option value="esp">ESP32 (USB serial)</option>
+    </select>
   </div>
-  <div id="recovery-term" class="recovery-term"></div>
+  <!-- Pi mode (recovery.js operates on these IDs). -->
+  <div class="console-section" id="console-pi-section">
+    <div class="row recovery-actions">
+      <button class="secondary sm" id="recovery-connect">Connect</button>
+      <span class="status-row"><span class="dot" id="recovery-status-dot"></span><span class="meta" id="recovery-status"></span></span>
+      <button class="secondary sm danger" id="recovery-flash">Flash firmware</button>
+    </div>
+    <div id="recovery-term" class="recovery-term"></div>
+  </div>
+  <!-- ESP32 mode (esp-serial.js operates on these IDs). The <ewt-console>
+       element is created dynamically by esp-serial.js on Connect (its
+       connectedCallback crashes if mounted with no port). -->
+  <div class="console-section" id="console-esp-section" hidden>
+    <div class="row" style="margin: 0 0 12px;">
+      <button class="secondary sm" id="esp-serial-connect">Connect</button>
+      <span class="status-row"><span class="dot" id="esp-serial-status-dot"></span><span class="meta" id="esp-serial-status"></span></span>
+    </div>
+    <div id="esp-serial-console-host" class="esp-serial-console"></div>
+  </div>
 </dialog>
 
 <dialog id="shell-modal" class="prepare-dialog"

@@ -148,13 +148,10 @@ export async function releasePort() { if (_port) await disconnect(); }
 export function init() {
   if (_wired) return;
   _wired = true;
-  $("esp-serial-close").addEventListener("click", () => $("esp-serial-modal").close());
+  $("console-close").addEventListener("click", () => $("console-modal").close());
   $("esp-serial-connect").addEventListener("click", () => _port ? disconnect() : connect());
   // Auto-disconnect when the dialog closes — leaving the port open across
   // dialog hides would block other tools (Flash button) from reusing it.
-  $("esp-serial-modal").addEventListener("close", () => { if (_port) disconnect(); });
+  $("console-modal").addEventListener("close", () => { if (_port) disconnect(); });
 }
 
-export function openESPSerialDialog() {
-  $("esp-serial-modal").showModal();
-}

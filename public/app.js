@@ -1247,10 +1247,7 @@ function renderEntry(entryArg) {
   const disconnectBtn = entry.node.querySelector('[data-action="disconnect"]');
   if (disconnectBtn) disconnectBtn.addEventListener("click", () => disconnect(id));
   const recoveryBtn = entry.node.querySelector('[data-action="open-recovery"]');
-  if (recoveryBtn) recoveryBtn.addEventListener("click", async () => {
-    const mod = await import("./recovery.js");
-    mod.openRecoveryDialog();
-  });
+  if (recoveryBtn) recoveryBtn.addEventListener("click", () => openConsole("pi"));
   const menuBtn = entry.node.querySelector('[data-action="menu"]');
   if (menuBtn) menuBtn.addEventListener("click", () => openMenu(menuBtn, id));
   const toggleExpand = () => {
@@ -1434,6 +1431,27 @@ function showSwUpdateBanner(worker) {
   document.getElementById("sw-update-dismiss").addEventListener("click", () => bar.remove());
 }
 setupServiceWorker({ onUnsolicitedUpdate: showSwUpdateBanner });
+
+// Console (Pi USB-C + ESP32 USB serial) — unified entry point. Mode is
+// remembered across sessions via localStorage; explicit mode argument
+// wins (e.g. firmware-down banner opens Pi mode regardless).
+async function openConsole(mode) {
+  const m = mode || localStorage.getItem("console-mode") || "pi";
+  $("console-mode").value = m;
+  await _setConsoleMode(m);
+  if (!$("console-modal").open) $("console-modal").showModal();
+}
+async function _setConsoleMode(mode) {
+  $("console-pi-section").hidden = mode !== "pi";
+  $("console-esp-section").hidden = mode !== "esp";
+  if (mode === "pi") {
+    const mod = await import("./recovery.js");
+    mod.init();
+  } else {
+    const mod = await import("./esp-serial.js");
+    mod.init();
+  }
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   // Browsers without Web Bluetooth (iOS Safari is the common case — a phone
@@ -1637,16 +1655,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const mod = await import("./pinout.js");
     mod.openPinoutReference();
   });
-  $("menu-recovery").addEventListener("click", async () => {
+  $("menu-console").addEventListener("click", () => {
     $("avatar-menu").hidePopover();
-    const mod = await import("./recovery.js");
-    mod.openRecoveryDialog();
+    openConsole();
   });
-  $("menu-esp-serial").addEventListener("click", async () => {
-    $("avatar-menu").hidePopover();
-    const mod = await import("./esp-serial.js");
-    mod.init();
-    mod.openESPSerialDialog();
+  $("console-mode").addEventListener("change", async (e) => {
+    const mode = e.target.value;
+    localStorage.setItem("console-mode", mode);
+    await _setConsoleMode(mode);
   });
   $("menu-scripts").addEventListener("click", async () => {
     $("avatar-menu").hidePopover();

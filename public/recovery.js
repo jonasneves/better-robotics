@@ -184,16 +184,16 @@ async function disconnect() {
 // Lazy-loaded from app.js on first "Recovery" menu click; one-time setup
 // guarded by the flag, dialog-open behavior on every call.
 let _initialized = false;
-function initOnce() {
+export function init() {
   if (_initialized) return;
   _initialized = true;
-  $("recovery-close").addEventListener("click", () => $("recovery-modal").close());
+  $("console-close").addEventListener("click", () => $("console-modal").close());
   $("recovery-connect").addEventListener("click", () => _port ? disconnect() : connect());
   $("recovery-flash").addEventListener("click", flashFlow);
   // No outside-click dismiss — terminal session is real work; accidental
   // clicks outside the modal used to kill the connection and scrollback.
   // Explicit × button is the only way out.
-  $("recovery-modal").addEventListener("close", () => { if (_port) disconnect(); });
+  $("console-modal").addEventListener("close", () => { if (_port) disconnect(); });
 }
 
 // Browser-side firmware flash. Disconnects any active serial console
@@ -276,7 +276,3 @@ async function flashFlow() {
 // esp-web-tools' install button doesn't trip "port is already open".
 export async function releasePort() { if (_port) await disconnect(); }
 
-export function openRecoveryDialog() {
-  initOnce();
-  $("recovery-modal").showModal();
-}

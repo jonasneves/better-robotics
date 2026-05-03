@@ -1643,14 +1643,38 @@ details.tray.has-alert > summary::after {
 .esp-key.sd-shared { background: #eab308; }
 .esp-key.reserved  { background: #6b7280; color: #e5e5e5; }
 
-/* Recovery console — widened to fit 80 cols at 13px, flex-column so the
-   term container has a measurable size for FitAddon to read. */
-#recovery-modal {
+/* Console (Pi USB-C + ESP32 USB serial unified) — widened to fit Pi's
+   80-col terminal at 13px, flex-column so the active section's term
+   container has a measurable size for FitAddon. The mode picker swaps
+   which section is visible (.console-section); both share the dialog
+   shell and lifecycle. */
+#console-modal {
   display: flex;
   flex-direction: column;
   width: min(820px, calc(100vw - 32px));
   height: min(640px, calc(100vh - 64px));
 }
+.console-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.console-mode-row select {
+  font: inherit;
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--ink);
+}
+.console-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.console-section[hidden] { display: none; }
 /* Toolbar row: Connect + status grouped at the left, destructive Flash
    firmware isolated on the right. Apple HIG separates destructive
    actions from benign ones so the operator's eye lands on the safe
