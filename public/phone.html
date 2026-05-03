@@ -17,7 +17,7 @@
        Safari yet (2025), so we use the same pure-JS decoder catwatcher uses
        so the same code path covers iOS + Android + desktop browsers. -->
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script type="module" src="phone.js"></script>
+  <script type="module" src="mobile.js"></script>
 </head>
 <body class="phone">
 <main class="phone-main">
@@ -161,7 +161,7 @@
     </div>
   </section>
 
-  <!-- Perception scene readout — auto-rendered by phone.js when there's
+  <!-- Perception scene readout — auto-rendered by mobile.js when there's
        text to show. Self-hides when empty so it doesn't take up space. -->
   <section class="phone-scene" id="phone-scene" hidden>
     <div class="phone-scene-label"><svg class="icon-svg"><use href="icons.svg#icon-camera"/></svg><span id="phone-scene-source">Camera</span></div>

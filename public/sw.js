@@ -23,7 +23,7 @@
 //   commit. For an intentional bump unrelated to assets (e.g. server-side
 //   change in an API contract), edit any cached asset (a comment will do)
 //   and the hook will pick up a new hash.
-const VERSION = "876f57b6";
+const VERSION = "d064f693";
 const CACHE = `dashboard-${VERSION}`;
 
 // Cached at install time so the dashboard can cold-boot offline AND
@@ -38,7 +38,7 @@ const BOOTSTRAP = [
   "./manifest.json", "./icon.svg",
   // Phone companion is installable too (iOS A2HS); phone.html is the
   // scope-root start_url when installed from /phone.html.
-  "./phone.html", "./phone.js",
+  "./phone.html", "./mobile.js",
   // Dynamic-imported by app.js. Precache so first open of Recovery /
   // Scripts / Pinout / ESP serial / SD prep loads from cache, and works
   // offline.

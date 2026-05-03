@@ -2564,7 +2564,7 @@ body.phone textarea {
    phone (.phone-share section). The phone-share-btn name was
    surface-specific; the affordance isn't, so the class is generic now.
    44pt min height for thumb targets; sentence case per a11y; .on
-   variant used by phone.js to indicate "currently sharing." */
+   variant used by mobile.js to indicate "currently sharing." */
 .share-action-btn {
   min-height: 44px;
   padding: 10px 16px;
@@ -2726,7 +2726,7 @@ body.phone textarea {
 }
 
 /* Pip accordion. Collapsed = just a row with title + status + unread dot;
-   expanded = the chat bubble + input. Auto-expanded by phone.js when Pip
+   expanded = the chat bubble + input. Auto-expanded by mobile.js when Pip
    pushes a message worth reading. The "details > summary" pattern is
    native + accessible — the disclosure caret is browser-supplied, so we
    don't have to wire keyboard / aria ourselves. */

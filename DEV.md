@@ -9,7 +9,7 @@ Cheat sheet for diagnostic flags, console handles, debug paths. User-facing → 
 - `?robot=<name>` — pre-selects a robot by name (useful for direct-link workflows). Implementation: `app.js`.
 
 ### Phone (`phone.html`)
-- `#pair=<uuid>` — the pairing room id, normally injected by the QR. Required for the phone to find the room. Implementation: `phone.js`.
+- `#pair=<uuid>` — the pairing room id, normally injected by the QR. Required for the phone to find the room. Implementation: `mobile.js`.
 
 ## Window handles (DevTools console)
 

@@ -862,7 +862,7 @@ async function _requestPairWith(macAd) {
     // Mac trusts us per its own "Trust this phone" checkbox decision;
     // we don't auto-trust back because the phone has no surface for
     // the reciprocal choice yet. Leave trust binding to the explicit
-    // QR path (phone.js init already calls _trust.trust when pk rides
+    // QR path (mobile.js init already calls _trust.trust when pk rides
     // in on the QR hash, and the pair-keys data-channel handshake
     // refreshes the label).
     location.replace(location.pathname + '#pair=' + result.data.roomId);

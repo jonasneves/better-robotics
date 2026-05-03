@@ -203,7 +203,7 @@ class Peer {
     this._negotiating = false;
     // Buffer track events that arrive before the consumer wires onTrack —
     // happens when desktop initiates a renegotiation immediately after the
-    // channel opens, before phone.js has its handlers attached.
+    // channel opens, before mobile.js has its handlers attached.
     pc.addEventListener("track", (e) => {
       if (this._onTrack) { try { this._onTrack(e); } catch {} }
       else this._pendingTracks.push(e);
@@ -547,7 +547,7 @@ export async function hostPairingRoom({ onStatus = () => {} } = {}) {
 
 // Phone: joins the room, creates data channel + offer on WS open, processes answer.
 // onStatus fires at each negotiation stage ("opening signal channel…",
-// "offer sent, waiting…", etc.) so phone.js can surface exactly where the
+// "offer sent, waiting…", etc.) so mobile.js can surface exactly where the
 // pair is — instead of a single "connecting…" blob that hides every stall.
 export async function joinPairingRoom(roomId, { onStatus = () => {} } = {}) {
   const myPeerId = makePeerId("phone");

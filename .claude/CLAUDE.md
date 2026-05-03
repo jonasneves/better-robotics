@@ -27,7 +27,7 @@ This project is the **browser-native robotics dev environment** — vibe-code ro
 
 # Subsystem map
 
-- **Pair layer** — `pairing.js`, `phones.js`, `phone.js`, `phone.html`. Desktop ↔ phone WebRTC.
+- **Pair layer** — `pairing.js`, `phones.js` (paired-phones management on desktop), `mobile.js` + `phone.html` (phone-side UI). Desktop ↔ phone WebRTC.
 - **Perception + detection** — `perception.js` (VLM), `grounding.js` (open-vocab detector), `aruco.js` (fiducial pose). Camera-frame capture, scene prompts, structured outputs.
 - **Pip / assistant** — `assistant.js`, `claude.js`, `local-llm.js`, `pip-tools.js`, `replay.js`. Tool-using LLM integration (Claude or local fallback), tool schemas, executor, replay logging.
 - **Robot ops** — `ble.js`, `ops-response.js`, `capabilities/`. BLE protocol, ops channel, per-cap cards + runtime.

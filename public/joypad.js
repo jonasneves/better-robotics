@@ -1,6 +1,6 @@
 // Generic virtual joypad — pointer events on a circular pad + knob, emits
 // (left, right) motor values via onDrive. Shared between the desktop motor
-// card (capabilities/runtime/signed-pair.js) and the phone page (phone.js).
+// card (capabilities/runtime/signed-pair.js) and the phone page (mobile.js).
 //
 // Pattern copied from nipplejs (github.com/yoannmoinet/nipplejs, 14k★):
 // window-attached move/up instead of setPointerCapture (more reliable across

@@ -96,7 +96,7 @@ Commit + push when ready. CI rebuilds firmware artifacts on every `firmware/**` 
 
 The dashboard is flat by convention; naming prefixes carry the subsystem boundary:
 
-- **Pair layer** (`pairing.js`, `phones.js`, `phone.js`, `phone.html`) — desktop ↔ phone WebRTC link.
+- **Pair layer** (`pairing.js`, `phones.js`, `mobile.js`, `phone.html`) — desktop ↔ phone WebRTC link.
 - **Perception + detection** (`perception.js`, `grounding.js`, `aruco.js`) — in-browser LFM2.5-VL-450M (VLM), Grounding DINO tiny (open-vocab detector), ArUco (fiducial pose).
 - **Pip / assistant** (`assistant.js`, `claude.js`, `local-llm.js`, `pip-tools.js`, `replay.js`) — tool-using LLM integration, tool schemas, executor, replay logging, offline LFM fallback.
 - **Robot ops** (`ble.js`, `ops-response.js`, `capabilities/`) — BLE protocol, typed-ops channel, per-capability cards + runtime handlers.
