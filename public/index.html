@@ -461,8 +461,8 @@
 </dialog>
 
 <dialog id="setup-dialog" class="prepare-dialog setup-dialog"
-  data-pip-context="User is choosing between ESP32 (USB flash in ~30s, no camera) and Pi (camera-capable, longer setup, needs SD prep). Decision usually hinges on whether they want onboard video or heavy compute."
-  data-pip-fallback="ESP32 flashes in ~30s if you don't need video. Pi's the path if you want a camera or onboard compute.">
+  data-pip-context="User is choosing between ESP32 (USB flash in ~30s, basic onboard camera, no Linux) and Pi (HD camera, full Linux, longer setup, needs SD prep). Decision hinges on whether they want a lightweight microcontroller or onboard Linux with better video."
+  data-pip-fallback="ESP32 flashes in ~30s with a basic onboard camera. Pi's the path if you want HD video or onboard Linux.">
   <div class="modal-header">
     <div class="label">Set up a robot</div>
     <button class="icon" id="setup-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
@@ -472,7 +472,7 @@
       <span class="platform-mark">ESP32</span>
       <div class="platform-body">
         <div class="platform-title">ESP32</div>
-        <div class="platform-sub">Flash firmware over USB. ~30 seconds, no camera.</div>
+        <div class="platform-sub">Flash firmware over USB. ~30 seconds. Basic camera, no Linux.</div>
       </div>
       <div class="platform-cta">
         <esp-web-install-button manifest="firmware/manifest.json">
@@ -489,7 +489,7 @@
       <span class="platform-mark">PI</span>
       <div class="platform-body">
         <div class="platform-title">Raspberry Pi</div>
-        <div class="platform-sub">Prepare an SD card. Camera and onboard compute.</div>
+        <div class="platform-sub">Prepare an SD card. HD camera, onboard Linux.</div>
       </div>
       <div class="platform-cta">
         <button type="button" id="prepare-open-btn">Set up SD card</button>
