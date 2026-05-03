@@ -107,33 +107,37 @@ export function setupServiceWorker({ swPath = "sw.js", onUnsolicitedUpdate } = {
 export function wireCheckUpdatesMenuItem({ btnId }) {
   const btn = document.getElementById(btnId);
   if (!btn) return;
+  // Swap the label-span's text, not the button's: setting btn.textContent
+  // wipes the icon SVG along with the label, and the icon never comes back
+  // (we only capture the original *text*, not the original DOM).
+  const label = btn.querySelector(".menu-item-label") || btn;
   btn.addEventListener("click", async () => {
-    const original = btn.textContent;
+    const original = label.textContent;
     btn.disabled = true;
-    btn.textContent = "Checking…";
+    label.textContent = "Checking…";
     try {
       const reg = await navigator.serviceWorker?.getRegistration();
       if (!reg) throw new Error("no-sw");
       // Already-waiting worker: apply directly. Happens when an earlier
       // page load installed it and the user dismissed the banner.
       if (reg.waiting) {
-        btn.textContent = "Updating…";
+        label.textContent = "Updating…";
         reg.waiting.postMessage("skip-waiting");
         return;  // controllerchange reloads
       }
       _autoApplyOnNextSwInstall = true;
       await reg.update();
       if (reg.installing || reg.waiting) {
-        btn.textContent = "Updating…";  // reload follows shortly
+        label.textContent = "Updating…";  // reload follows shortly
         return;
       }
       _autoApplyOnNextSwInstall = false;
-      btn.textContent = "Up to date";
+      label.textContent = "Up to date";
     } catch {
       _autoApplyOnNextSwInstall = false;
-      btn.textContent = "Up to date";
+      label.textContent = "Up to date";
     }
-    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2000);
+    setTimeout(() => { label.textContent = original; btn.disabled = false; }, 2000);
   });
 }
 
