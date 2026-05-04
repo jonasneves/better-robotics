@@ -107,19 +107,37 @@ function scrollPanelToBottom() {
 // Stop button while askWithTools iterates. Click sets abort flag the loop
 // polls between iterations; current in-flight tool call still completes
 // (firmware safety floor caps blast radius — .claude/CLAUDE.md → Control-loop invariants).
-function attachStopButton(turnEl) {
+// Singleton stop button that lives in pip's input form (right edge),
+// not inside the chat message. Matches the universal AI-chat convention
+// (ChatGPT, Claude.ai, Cursor — stop control sits where the send button
+// would). Mounted lazily on first show; persists thereafter, hidden when
+// not responding.
+let _stopBtn = null;
+function ensurePipStopButton() {
+  if (_stopBtn) return _stopBtn;
+  const form = _pip?.panel?.querySelector?.(".pip-form");
+  if (!form) return null;
+  form.style.position = "relative";
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "secondary sm pip-stop";
-  btn.textContent = "Stop";
+  btn.className = "pip-stop-btn";
+  btn.setAttribute("aria-label", "Stop");
+  btn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
   btn.addEventListener("click", () => {
     _abort = true;
     btn.disabled = true;
-    btn.textContent = "Stopping…";
   });
-  const reply = turnEl.querySelector(".pip-reply");
-  turnEl.insertBefore(btn, reply || null);
+  btn.hidden = true;
+  form.appendChild(btn);
+  _stopBtn = btn;
   return btn;
+}
+function showPipStopButton() {
+  const btn = ensurePipStopButton();
+  if (btn) { btn.hidden = false; btn.disabled = false; }
+}
+function hidePipStopButton() {
+  if (_stopBtn) _stopBtn.hidden = true;
 }
 
 // Writes the ambient notify slot. Distinct from chat turns — notify is
@@ -185,7 +203,7 @@ async function onSubmit(text, { turnEl }) {
   _activeTurnEl = turnEl;
   _abort = false;
   cancelAutoDismiss();
-  const stopBtn = attachStopButton(turnEl);
+  showPipStopButton();
 
   let pendingTraceLi = null;
   const messages = _pip.history.slice(-HISTORY_LIMIT)
@@ -209,7 +227,7 @@ async function onSubmit(text, { turnEl }) {
       return choice === "Continue" ? 5 : 0;
     },
   });
-  stopBtn.remove();
+  hidePipStopButton();
   _activeTurnEl = null;
   _resumeTimer = setTimeout(scheduleAutoDismiss, IDLE_RESUME_MS);
   return reply;
