@@ -259,47 +259,31 @@ function registerInitialSlashCommands() {
         return { reply: `Unknown backend \`${arg}\`. One of: ${PIP_BACKENDS.map(b => `\`${b}\``).join(", ")}` };
       }
       const KEY = "better-robotics:settings";
-      const before = settings.pipBackend;
       const beforeRaw = localStorage.getItem(KEY);
 
-      // 1. Mutate the in-memory settings object (live binding shared with claude.js).
+      // Mutate the live binding shared with claude.js, then save.
       settings.pipBackend = arg;
+      try { saveSettings(); } catch {}
 
-      // 2. Try the canonical saveSettings path.
-      let saveErr = null;
-      try { saveSettings(); }
-      catch (e) { saveErr = e.message || String(e); }
-
-      // 3. If saveSettings didn't land the change, write localStorage directly
-      //    using the same JSON shape settings.js expects.
-      let directWriteErr = null;
-      const afterFirst = JSON.parse(localStorage.getItem(KEY) || "{}").pipBackend;
-      if (afterFirst !== arg) {
+      // Direct-write fallback if saveSettings didn't land — kept as cheap
+      // insurance in case the canonical path silently no-ops.
+      const after = JSON.parse(localStorage.getItem(KEY) || "{}").pipBackend;
+      if (after !== arg) {
         try {
           const merged = { ...JSON.parse(beforeRaw || "{}"), ...settings };
           localStorage.setItem(KEY, JSON.stringify(merged));
-        } catch (e) { directWriteErr = e.message || String(e); }
+        } catch {}
       }
 
-      // 4. Sync the Settings UI dropdown.
+      // Sync the Settings UI dropdown so the change-handler runs and the
+      // visible state matches.
       const sel = document.getElementById("setting-pip-backend");
       if (sel && sel.value !== arg) {
         sel.value = arg;
         sel.dispatchEvent(new Event("change", { bubbles: true }));
       }
 
-      const finalRaw = localStorage.getItem(KEY);
-      const finalBackend = JSON.parse(finalRaw || "{}").pipBackend;
-      const lines = [
-        `**/model ${arg}** — diagnostic:`,
-        `- before: in-memory=\`${before}\`, localStorage.pipBackend=\`${JSON.parse(beforeRaw || "{}").pipBackend ?? "(absent)"}\``,
-        `- saveSettings(): ${saveErr ? `THREW \`${saveErr}\`` : "ok"}`,
-        `- after saveSettings: localStorage.pipBackend=\`${afterFirst ?? "(absent)"}\``,
-        directWriteErr ? `- direct write: THREW \`${directWriteErr}\`` : (afterFirst !== arg ? `- direct write: attempted` : `- direct write: skipped (already landed)`),
-        `- final: in-memory=\`${settings.pipBackend}\`, localStorage.pipBackend=\`${finalBackend ?? "(absent)"}\`, dropdown=\`${sel?.value ?? "(no dropdown)"}\``,
-        `- localStorage raw len: ${finalRaw?.length ?? 0} chars`,
-      ];
-      return { reply: lines.join("\n") };
+      return { reply: `Backend set to \`${arg}\`.` };
     },
   });
 }
