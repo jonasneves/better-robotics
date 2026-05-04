@@ -122,7 +122,7 @@ function ensurePipStopButton() {
   btn.type = "button";
   btn.className = "pip-stop-btn";
   btn.setAttribute("aria-label", "Stop");
-  btn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
+  btn.innerHTML = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><rect width="12" height="12" rx="2" fill="currentColor"/></svg>';
   btn.addEventListener("click", () => {
     _abort = true;
     btn.disabled = true;

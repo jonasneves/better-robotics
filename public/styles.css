@@ -1907,32 +1907,35 @@ dialog[open]::backdrop { opacity: 1; }
 
 /* Dashboard is desktop-dominant; override core's 16px (iOS zoom-prevention) to
    keep the input visually tight. */
-.pip-input { font-size: 13px; padding: 6px 36px 6px 10px; background: var(--bg); }
+.pip-input { font-size: 13px; padding: 6px 40px 6px 10px; background: var(--bg); }
 .pip-input:focus { background: var(--surface); }
 /* Stop button mounted into pip's .pip-form during a response. Round, sits
    inside the input's right edge — matches ChatGPT/Claude.ai/Cursor where
-   send/stop share the input affordance. Padding-right on .pip-input above
-   keeps text from sliding under the button. */
+   send/stop share the input affordance. aspect-ratio + min-width pin the
+   shape against any inherited button rules. Padding-right on .pip-input
+   above keeps text from sliding under the button. */
 .pip-stop-btn {
   position: absolute;
-  right: 6px;
+  right: 8px;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
+  width: 26px;
+  min-width: 26px;
+  aspect-ratio: 1;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
   border: none;
-  background: var(--ink);
-  color: var(--surface);
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink, #fff);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
-  opacity: 0.85;
 }
-.pip-stop-btn:hover { opacity: 1; }
-.pip-stop-btn:disabled { opacity: 0.4; cursor: progress; }
+.pip-stop-btn:hover { filter: brightness(1.1); }
+.pip-stop-btn:disabled { opacity: 0.5; cursor: progress; }
 /* Tool-trace row — one per tool_use call, appended as Pip dispatches them.
    .pending = in-flight (italic + dim), .error = tool returned/threw. */
 .pip-trace {
