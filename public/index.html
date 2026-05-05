@@ -244,17 +244,10 @@
 
   <div class="settings-group-header">Pip</div>
   <div class="settings-item pip-backend-row">
-    <select id="setting-pip-backend" class="settings-select" aria-label="Pip backend">
-      <option value="github">GitHub Models (default)</option>
-      <option value="bridge">AI Bridge extension</option>
-      <option value="anthropic">Anthropic API (direct, your key)</option>
-      <option value="openai">OpenAI API (direct, your key)</option>
-      <option value="local">LFM2.5-1.2B-Thinking (local)</option>
-    </select>
-    <div class="hint" id="setting-pip-backend-hint"></div>
-    <!-- Per-backend connection / key rows. Each one shows ONLY the action
-         (status + button or input) — no second hint repeating the dropdown
-         description. The dropdown's hint already covers the "what." -->
+    <!-- Backend selection lives in Pip itself via /model — Settings only
+         keeps the per-backend key/install rows that need form input the
+         slash surface can't carry. Each row appears only when its
+         backend is the active one (settings.pipBackend, set by /model). -->
     <div id="setting-pip-anthropic-key-row" class="pip-key-row" hidden>
       <label for="setting-pip-key" class="settings-title">Anthropic API key</label>
       <form autocomplete="off" onsubmit="return false"><input type="password" id="setting-pip-key" autocomplete="off" placeholder="sk-ant-…" spellcheck="false"></form>

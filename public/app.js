@@ -1838,10 +1838,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Pip backend picker — bridge (default), Anthropic direct, OpenAI direct,
-  // local (LFM2.5 in-browser via WebGPU).
-  const backendSelect = $("setting-pip-backend");
-  const backendHint = $("setting-pip-backend-hint");
+  // Pip backend selection lives in Pip itself (/model command). Settings
+  // only owns the per-backend key/install/vision rows that need form
+  // input the slash surface can't carry. Each row's visibility tracks
+  // settings.pipBackend; syncBackendUI runs on dialog open so changes
+  // made via /model in the same session are reflected when Settings
+  // is reopened.
   const anthropicKeyRow = $("setting-pip-anthropic-key-row");
   const openaiKeyRow    = $("setting-pip-openai-key-row");
   const localRow        = $("setting-pip-local-row");
@@ -1851,17 +1853,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const localProgressEl = $("setting-pip-local-progress");
   const localInstallBtn = $("setting-pip-local-install");
   const localDotEl      = $("setting-pip-local-dot");
-  // One line each — keep the dropdown's hint scannable. Detailed explanation
-  // lives in claude.js's module header for the developer audience; the
-  // settings page is for the operator picking a backend, not learning the
-  // protocol. Don't compare against "the default" by name — defaults change.
-  const HINTS = {
-    github:    "OAuth with GitHub once; no API key. Free-tier rate-limited.",
-    bridge:    "Routes through the AI Bridge Chrome extension; token stays in macOS Keychain.",
-    anthropic: "Direct call to api.anthropic.com with your API key. Stored in this browser.",
-    openai:    "Direct call to api.openai.com with your API key. Stored in this browser.",
-    local:     "Runs in-browser via WebGPU (LFM2.5-1.2B). 1.2 GB one-time download; output capped at 512 tokens.",
-  };
   const visionRow   = $("setting-pip-vision-row");
   const visionInput = $("setting-pip-vision");
   // Vision tool wires the Anthropic image-in-tool_result content shape; the
@@ -1870,13 +1861,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const VISION_BACKENDS = new Set(["bridge", "anthropic"]);
   function syncBackendUI() {
     const b = settings.pipBackend || "github";
-    backendSelect.value = b;
-    // GitHub backend reads the unified githubAuth grant from Identity. When
-    // not signed in, surface a nudge in the hint instead of a duplicate
-    // Connect button (Identity row carries the action).
-    backendHint.textContent = (b === "github" && !settings.githubAuth)
-      ? "Sign in with GitHub above to use this backend."
-      : (HINTS[b] || "");
     anthropicKeyRow.hidden = b !== "anthropic";
     openaiKeyRow.hidden    = b !== "openai";
     localRow.hidden        = b !== "local";
@@ -1886,6 +1870,11 @@ document.addEventListener("DOMContentLoaded", () => {
     visionInput.checked     = !!settings.pipVisionEnabled;
   }
   syncBackendUI();
+  // Re-sync each time Settings opens so /model changes from elsewhere in
+  // the session show up.
+  $("settings-modal")?.addEventListener("toggle", () => {
+    if ($("settings-modal").open) syncBackendUI();
+  });
   // GitHub OAuth — connectGitHub from the shared neevs.io auth helper that
   // robot-studio already uses. Lazy-loaded the first time the button is
   // tapped so a user who never picks GitHub doesn't pay the import cost.
@@ -1896,11 +1885,6 @@ document.addEventListener("DOMContentLoaded", () => {
     _connectGitHubFn = mod.connectGitHub;
     return _connectGitHubFn;
   }
-  backendSelect.addEventListener("change", () => {
-    settings.pipBackend = backendSelect.value;
-    saveSettings();
-    syncBackendUI();
-  });
   visionInput.addEventListener("change", () => {
     settings.pipVisionEnabled = visionInput.checked;
     saveSettings();

@@ -2,7 +2,7 @@ import { ask, askWithTools } from "./claude.js";
 import { getTools, executor, setAskInChatHandler } from "./pip-tools.js";
 import { shorten, labelTool, summarizeTool } from "./format.js";
 import { settings, saveSettings } from "./settings.js";
-import { createPip, renderMd } from "https://cdn.jsdelivr.net/npm/@jonasneves/pip@1.8.1/pip-core.esm.js";
+import { createPip, renderMd } from "https://cdn.jsdelivr.net/npm/@jonasneves/pip@1.8.2/pip-core.esm.js";
 
 // Match Buddy: 10s total show, fade at 7s (last 3s).
 const SHOW_MS = 10000;
@@ -326,15 +326,10 @@ function registerInitialSlashCommands() {
         } catch {}
       }
 
-      // Sync the Settings UI dropdown so the change-handler runs and the
-      // visible state matches.
-      const sel = document.getElementById("setting-pip-backend");
-      if (sel && sel.value !== arg) {
-        sel.value = arg;
-        sel.dispatchEvent(new Event("change", { bubbles: true }));
-      }
-
-      // Update the model badge in pip's meta row.
+      // Update the model badge in pip's meta row. The Settings dialog
+      // doesn't expose backend selection anymore (the slash command is the
+      // canonical surface); conditional key/install rows there re-sync
+      // themselves when Settings is next opened.
       _pip.setModelLabel?.(arg);
 
       return { reply: `Backend set to \`${arg}\`.` };
