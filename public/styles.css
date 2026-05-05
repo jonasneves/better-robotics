@@ -1909,30 +1909,29 @@ dialog[open]::backdrop { opacity: 1; }
    keep the input visually tight. */
 .pip-input { font-size: 13px; padding: 6px 40px 6px 10px; background: var(--bg); }
 .pip-input:focus { background: var(--surface); }
-/* Stop button mounted into pip's .pip-form during a response. Round, sits
-   inside the input's right edge — matches ChatGPT/Claude.ai/Cursor where
-   send/stop share the input affordance. aspect-ratio + min-width pin the
-   shape against any inherited button rules. Padding-right on .pip-input
-   above keeps text from sliding under the button. */
+/* Send/stop control mounted into pip's .pip-form. Single slot at the
+   right edge of the input morphs between actions. Uses --pip-accent so
+   the button reads as part of Pip's identity (matches the bubble icon
+   and the focus ring), not an isolated dashboard accent. min-height: 0
+   overrides the project-wide `button { min-height: 44px }` rule that
+   would otherwise stretch the circle into an oval. */
 .pip-stop-btn,
 .pip-send-btn {
   position: absolute;
   right: 8px;
   top: 50%;
   transform: translateY(-50%);
-  /* Lock dimensions hard — the project-wide `button { min-height: 44px }`
-     rule above otherwise stretches this to ~26×44 oval. */
-  width: 26px;
-  height: 26px;
-  min-width: 26px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
   min-height: 0;
   box-sizing: border-box;
   margin: 0;
   padding: 0;
   border: none;
   border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-ink, #fff);
+  background: var(--pip-accent, var(--accent));
+  color: #fff;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
