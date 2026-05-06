@@ -208,29 +208,49 @@ async function streamOtaViaWebRTC(entry, bytes) {
 
 async function streamOtaBytes(entry, bytes) {
   const ch = entry.otaDataChar;
-  // All chunks WithResponse. WithoutResponse silently dropped chunks on
-  // bless (Pi) and arduino-esp32 — the firmware's otaReceived counter
-  // only advances on writes that arrived, so small silent drops accumulate
-  // and Update.end fails at commit. Until we have drop-detect+resend,
-  // WithResponse is correct: slower (ESP32 1.6 MB ≈ 3-5 min) but reliable.
   entry.otaSent = 0;
   patchOtaSection(entry);
+  // Begin / abort / commit stay WithResponse — control frames need
+  // ATT_WRITE_RSP so we can act on errors and serialize behind the chip's
+  // flash erase.
   try { await ch.writeValueWithResponse(new Uint8Array([0x00])); } catch {}
   const begin = new Uint8Array(5);
   begin[0] = 0x01;
   new DataView(begin.buffer).setUint32(1, bytes.length, false);
   await ch.writeValueWithResponse(begin);
   const CHUNK = 180;  // safe under negotiated ATT MTU on macOS/Chrome.
+  // ESP32: pipeline chunks WithoutResponse with windowed flow control. The
+  // earlier attempt at WithoutResponse silently dropped chunks because
+  // the dashboard had no back-pressure; bounding bytesSent − confirmed_n
+  // by BUFFER_HIGH gives the chip's RX queue + esp_ota_write call time
+  // to drain. ESP32's ota.c notifies every 8 KB during receive so the
+  // window pulls. Brings 1.6 MB from 3-10 min (per-chunk WithResponse
+  // round-trips) to ~30 s.
+  // Pi: stay WithResponse — BLE-stream is the fallback path; WebRTC is
+  // primary for Pi bundles, so the slower-but-uniformly-reliable path
+  // doesn't earn the test surface a new flow-control branch demands.
+  const pipelined = entry.fwType === "esp32";
+  const BUFFER_HIGH = 32 * 1024;
   for (let i = 0; i < bytes.length; i += CHUNK) {
     const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
     const frame = new Uint8Array(slice.length + 1);
     frame[0] = 0x02;
     frame.set(slice, 1);
-    await ch.writeValueWithResponse(frame);
-    // Per-chunk increment + RAF-coalesced patch — accurate (the ack means
-    // the firmware processed the chunk, since ATT_WRITE_RSP is sent post-
-    // callback) and cheap (one paint per frame, not 9000 paints over 30s).
-    entry.otaSent = i + slice.length;
+    if (pipelined) {
+      await ch.writeValueWithoutResponse(frame);
+      entry.otaSent = i + slice.length;
+      // Pause when in-flight bytes (sent but not yet confirmed by the
+      // chip's ota-status notify) exceed the buffer. The chip publishes
+      // every 8 KB so the wait is bounded.
+      while (entry.otaSent - (entry.otaStatus?.n || 0) > BUFFER_HIGH) {
+        await new Promise(r => setTimeout(r, 5));
+      }
+    } else {
+      await ch.writeValueWithResponse(frame);
+      entry.otaSent = i + slice.length;
+    }
+    // Per-chunk increment + RAF-coalesced patch — cheap (one paint per
+    // frame, not 9000 paints over the stream).
     patchOtaSectionThrottled(entry);
   }
   await ch.writeValueWithResponse(new Uint8Array([0x03]));

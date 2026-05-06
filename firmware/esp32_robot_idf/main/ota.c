@@ -22,9 +22,11 @@ static const esp_partition_t *s_partition = NULL;
 #define STATUS_BUF_SIZE 192
 static char s_status_json[STATUS_BUF_SIZE] = "{\"st\":\"idle\",\"n\":0}";
 
-// Rate-limit BLE chunk notifies. ~1.6 MB / 180 B/chunk ≈ 9000 writes, way
-// too many to notify every one — saturates NimBLE's tx queue under
-// writeWithoutResponse.
+// Rate-limit chunk notifies. The dashboard uses confirmed_n (this counter)
+// as the receive-side cursor for windowed flow control under
+// writeWithoutResponse — every 8 KB keeps the window pulling without
+// saturating NimBLE's tx queue. 250 ms is a sanity cap for short bursts
+// (commit-time tail).
 static size_t   s_chunk_last_reported = 0;
 static int64_t  s_chunk_last_progress_us = 0;
 
@@ -117,9 +119,12 @@ void ota_handle_data_write(const uint8_t *buf, size_t len) {
             publish_status("failed", s_received, s_expected, "write short");
             return;
         }
-        // Throttle: report every 32KB OR every 250ms, whichever comes first.
+        // Throttle: report every 8 KB OR every 250 ms, whichever comes
+        // first. The dashboard's WithoutResponse window uses this notify
+        // as the receive-side cursor — coarser cadence stalls the stream;
+        // finer cadence floods the BLE link.
         int64_t now = esp_timer_get_time();
-        if (s_received - s_chunk_last_reported > 32768
+        if (s_received - s_chunk_last_reported > 8192
             || now - s_chunk_last_progress_us > 250 * 1000) {
             s_chunk_last_reported = s_received;
             s_chunk_last_progress_us = now;
