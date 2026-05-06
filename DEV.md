@@ -55,7 +55,6 @@ Why signaling via signal.neevs.io and not a per-Pi HTTP endpoint: browser Mixed 
 - Understand what Pip did last session → `replayDownload()` from DevTools console, inspect the JSON.
 - Camera / VLM misbehaving → enable Watch, inspect the scene card on the robot's dashboard tile. VLM output is read-only; to cross-check, use the `ask_robot_scene` tool in a Pip chat with a neutrally-framed question.
 - Spatial grounding (which way to turn toward a target) → `get_robot_detections` Pip tool. Returns normalized bboxes. Model loads on first call (~30–60s, cached).
-- Robot pose from overhead phone → mount the phone on the robot via the helper card's `Camera →` picker, then tape an "Original ArUco" marker (id 0) on top of the robot. Generator: https://chev.me/arucogen/. Detection runs at 10 Hz on the dashboard via `js-aruco2` and renders a green outline + heading line + id label on the mounted-camera section. No markers visible = check lighting / marker isn't tilted past ~30° from the camera axis. Implementation: `aruco.js`.
 
 ## House rules
 

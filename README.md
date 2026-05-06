@@ -26,7 +26,7 @@ const scene = await robot.scene("Is the path ahead clear?");
 ```
 
 - **Browser is the IDE.** Scripts panel + capability cards. localStorage is the file system; BLE is the runtime link.
-- **Models run in the browser too.** VLM, open-vocab detector, ArUco fiducial pose all client-side. No GPU server, no cloud inference bill.
+- **Models run in the browser too.** VLM and open-vocab detector run client-side. No GPU server, no cloud inference bill.
 - **Two authorable surfaces, co-equal:** user code (you write JS) and Pip (a tool-using LLM with replay and ask-human, currently Claude). Both bound by the same firmware safety floor.
 - **Fork the repo, push to your GitHub Pages, you have a robotics platform.** No backend, no accounts, no data leaving the browser.
 
@@ -97,7 +97,7 @@ Commit + push when ready. CI rebuilds firmware artifacts on every `firmware/**` 
 The dashboard is flat by convention; naming prefixes carry the subsystem boundary:
 
 - **Pair layer** (`pairing.js`, `phones.js`, `mobile.js`, `phone.html`) — desktop ↔ phone WebRTC link.
-- **Perception + detection** (`perception.js`, `grounding.js`, `aruco.js`) — in-browser LFM2.5-VL-450M (VLM), Grounding DINO tiny (open-vocab detector), ArUco (fiducial pose).
+- **Perception + detection** (`perception.js`, `grounding.js`) — in-browser LFM2.5-VL-450M (VLM), Grounding DINO tiny (open-vocab detector).
 - **Pip / assistant** (`assistant.js`, `claude.js`, `local-llm.js`, `pip-tools.js`, `replay.js`) — tool-using LLM integration, tool schemas, executor, replay logging, offline LFM fallback.
 - **Robot ops** (`ble.js`, `ops-response.js`, `capabilities/`) — BLE protocol, typed-ops channel, per-capability cards + runtime handlers.
 - **Robot lifecycle** (`prepare.js`, `recovery.js`, `pinout.js`) — SD-card prep, USB serial recovery, pinout config editor.
