@@ -381,9 +381,6 @@ async function openChannelViaWss(robotId, robotName, label, opts) {
       onStatus("Signal channel open. Creating offer…");
       try {
         const offer = await pc.createOffer();
-        // Same libpeer mid patch as the BLE path. Both signaling
-        // transports drive the same libpeer build on the chip.
-        offer.sdp = patchOfferForLibpeer(offer.sdp);
         await pc.setLocalDescription(offer);
         ws.send(JSON.stringify({
           type: "signal",
