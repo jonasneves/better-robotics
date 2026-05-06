@@ -91,7 +91,7 @@ export function makeLevelCap(schema) {
       entry[`${name}Pending`] = null;
     },
 
-    renderSection(entry, { sourceMember = null, alternativeMemberIds = [] } = {}) {
+    renderSection(entry) {
       if (entry.status !== "connected" || !entry[charField]) return "";
       const v = entry[valueField] || 0;
       return capSection({
@@ -101,7 +101,6 @@ export function makeLevelCap(schema) {
         action: `<input type="range" class="level-slider" data-action="${action}"
                    min="${range[0]}" max="${range[1]}" value="${v}">`,
         transport: "ble",
-        sourceMember, alternativeMemberIds,
       });
     },
 

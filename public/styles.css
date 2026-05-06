@@ -532,51 +532,6 @@ a.menu-item { text-decoration: none; }
 .robot.expanded .disclosure-chevron { transform: rotate(0); }
 .robot-actions { display: flex; gap: 6px; align-items: center; }
 
-/* Multi-member robot composite — chip per device, status dot + type badge
-   + name. Only renders when >1 member; single-member robots skip the row
-   entirely (their connection state lives in the header stripe + chevron).
-   Sits below the secondary row so the meta line stays unbroken. */
-.robot-members {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 4px 0 0 26px;  /* aligns with .robot-meta indent */
-}
-.member-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border-subtle);
-  font-size: 11px;
-  color: var(--ink-muted);
-  font-variant-numeric: tabular-nums;
-}
-.member-chip .member-name {
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  color: var(--ink);
-  font-size: 11px;
-}
-.member-chip .type-badge { font-size: 9px; padding: 1px 4px; }
-.member-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--ink-muted);
-}
-.member-dot-connected   { background: var(--success); }
-.member-dot-connecting  { background: var(--accent); animation: dot-pulse 1.2s infinite; }
-.member-dot-fw-down     { background: var(--warning); }
-.member-dot-error       { background: var(--danger); }
-.member-dot-offline     { background: var(--border-default); }
-@keyframes dot-pulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.4; }
-}
-
 /* Active-ops chips — at-a-glance "what's happening" without expanding
    each cap row. Sits next to the meta line in the secondary row. Each
    chip is small and unobtrusive; the LACK of chips is the steady state. */
@@ -767,28 +722,6 @@ details.tray.has-alert > summary::after {
      + cap-toggle gap 8px. */
   padding-left: 20px;
 }
-
-/* Source chip on a cap section — composite robots only. Inherits .type-badge
-   look so it matches the per-member chips below the meta row; smaller font
-   keeps it from competing with the cap label. */
-.cap-source.type-badge {
-  font-size: 9px;
-  padding: 1px 5px;
-  margin-left: 2px;
-}
-
-/* Swap button — appears next to the cap header's primary action when a
-   composite robot has more than one member contributing the same cap.
-   Compact icon button; clicking cycles to the next contributor. */
-.cap-swap {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  flex-shrink: 0;
-  color: var(--ink-muted);
-}
-.cap-swap:hover { color: var(--ink); }
-.cap-swap .icon-svg { width: 14px; height: 14px; }
 
 /* Nested caps (Flash + Snapshot inside Camera) — render as sub-controls,
    not stacked cards. Drop the dashed top-border + reduced spacing so the

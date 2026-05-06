@@ -133,7 +133,7 @@ export function makeBleSnapshotCap(schema) {
       entry[busyField] = false;
     },
 
-    renderSection(entry, { sourceMember = null, alternativeMemberIds = [] } = {}) {
+    renderSection(entry) {
       if (entry.status !== "connected" || !entry[reqField]) return "";
       const busy = entry[busyField];
       const url = entry[urlField];
@@ -156,7 +156,6 @@ export function makeBleSnapshotCap(schema) {
         action: `<button class="secondary sm" data-action="${action}" ${busy ? "disabled" : ""}>${busy ? "Capturing…" : "Take photo"}</button>`,
         body: `${img}${errLine}`,
         transport: "ble",
-        sourceMember, alternativeMemberIds,
       });
     },
 

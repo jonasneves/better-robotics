@@ -1,17 +1,7 @@
 const STORAGE_KEY = "better-robotics:known";
-const ROBOTS_KEY  = "better-robotics:robots";
 
-// state.devices: BLE-peer layer, one entry per paired BluetoothDevice
-// (characteristics, cap state, DOM node). state.robots: logical-grouping
-// layer; each robot's members[] is device IDs, so an ESP32-eye + Pi-brain
-// combo renders as one card while still pairing as two BLE peers.
-//
-// Single-device robots auto-migrate: each device becomes a one-member
-// robot whose id == deviceId. Composite robots get fresh UUIDs when the
-// user explicitly merges two paired devices.
 export const state = {
   devices: new Map(),
-  robots:  new Map(),  // robotId -> { id, name, members: [deviceId, ...] }
 };
 
 // Lazy injection to avoid a circular dep with connect.js.
@@ -30,120 +20,11 @@ export function persist() {
     });
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
-  persistRobots();
-}
-
-function persistRobots() {
-  const out = [];
-  for (const r of state.robots.values()) {
-    out.push({
-      id: r.id, name: r.name, members: r.members.slice(),
-      // capSourcePrefs: when both members of a composite robot declare the
-      // same cap (e.g., both have "motors"), this map's deviceId for that
-      // cap name wins over the default first-member-wins. Empty for the
-      // common case (no overlap, or default is fine).
-      capSourcePrefs: { ...(r.capSourcePrefs || {}) },
-    });
-  }
-  localStorage.setItem(ROBOTS_KEY, JSON.stringify(out));
 }
 
 export function loadKnown() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
   catch { return []; }
-}
-
-// Hydrate state.robots from localStorage (or migrate). Idempotent. Any
-// paired device not yet a member becomes a one-member robot named after
-// itself. Pre-migration users see no UX change.
-export function loadRobots() {
-  let raw;
-  try { raw = JSON.parse(localStorage.getItem(ROBOTS_KEY) || "[]"); }
-  catch { raw = []; }
-  state.robots.clear();
-  const claimed = new Set();
-  for (const r of raw) {
-    const members = (r.members || []).filter(m => typeof m === "string");
-    const capSourcePrefs = (r.capSourcePrefs && typeof r.capSourcePrefs === "object")
-      ? { ...r.capSourcePrefs } : {};
-    state.robots.set(r.id, { id: r.id, name: r.name || r.id, members, capSourcePrefs });
-    for (const m of members) claimed.add(m);
-  }
-  // Wrap unclaimed paired devices as one-member robots, robotId = deviceId
-  // so existing localStorage / replay records keyed by id keep resolving.
-  for (const d of loadKnown()) {
-    if (claimed.has(d.id)) continue;
-    state.robots.set(d.id, { id: d.id, name: d.name || d.id, members: [d.id], capSourcePrefs: {} });
-  }
-  persistRobots();
-}
-
-// Used by cap-section's swap action when a composite robot has overlap
-// caps and the user picked a non-default source.
-export function setCapSourcePref(robotId, capName, deviceId) {
-  const r = state.robots.get(robotId);
-  if (!r) return null;
-  if (!r.capSourcePrefs) r.capSourcePrefs = {};
-  if (deviceId == null) delete r.capSourcePrefs[capName];
-  else r.capSourcePrefs[capName] = deviceId;
-  persistRobots();
-  return r;
-}
-
-// Used by the renderer to decide which card a per-device event (BLE
-// notify, cap state change) attributes to.
-export function robotFor(deviceId) {
-  for (const r of state.robots.values()) {
-    if (r.members.includes(deviceId)) return r;
-  }
-  return null;
-}
-
-// Combine two robots into one. The destination keeps its id + name + any
-// capSourcePrefs it had; the source's members merge into destination's
-// members[]; the source robot is removed. Source's capSourcePrefs are
-// dropped (they referenced a robot that no longer exists; the user can
-// re-pick any conflicts post-merge via the cap-section swap action).
-export function mergeRobots(srcId, destId) {
-  if (srcId === destId) return state.robots.get(destId) || null;
-  const src  = state.robots.get(srcId);
-  const dest = state.robots.get(destId);
-  if (!src || !dest) return null;
-  for (const m of src.members) {
-    if (!dest.members.includes(m)) dest.members.push(m);
-  }
-  state.robots.delete(srcId);
-  persistRobots();
-  return dest;
-}
-
-// Split a member out of its current robot into a new one-member robot.
-// Mirror of mergeRobots — user might compose then decompose. Returns the
-// new robot, or null if the member wasn't found.
-export function splitMember(deviceId) {
-  for (const r of state.robots.values()) {
-    const i = r.members.indexOf(deviceId);
-    if (i < 0) continue;
-    if (r.members.length === 1) return r;  // already standalone
-    r.members.splice(i, 1);
-    const fresh = { id: deviceId, name: deviceId, members: [deviceId] };
-    const device = state.devices.get(deviceId);
-    if (device) fresh.name = device.name;
-    state.robots.set(fresh.id, fresh);
-    persistRobots();
-    return fresh;
-  }
-  return null;
-}
-
-// Rename a robot. Names are user-meaningful only — no ID semantics, so
-// renaming doesn't affect localStorage keys or BLE pairings.
-export function renameRobot(robotId, name) {
-  const r = state.robots.get(robotId);
-  if (!r) return null;
-  r.name = name;
-  persistRobots();
-  return r;
 }
 
 export function makeEntry(id, name, fwType = null, { autoReconnect = false, lastConnectedAt = 0 } = {}) {
@@ -217,14 +98,6 @@ export function entryFor(device) {
   const entry = makeEntry(device.id, device.name || device.id);
   attachDevice(entry, device);
   state.devices.set(device.id, entry);
-  // New paired device → auto-create a one-member robot. The user can later
-  // merge it into an existing robot via the menu (working.md item F).
-  if (!robotFor(device.id)) {
-    state.robots.set(device.id, {
-      id: device.id, name: device.name || device.id, members: [device.id],
-      capSourcePrefs: {},
-    });
-  }
   persist();
   return entry;
 }

@@ -9,17 +9,9 @@
 // "always show motors" preference is the same across all their robots.
 import { escapeHtml } from "../../dom.js";
 
-// v2 — bumped when the default-open shape changed: previously motors
-// defaulted to open (it's the verb); the new shape is "all collapsed,
-// user expands what they need." The bump invalidates pre-v2 prefs so
-// existing operators get the cleaner default instead of carrying their
-// old "every cap I ever opened stays open forever" state.
+// v3 — bumped when the default-open shape changed: motors now defaults
+// to open (it's the daily-driver verb); other caps stay collapsed.
 const STORE_KEY = "better-robotics:cap-open:v3";
-
-// Most caps collapsed by default (Hick's law: 7+ peers slows decisions).
-// Motors is the daily-driver verb — burying the joypad behind a tap every
-// session was real friction. v3 invalidates v2 prefs so existing operators
-// get the new default once.
 const DEFAULTS = { motors: true };
 
 let _state = null;
@@ -50,30 +42,13 @@ export function setOpen(name, open) {
 // visible. Pass `state` for the secondary text (e.g. "off", "L:0 R:0").
 //
 // When body is empty, the chevron is dropped — there's nothing to expand,
-// so a disclosure toggle would lie. The header renders as plain (label +
-// state + action) without the cap-toggle button.
-//
-// Source attribution (composite robots):
-//   sourceMember = { id, name, fwType }
-//     When set, a small chip after the label says "from <name>" colored
-//     by fwType. Tells the operator which member contributed this cap.
-//   alternativeMemberIds = [deviceId, ...]
-//     Other members that ALSO declare this cap name. When non-empty, a ⇄
-//     swap button appears in the header — clicking it sets the
-//     capSourcePref to the next member in the cycle. Empty (the common
-//     case, no overlap) = no swap button rendered.
+// so a disclosure toggle would lie.
 export function capSection({
   name, label, state = "", action = "", body = "",
-  sourceMember = null, alternativeMemberIds = [],
   transport = "",
 }) {
   const hasBody = !!body && body.trim().length > 0;
   const open = isOpen(name);
-  const sourceChip = sourceMember
-    ? `<span class="cap-source type-badge type-${escapeHtml(sourceMember.fwType || "")}" title="from ${escapeHtml(sourceMember.name)}">${
-        escapeHtml(sourceMember.fwType === "esp32" ? "ESP32" : (sourceMember.fwType || "").toUpperCase())
-      }</span>`
-    : "";
   // Tiny transport hint — surfaces "this fails when X is down" without
   // forcing the user to know which caps live on which channel. Hidden
   // when transport isn't specified (legacy / self-evident caps).
@@ -85,7 +60,6 @@ export function capSection({
   const labelHtml = `
     ${transportIcon}
     <span class="cap-label">${escapeHtml(label)}</span>
-    ${sourceChip}
     ${state ? `<span class="cap-state">${escapeHtml(state)}</span>` : ""}
   `;
   const head = hasBody
@@ -94,18 +68,10 @@ export function capSection({
          ${labelHtml}
        </button>`
     : `<div class="cap-static">${labelHtml}</div>`;
-  // Swap button appears only when another member also declares this cap —
-  // gives the user a one-click way to override first-member-wins for THIS
-  // cap without splitting the whole robot. Disappears when there's nothing
-  // to swap to, so single-source caps stay clean.
-  const swapBtn = alternativeMemberIds.length > 0
-    ? `<button class="icon sm cap-swap" data-action="cap-swap-${escapeHtml(name)}" title="Use a different device for this capability" aria-label="Swap source"><svg class="icon-svg"><use href="icons.svg#icon-swap"/></svg></button>`
-    : "";
   return `
     <div class="cap-section" data-cap-name="${escapeHtml(name)}">
       <div class="cap-header">
         ${head}
-        ${swapBtn}
         ${action}
       </div>
       ${hasBody ? `<div class="cap-body" ${open ? "" : "hidden"}>${body}</div>` : ""}

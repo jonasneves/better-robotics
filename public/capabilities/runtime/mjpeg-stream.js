@@ -110,7 +110,7 @@ export function makeMjpegStreamCap(schema) {
       stopMjpegForward(entry);
     },
 
-    renderSection(entry, { childHtml = "", sourceMember = null, alternativeMemberIds = [] } = {}) {
+    renderSection(entry, { childHtml = "" } = {}) {
       if (entry.status !== "connected") return "";
       const wifi = hasWifi(entry);
       const running = entry[runningField];
@@ -180,7 +180,6 @@ export function makeMjpegStreamCap(schema) {
         // hosting everything camera-shaped instead of three peers in a flat list.
         body: `${body}${watchRow}${promptField}${transportRow}${childHtml}`,
         transport: "wifi",
-        sourceMember, alternativeMemberIds,
       });
     },
 

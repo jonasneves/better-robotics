@@ -103,7 +103,7 @@ export function makeSignedPairCap(schema) {
       entry[leftField] = entry[rightField] = 0;
     },
 
-    renderSection(entry, { sourceMember = null, alternativeMemberIds = [] } = {}) {
+    renderSection(entry) {
       if (entry.status !== "connected" || !entry[charField]) return "";
       const stateText = `${labels.left}: ${entry[leftField]} · ${labels.right}: ${entry[rightField]}`;
       const action = `<button class="secondary sm" data-action="${actionStop}">Stop</button>`;
@@ -115,7 +115,7 @@ export function makeSignedPairCap(schema) {
              <label>${escapeHtml(labels.left)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[leftField]}" data-action="${actionLeft}"></label>
              <label>${escapeHtml(labels.right)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[rightField]}" data-action="${actionRight}"></label>
            </div>`;
-      return capSection({ name, label, state: stateText, action, body, transport: "ble", sourceMember, alternativeMemberIds });
+      return capSection({ name, label, state: stateText, action, body, transport: "ble" });
     },
 
     wireActions(entry, node) {
@@ -199,20 +199,8 @@ let _keyHoldTimer = null;
 let _keyboardWired = false;
 
 export function pickMotorsTarget() {
-  // Composite-robot routing: honor capSourcePrefs.motors when set; fall
-  // through to first-connected-with-motors otherwise.
-  for (const r of state.robots?.values?.() || []) {
-    const pref = r.capSourcePrefs?.motors;
-    if (pref) {
-      const e = state.devices.get(pref);
-      if (e && e.motorsChar && e.status === "connected") return e;
-    }
-    // First member with motors wins; matches cap-fan-out dedup in
-    // renderEntry so the phone joypad hits whatever's on screen.
-    for (const mid of r.members || []) {
-      const e = state.devices.get(mid);
-      if (e && e.motorsChar && e.status === "connected") return e;
-    }
+  for (const e of state.devices.values()) {
+    if (e.motorsChar && e.status === "connected") return e;
   }
   return null;
 }

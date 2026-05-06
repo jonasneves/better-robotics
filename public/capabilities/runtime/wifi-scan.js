@@ -223,7 +223,7 @@ export function makeWifiScanCap(schema) {
       clearScanTimer(entry);
     },
 
-    renderSection(entry, { sourceMember = null, alternativeMemberIds = [] } = {}) {
+    renderSection(entry) {
       if (entry.status !== "connected" || !entry[scanField]) return "";
       const networks = entry[networksField];
       const scanning = entry[scanningField];
@@ -280,7 +280,6 @@ export function makeWifiScanCap(schema) {
         </button>`,
         body: nets,
         transport: "ble",
-        sourceMember, alternativeMemberIds,
       });
     },
 

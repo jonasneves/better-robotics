@@ -208,7 +208,7 @@ export function makeWebrtcInstallableCap(schema) {
       entry[statusState] = null;
     },
 
-    renderSection(entry, { sourceMember = null, alternativeMemberIds = [] } = {}) {
+    renderSection(entry) {
       if (entry.status !== "connected" || !entry[signalField]) return "";
       const s = entry[statusState] || { st: "idle" };
       const meta = s.step
@@ -244,7 +244,7 @@ export function makeWebrtcInstallableCap(schema) {
         ${watchRow}
         ${promptField}
       `;
-      return capSection({ name, label, state: meta, action, body, transport: "wifi", sourceMember, alternativeMemberIds });
+      return capSection({ name, label, state: meta, action, body, transport: "wifi" });
     },
 
     wireActions(entry, node) {

@@ -6,8 +6,7 @@ import { $, escapeHtml } from "./dom.js";
 import { log, logFor } from "./log.js";
 import { settings, saveSettings } from "./settings.js";
 import {
-  state, persist, loadKnown, loadRobots, robotFor, mergeRobots, splitMember,
-  setCapSourcePref,
+  state, persist, loadKnown,
   makeEntry, entryFor, attachDevice, setDisconnectHandler,
 } from "./state.js";
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
@@ -269,10 +268,6 @@ async function loadPaired() {
       state.devices.set(id, makeEntry(id, name, fwType, { autoReconnect, lastConnectedAt }));
     }
   }
-  // Hydrate the robots layer (working.md item F). loadRobots auto-wraps any
-  // device that isn't already a member of some robot as a one-member robot,
-  // so pre-migration users land with the same one-card-per-device shape.
-  loadRobots();
   if (navigator.bluetooth.getDevices) {
     try {
       const paired = await navigator.bluetooth.getDevices();
@@ -689,17 +684,6 @@ async function forgetDevice(id) {
   }
   const name = entry.name;
   state.devices.delete(id);
-  // Drop this device from its robot. If it was the only member, the robot
-  // disappears entirely; otherwise the surviving members keep the robot
-  // alive (forgetting one device of an ESP32-eye + Pi-brain robot leaves
-  // the other half behind, which is the right shape).
-  for (const r of [...state.robots.values()]) {
-    const i = r.members.indexOf(id);
-    if (i < 0) continue;
-    r.members.splice(i, 1);
-    if (r.members.length === 0) state.robots.delete(r.id);
-    break;
-  }
   persist();
   log("forgotten", name);
   render();
@@ -809,7 +793,7 @@ function render() {
 
   updateQrHint();
 
-  if (state.robots.size === 0) {
+  if (state.devices.size === 0) {
     // Robots are the platform; their pair affordances stay visible whether
     // or not the operator has phone helpers. A "Set up a robot" prompt is
     // never wrong — phones are an addition, not a substitute.
@@ -821,59 +805,29 @@ function render() {
   empty.hidden = true;
   header.hidden = false;
 
-  // Card-per-robot (working.md item F). Each robot has a single DOM node,
-  // shared by every member entry — so cap modules' in-place patchers
-  // (.cap-state querySelectors etc.) keep working without learning about
-  // the composition. The robot id is used as the dataset key; for the
-  // single-member case (universal pre-migration) it equals the deviceId.
-  const robotIds = new Set(state.robots.keys());
+  const ids = new Set(state.devices.keys());
   for (const child of [...list.children]) {
-    if (!robotIds.has(child.dataset.robotId)) child.remove();
+    if (!ids.has(child.dataset.robotId)) child.remove();
   }
 
   let prev = null;
-  for (const robot of state.robots.values()) {
-    if (!robot.node) {
-      robot.node = document.createElement("section");
-      robot.node.className = "card robot";
-      robot.node.dataset.robotId = robot.id;
+  for (const entry of state.devices.values()) {
+    if (!entry.node) {
+      entry.node = document.createElement("section");
+      entry.node.className = "card robot";
+      entry.node.dataset.robotId = entry.id;
     }
-    // Point every member's entry.node at the shared robot node, so calls
-    // to renderEntry(member) and surgical patchers find the right DOM.
-    const members = robot.members.map(id => state.devices.get(id)).filter(Boolean);
-    for (const m of members) m.node = robot.node;
-    if (members.length) renderEntry(members[0]);
+    renderEntry(entry);
     const target = prev ? prev.nextSibling : list.firstChild;
-    if (target !== robot.node) {
-      if (prev) prev.after(robot.node); else list.prepend(robot.node);
+    if (target !== entry.node) {
+      if (prev) prev.after(entry.node); else list.prepend(entry.node);
     }
-    prev = robot.node;
+    prev = entry.node;
   }
 }
 
-function renderEntry(entryArg) {
-  if (!entryArg.node) { render(); return; }
-  // Resolve robot context. After Pass 1 auto-migration, every device is its
-  // own one-member robot — so members === [entryArg] and the rest of this
-  // function behaves identically. Multi-member robots (created by explicit
-  // merge in Pass 3) flow through the same path with multiple member
-  // entries contributing caps; the cap loop below fans out across them.
-  const robot = robotFor(entryArg.id);
-  const members = robot
-    ? robot.members.map(mId => state.devices.get(mId)).filter(Boolean)
-    : [entryArg];
-  if (!members.length) return;
-  // Primary member drives top-level concerns (header status, telemetry,
-  // fwInfo, otaStatus). Prefer the entry whose notify triggered this render
-  // (entryArg) so callbacks reading "their" connection state see the right
-  // shape; fall back to any connected member; finally first member.
-  const primary = members.find(m => m === entryArg && m.status === "connected")
-              || members.find(m => m.status === "connected")
-              || members.find(m => m === entryArg)
-              || members[0];
-  const entry = primary;
-  const displayName = robot?.name || entry.name;
-  const isComposite = members.length > 1;
+function renderEntry(entry) {
+  if (!entry.node) { render(); return; }
   // Preserve focus + value across the innerHTML rebuild for any data-action
   // input/textarea inside this card. Telemetry/ops/motor notifies fire
   // renderEntry frequently; without this, typing in an inline editor (e.g.
@@ -884,7 +838,7 @@ function renderEntry(entryArg) {
   const savedStart = savedAction && active.selectionStart != null ? active.selectionStart : null;
   const savedEnd   = savedAction && active.selectionEnd != null ? active.selectionEnd : null;
   const { id, status } = entry;
-  const name = displayName;
+  const name = entry.name;
   const firmwareDown = status === "firmware-down";
   // GATT IS connected when firmwareDown — only the main service is missing.
   // Treat as connected for button purposes so the user gets Disconnect.
@@ -917,46 +871,9 @@ function renderEntry(entryArg) {
   // Render-tree groups them under their parent so the card mirrors the model
   // instead of the wire shape. Mapping is dashboard-side, no firmware change.
   const PARENT_MAP = { flash: "camera", snapshot: "camera" };
-  // First pass: index runtime caps by name so we can detect conflicts
-  // (multiple members declaring the same cap). The user picks a winner
-  // via robot.capSourcePrefs (set by the cap-section's swap button); the
-  // default is first-member-wins. The other members' versions become
-  // "alternatives" that surface a swap affordance on the rendered section.
-  const capContributors = new Map();  // capName -> [{cap, member}, ...]
-  for (const m of members) {
-    for (const c of m.runtimeCaps || []) {
-      if (!capContributors.has(c.name)) capContributors.set(c.name, []);
-      capContributors.get(c.name).push({ cap: c, member: m });
-    }
-  }
-  const prefs = robot?.capSourcePrefs || {};
-  // Pick the active contributor for each cap: explicit pref wins; else
-  // member order (which equals pair / merge order, user-controllable).
-  // Build allCaps: OTA per-member (independent operations), runtime caps
-  // deduped to the chosen contributor.
   const allCaps = [];
-  for (const m of members) {
-    for (const c of CAPABILITIES) allCaps.push({ cap: c, member: m });
-  }
-  for (const [capName, contributors] of capContributors) {
-    const preferred = prefs[capName]
-      ? contributors.find(x => x.member.id === prefs[capName])
-      : null;
-    const chosen = preferred || contributors[0];
-    const alternatives = contributors
-      .filter(x => x.member.id !== chosen.member.id)
-      .map(x => x.member.id);
-    // Pass source attribution + alternatives through to the cap's
-    // renderSection so capSection can render a source chip + swap button.
-    // Single-source caps see alternatives = [] and render with just the
-    // chip; conflicts get the swap icon. Single-member robots see
-    // sourceMember = null (no chip — type is in the header).
-    allCaps.push({
-      cap: chosen.cap, member: chosen.member,
-      sourceMember: isComposite ? chosen.member : null,
-      alternativeMemberIds: alternatives,
-    });
-  }
+  for (const c of CAPABILITIES) allCaps.push({ cap: c });
+  for (const c of entry.runtimeCaps || []) allCaps.push({ cap: c });
   const childrenOf = new Map();
   const topCaps = [];
   for (const item of allCaps) {
@@ -972,14 +889,10 @@ function renderEntry(entryArg) {
   const sections = topCaps
     .slice()
     .sort(capByOrder)
-    .map(({ cap, member, sourceMember, alternativeMemberIds }) => {
+    .map(({ cap }) => {
       const kids = (childrenOf.get(cap.name) || []).slice().sort(capByOrder);
-      const childHtml = kids.map(k => k.cap.renderSection(k.member, {
-        sourceMember: k.sourceMember, alternativeMemberIds: k.alternativeMemberIds,
-      })).join("");
-      return cap.renderSection(member, {
-        childHtml, sourceMember, alternativeMemberIds,
-      });
+      const childHtml = kids.map(k => k.cap.renderSection(entry)).join("");
+      return cap.renderSection(entry, { childHtml });
     })
     .join("");
   const liveStatus = entry.robotStatus;
@@ -1013,13 +926,7 @@ function renderEntry(entryArg) {
         </div>
       </div>`;
   })();
-  // Type badge in the header is for single-member robots only — when the
-  // robot is composite, the per-member chips below carry the same info
-  // with richer detail (status dot + type + member name), so duplicating
-  // it in the title would be noise. Reframe under signal-to-noise:
-  // a composite robot doesn't HAVE a type, its members do; the header is
-  // the robot's identity, the chips are the contents.
-  const typeBadge = (!isComposite && entry.fwType)
+  const typeBadge = entry.fwType
     ? `<span class="type-badge type-${escapeHtml(entry.fwType)}">${
         escapeHtml(entry.fwType === "esp32" ? "ESP32" : entry.fwType.toUpperCase())
       }</span>`
@@ -1034,37 +941,27 @@ function renderEntry(entryArg) {
   const metaRow = `<div class="robot-meta" title="${escapeHtml(metaJoined)}">${escapeHtml(metaJoined)}</div>`;
 
   // Active-ops chips: at-a-glance "what's happening right now" without
-  // having to expand each capability section. Each cap surfaces its
-  // running-state in its own row; this strip aggregates them so a list
-  // of robots reads "this one is streaming + this one is OTAing"
-  // without per-card eye-walks.
-  // Active-ops aggregate across members — if either the ESP32 or the Pi is
-  // streaming, the composite robot is streaming. OTA stays anchored to the
-  // primary's chip (only one OTA at a time across the robot in practice).
+  // having to expand each capability section.
   const activeOps = [];
-  const anyConnected = members.some(m => m.status === "connected" || m.status === "firmware-down");
-  if (anyConnected) {
-    if (members.some(m => m.cameraRunning || m.cameraStream)) {
+  if (status === "connected" || firmwareDown) {
+    if (entry.cameraRunning || entry.cameraStream) {
       activeOps.push({ text: "streaming" });
     }
-    const motorMember = members.find(m => (m.motorLeft || 0) !== 0 || (m.motorRight || 0) !== 0);
-    if (motorMember) {
-      activeOps.push({ text: `motors L:${motorMember.motorLeft || 0} R:${motorMember.motorRight || 0}` });
+    if ((entry.motorLeft || 0) !== 0 || (entry.motorRight || 0) !== 0) {
+      activeOps.push({ text: `motors L:${entry.motorLeft || 0} R:${entry.motorRight || 0}` });
     }
-    const flashMember = members.find(m => (m.flashLevel || 0) > 0);
-    if (flashMember) activeOps.push({ text: `flash ${flashMember.flashLevel}%` });
-    const otaMember = members.find(m => m.otaStatus?.st && m.otaStatus.st !== "idle");
-    if (otaMember) {
-      const oSt = otaMember.otaStatus.st;
-      const total = otaMember.otaStatus.total || 0;
-      const n = otaMember.otaStatus.n || otaMember.otaSent || 0;
+    if ((entry.flashLevel || 0) > 0) activeOps.push({ text: `flash ${entry.flashLevel}%` });
+    if (entry.otaStatus?.st && entry.otaStatus.st !== "idle") {
+      const oSt = entry.otaStatus.st;
+      const total = entry.otaStatus.total || 0;
+      const n = entry.otaStatus.n || entry.otaSent || 0;
       const pct = total ? Math.round(100 * n / total) : 0;
       activeOps.push({
         op: "ota",
         text: total ? `OTA ${oSt} ${pct}%` : `OTA ${oSt}`,
       });
     }
-    if (members.some(m => m.snapshotBusy)) activeOps.push({ text: "snapshotting…" });
+    if (entry.snapshotBusy) activeOps.push({ text: "snapshotting…" });
   }
   const opsRow = activeOps.length
     ? `<div class="robot-ops">${activeOps.map(o =>
@@ -1117,22 +1014,6 @@ function renderEntry(entryArg) {
       ${metaRow}
       ${opsRow}
     </div>
-    ${isComposite ? `
-      <div class="robot-members" role="list">
-        ${members.map(m => {
-          const memSt = m.status === "connected" ? "connected"
-                      : m.status === "firmware-down" ? "fw-down"
-                      : m.status === "connecting" ? "connecting"
-                      : m.status === "error" ? "error"
-                      : "offline";
-          const dot = `<span class="member-dot member-dot-${memSt}"></span>`;
-          const badge = m.fwType
-            ? `<span class="type-badge type-${escapeHtml(m.fwType)}">${escapeHtml(m.fwType === "esp32" ? "ESP32" : m.fwType.toUpperCase())}</span>`
-            : "";
-          return `<span class="member-chip" role="listitem" title="${escapeHtml(m.name)}">${dot}${badge}<span class="member-name">${escapeHtml(m.name)}</span></span>`;
-        }).join("")}
-      </div>
-    ` : ""}
     ${entry.staleHandle && !connected && !connecting ? `
       <div class="meta robot-stale-hint">
         Pick ${escapeHtml(entry.name)} again to reconnect. The robot's pairing isn't affected.
@@ -1213,36 +1094,6 @@ function renderEntry(entryArg) {
       capSetOpen(capName, willOpen);
     });
   });
-  // Cap-source swap. Only present on .cap-section when this cap has more
-  // than one contributing member. Cycles through alternatives by setting
-  // the robot's capSourcePref → next member; the next render picks that
-  // member's cap instance instead of first-member-wins.
-  entry.node.querySelectorAll("[data-action^='cap-swap-']").forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const capName = btn.dataset.action.replace(/^cap-swap-/, "");
-      const myRobot = robotFor(entry.id);
-      if (!myRobot) return;
-      // Build the cycle: every member that declared this cap, in member
-      // order. The currently-active one comes from prefs (or first).
-      const contributors = [];
-      for (const mid of myRobot.members) {
-        const m = state.devices.get(mid);
-        if (!m) continue;
-        if ((m.runtimeCaps || []).some(c => c.name === capName)) contributors.push(mid);
-      }
-      if (contributors.length < 2) return;
-      const currentId = myRobot.capSourcePrefs?.[capName] || contributors[0];
-      const nextIdx = (contributors.indexOf(currentId) + 1) % contributors.length;
-      const nextId = contributors[nextIdx];
-      // First entry of the cycle == default (first-member-wins) — clear
-      // the pref instead of pinning, so the model stays "user has only
-      // explicitly chosen if there's a pref."
-      setCapSourcePref(myRobot.id, capName, nextId === contributors[0] ? null : nextId);
-      renderEntry(entry);
-    });
-  });
-
   const connectBtn = entry.node.querySelector('[data-action="connect"]');
   if (connectBtn) connectBtn.addEventListener("click", () => connect(id));
   const disconnectBtn = entry.node.querySelector('[data-action="disconnect"]');
@@ -1318,43 +1169,16 @@ function openMenu(triggerBtn, id) {
   } else {
     header.hidden = true;
   }
-  // Per-device menu items show when ANY member satisfies the predicate (on
-  // composite robots; the click handler then asks which member to target).
-  // Single-member robots collapse to today's gating: just check the entry.
-  const myRobot = robotFor(entry?.id);
-  const allMembers = (myRobot?.members || [])
-    .map(id => state.devices.get(id))
-    .filter(Boolean);
-  const anyMember = (pred) => allMembers.length
-    ? allMembers.some(pred)
-    : (entry && pred(entry));
-  // Ops-dependent items: restart, reboot, view log. ESP32 has no opsChar,
-  // so on a Pi+ESP32 composite these still target the Pi (only matching
-  // member). On a single-ESP32 robot they're hidden — same as today.
-  $("menu-restart").hidden = !anyMember(m => !!m.opsChar);
-  $("menu-reboot").hidden  = !anyMember(m => !!m.opsChar);
-  $("menu-log").hidden     = !anyMember(m => !!m.opsChar);
+  $("menu-restart").hidden = !entry?.opsChar;
+  $("menu-reboot").hidden  = !entry?.opsChar;
+  $("menu-log").hidden     = !entry?.opsChar;
   // Shell is Pi-only (no shell on ESP32) and only useful when WiFi is up
   // (signaling is HTTP-on-:82 today). pi-robot-rtc.service must also be
   // installed; if it's not, the connect button surfaces a clear error.
-  $("menu-shell").hidden   = !anyMember(m => m.fwType === "pi" && m.status === "connected");
-  // Pinout dialog handles both platforms; ANY connected member with fw-info
-  // makes the item available. The handler picks among matching members.
-  $("menu-pinout").hidden  = !anyMember(m => m.status === "connected" && m.fwInfo);
-  // Update firmware: any member with otaDataChar (both Pi and ESP32 have it
-  // on connect). Composite robots get a per-member picker on click. The
-  // dialog the click opens then offers latest-from-CI vs file-picker; one
-  // menu entry instead of two for the same goal.
-  $("menu-update").hidden       = !anyMember(m => !!m.otaDataChar);
-  // Disconnect is robot-level — applies to ALL connected members. Hide
-  // when no member is connected.
-  $("menu-disconnect").hidden = !anyMember(m => m.status === "connected");
-  // Merge requires at least one OTHER robot to combine with. Split only
-  // appears when this robot has multiple members (composition exists to be
-  // undone). Both work whether or not the device is currently connected.
-  const otherRobotCount = [...state.robots.values()].filter(r => r.id !== myRobot?.id).length;
-  $("menu-merge").hidden = otherRobotCount === 0;
-  $("menu-split").hidden = !(myRobot && myRobot.members.length > 1);
+  $("menu-shell").hidden   = !(entry?.fwType === "pi" && entry?.status === "connected");
+  $("menu-pinout").hidden  = !(entry?.status === "connected" && entry?.fwInfo);
+  $("menu-update").hidden       = !entry?.otaDataChar;
+  $("menu-disconnect").hidden = !(entry?.status === "connected" || entry?.status === "firmware-down");
   const rect = triggerBtn.getBoundingClientRect();
   // Position below-right of trigger, nudging left if it would overflow viewport.
   const menuWidth = 220;
@@ -1367,10 +1191,8 @@ function openMenu(triggerBtn, id) {
 function closeMenu() {
   const menu = $("robot-menu");
   if (menu.hidePopover) menu.hidePopover();
-  // NOTE: do NOT clear menuTargetId here. Handlers that need to ask
-  // "which member should I act on?" (chooseMemberForAction) read
-  // menuTargetId AFTER this returns. openMenu always sets it on next
-  // open, so leaking it past close is harmless.
+  // NOTE: don't clear menuTargetId — handlers read it after closeMenu()
+  // returns. openMenu sets it on next open.
 }
 
 function robotUrl(name) {
@@ -1558,39 +1380,16 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Escape" && $("robot-menu").matches(":popover-open")) closeMenu();
   });
 
-  // Composite robots have multiple members — per-device menu actions
-  // (Pinout, Update firmware, Restart, Reboot, View log) need to ask
-  // WHICH member they target. Single-member robots collapse to "no
-  // picker, just the only member." Predicate filters to members the
-  // action makes sense for (e.g., Pinout needs fwInfo; restart needs
-  // ops channel). Returns the chosen deviceId or null on cancel.
-  async function chooseMemberForAction(label, predicate) {
-    const robotId = menuTargetId;
-    if (!robotId) return null;
-    const robot = robotFor(robotId);
-    const members = (robot?.members || [])
-      .map(id => state.devices.get(id))
-      .filter(m => m && predicate(m));
-    if (members.length === 0) return null;
-    if (members.length === 1) return members[0].id;
-    const lines = members.map((m, i) =>
-      `${i + 1}. ${m.name}${m.fwType ? ` (${m.fwType.toUpperCase()})` : ""}`
-    );
-    const pick = prompt(`${label} — pick a device:\n\n${lines.join("\n")}\n\nEnter number, or Cancel:`);
-    const idx = parseInt(pick, 10) - 1;
-    if (!Number.isFinite(idx) || idx < 0 || idx >= members.length) return null;
-    return members[idx].id;
-  }
-
   $("menu-label").addEventListener("click", () => {
     const id = menuTargetId;
     closeMenu();
     if (id) openLabel(id);
   });
-  $("menu-update").addEventListener("click", async () => {
+  $("menu-update").addEventListener("click", () => {
+    const id = menuTargetId;
     closeMenu();
-    const id = await chooseMemberForAction("Update firmware", m => !!m.otaDataChar);
-    if (id) openUpdateDialog(id);
+    const entry = state.devices.get(id);
+    if (entry?.otaDataChar) openUpdateDialog(id);
   });
   function openUpdateDialog(id) {
     const entry = state.devices.get(id);
@@ -1618,15 +1417,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   $("update-fw-close").addEventListener("click", () => $("update-fw-dialog").close());
   $("update-fw-cancel").addEventListener("click", () => $("update-fw-dialog").close());
-  $("menu-restart").addEventListener("click", async () => {
+  $("menu-restart").addEventListener("click", () => {
+    const id = menuTargetId;
     closeMenu();
-    const id = await chooseMemberForAction("Restart service", m => !!m.opsChar);
-    if (id) restartService(id);
+    if (state.devices.get(id)?.opsChar) restartService(id);
   });
-  $("menu-reboot").addEventListener("click", async () => {
+  $("menu-reboot").addEventListener("click", () => {
+    const id = menuTargetId;
     closeMenu();
-    const id = await chooseMemberForAction("Reboot robot", m => !!m.opsChar);
-    if (id) rebootRobot(id);
+    if (state.devices.get(id)?.opsChar) rebootRobot(id);
   });
   let logTimeoutId = null;
   let logTailRobotId = null;   // robot whose log dialog is currently open
@@ -1644,11 +1443,11 @@ document.addEventListener("DOMContentLoaded", () => {
     $("log-dialog-status").hidden = true;
     $("log-dialog-tail").textContent = "Tail live";
   }
-  $("menu-log").addEventListener("click", async () => {
+  $("menu-log").addEventListener("click", () => {
+    const id = menuTargetId;
     closeMenu();
-    const id = await chooseMemberForAction("View log", m => !!m.opsChar);
-    if (!id) return;
     const entry = state.devices.get(id);
+    if (!entry?.opsChar) return;
     logTailRobotId = id;
     $("log-dialog-title").textContent = `Log · ${entry?.name || "robot"}`;
     $("log-dialog-body").textContent = "Loading…";
@@ -1715,23 +1514,20 @@ document.addEventListener("DOMContentLoaded", () => {
     $("log-dialog-body").textContent = msg.text || "(empty)";
   });
   $("menu-pinout").addEventListener("click", async () => {
+    const id = menuTargetId;
     closeMenu();
-    const id = await chooseMemberForAction(
-      "Edit pins", m => m.status === "connected" && m.fwInfo,
-    );
-    if (!id) return;
+    const entry = state.devices.get(id);
+    if (!entry || entry.status !== "connected" || !entry.fwInfo) return;
     const mod = await import("./pinout.js");
     mod.openPinoutDialog(id);
   });
   // Shell — lazy-import so xterm.js + WebRTC plumbing only load when the
-  // user actually opens a terminal session. Pi-only (predicate enforced
-  // when the menu item is shown).
+  // user actually opens a terminal session. Pi-only.
   $("menu-shell").addEventListener("click", async () => {
+    const id = menuTargetId;
     closeMenu();
-    const id = await chooseMemberForAction(
-      "Open shell", m => m.fwType === "pi" && m.status === "connected",
-    );
-    if (!id) return;
+    const entry = state.devices.get(id);
+    if (!entry || entry.fwType !== "pi" || entry.status !== "connected") return;
     const mod = await import("./shell.js");
     mod.openShellDialog(id);
   });
@@ -1783,49 +1579,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("label-print").addEventListener("click", () => window.print());
   $("menu-disconnect").addEventListener("click", () => {
-    closeMenu();
-    // Robot-level: disconnect every connected member of this robot. The
-    // user thinks of "the robot is offline," not "this device's link
-    // dropped." Sequential to avoid concurrent BLE disconnect glitches.
-    const robot = robotFor(menuTargetId);
-    const ids = (robot?.members || [menuTargetId]).filter(Boolean);
-    for (const id of ids) {
-      const m = state.devices.get(id);
-      if (m && (m.status === "connected" || m.status === "firmware-down")) disconnect(id);
-    }
-  });
-  $("menu-merge").addEventListener("click", () => {
     const id = menuTargetId;
     closeMenu();
-    if (!id) return;
-    const myRobot = robotFor(id);
-    if (!myRobot) return;
-    const candidates = [...state.robots.values()].filter(r => r.id !== myRobot.id);
-    if (!candidates.length) return;
-    // Minimal native picker for now — list each other robot with member
-    // count, accept a single keystroke. A nicer dialog can replace this
-    // once we have a feel for how often merges actually happen.
-    const lines = candidates.map((r, i) =>
-      `${i + 1}. ${r.name}${r.members.length > 1 ? ` (${r.members.length} members)` : ""}`,
-    );
-    const pick = prompt(
-      `Merge "${myRobot.name}" into which robot?\n\n${lines.join("\n")}\n\nEnter number, or Cancel:`,
-    );
-    const idx = parseInt(pick, 10) - 1;
-    if (!Number.isFinite(idx) || idx < 0 || idx >= candidates.length) return;
-    const dest = candidates[idx];
-    if (!confirm(`Merge "${myRobot.name}" into "${dest.name}"?\n\nBoth devices will appear as one robot. Reversible from the merged robot's menu.`)) return;
-    mergeRobots(myRobot.id, dest.id);
-    persist();
-    render();
-  });
-  $("menu-split").addEventListener("click", () => {
-    const id = menuTargetId;
-    closeMenu();
-    if (!id) return;
-    splitMember(id);
-    persist();
-    render();
+    const m = state.devices.get(id);
+    if (m && (m.status === "connected" || m.status === "firmware-down")) disconnect(id);
   });
   $("menu-forget").addEventListener("click", () => {
     const id = menuTargetId;
