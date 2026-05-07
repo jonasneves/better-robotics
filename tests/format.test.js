@@ -61,6 +61,23 @@ test("summarizeTool: unknown tool falls back to truncated JSON", () => {
   assert.match(out, /ok/);
 });
 
+test("summarizeTool: durationMs renders as paren suffix in ms or s", () => {
+  // Sub-10s reads in ms, integer rounded.
+  const fast = summarizeTool("get_log", {}, { text: "ok" }, null, 47.6);
+  assert.match(fast, / \(48ms\)$/);
+  // 10s+ switches to one-decimal seconds.
+  const slow = summarizeTool("ask_human", {}, { answer: "Forward", via: "chat" }, null, 28412);
+  assert.match(slow, / \(28\.4s\)$/);
+  // Errors carry the duration too — useful when a slow timeout hides as a fast-looking failure.
+  const err = summarizeTool("get_log", {}, null, "timeout", 5000);
+  assert.match(err, / \(5000ms\)$/);
+});
+
+test("summarizeTool: omitting durationMs leaves no annotation", () => {
+  const out = summarizeTool("get_log", {}, { text: "ok" }, null);
+  assert.doesNotMatch(out, /\(\d/);
+});
+
 test("formatUptime: prefers seconds, falls back to ms", () => {
   assert.equal(formatUptime({ uptime_s: 30 }), "up 30s");
   assert.equal(formatUptime({ uptime_s: 90 }), "up 1m");

@@ -18,32 +18,44 @@ export function labelTool(name) {
 // Scene/uptime/etc. Best-effort one-line summary per tool name; falls back
 // to truncated JSON for unknown tools. Result/error shape is what the
 // pip-tools dispatcher returns. Used by the Pip chat trace renderer.
-export function summarizeTool(name, input, result, error) {
+//
+// durationMs is wall-clock for the call (BLE/WebRTC roundtrip + executor
+// work). Distinct from any duration_ms inside results (e.g. move_motor's
+// firmware-applied pulse length). Suffix in parens so the two read as
+// annotation, not as another result field.
+export function summarizeTool(name, input, result, error, durationMs) {
   const lbl = labelTool(name);
-  if (error) return `${lbl} · ${shorten(error, 80)}`;
+  const dur = durationMs == null ? "" : ` (${formatCallDur(durationMs)})`;
+  if (error) return `${lbl} · ${shorten(error, 80)}${dur}`;
   const r = result || {};
   if (name === "move_motor") {
     const a = r.applied || input || {};
-    return `${lbl} · L${a.l ?? a.left ?? "?"} R${a.r ?? a.right ?? "?"} · ${a.duration_ms ?? "?"}ms`;
+    return `${lbl} · L${a.l ?? a.left ?? "?"} R${a.r ?? a.right ?? "?"} · ${a.duration_ms ?? "?"}ms${dur}`;
   }
   if (name === "get_robot_scene" || name === "ask_robot_scene") {
-    return `${lbl} · "${shorten(r.scene || r.text || "", 80)}"`;
+    return `${lbl} · "${shorten(r.scene || r.text || "", 80)}"${dur}`;
   }
   if (name === "ask_human") {
     const via = r.via ? ` (via ${r.via})` : "";
-    return `${lbl}${via} · "${shorten(r.answer || "(no answer)", 60)}"`;
+    return `${lbl}${via} · "${shorten(r.answer || "(no answer)", 60)}"${dur}`;
   }
   if (name === "start_live_scene" || name === "stop_live_scene") {
-    return `${lbl} · ${input?.id || "?"}${r.already_watching ? " (already on)" : ""}`;
+    return `${lbl} · ${input?.id || "?"}${r.already_watching ? " (already on)" : ""}${dur}`;
   }
   if (name === "list_robots") {
-    return `${lbl} · ${(r.robots || []).map(x => x.name).join(", ") || "(none)"}`;
+    return `${lbl} · ${(r.robots || []).map(x => x.name).join(", ") || "(none)"}${dur}`;
   }
-  if (name === "get_robot_state") return `${lbl} · ${r.name || "?"}`;
+  if (name === "get_robot_state") return `${lbl} · ${r.name || "?"}${dur}`;
   if (name === "get_log") {
-    return `${lbl} · ${shorten((r.text || "").trim().split("\n").pop() || "(empty)", 80)}`;
+    return `${lbl} · ${shorten((r.text || "").trim().split("\n").pop() || "(empty)", 80)}${dur}`;
   }
-  return `${lbl} · ${shorten(JSON.stringify(r), 80)}`;
+  return `${lbl} · ${shorten(JSON.stringify(r), 80)}${dur}`;
+}
+
+// Sub-10s in ms for resolution; 10s+ in 0.1s steps so a 28-second
+// ask_human_via_phone reads as "28.4s" not "28412ms".
+function formatCallDur(ms) {
+  return ms < 10000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
 // Compact uptime: "up 42s" / "up 5m" / "up 2h 13m" / "up 3d". Both Pi (s)
