@@ -74,7 +74,7 @@ The wedge is **fork-and-run dev environment with AI assist**, not these adjacent
 2. Flash or prepare hardware:
    - **ESP32 on USB:** click **Flash firmware** — bins come from GitHub Pages, no local toolchain.
    - **Pi 4 with a flashed SD card:** click **Customize card** (or hit the URL with `?prepare`) and point it at the mounted boot partition.
-3. Click **Scan for new**, pair a robot, toggle LED, onboard WiFi, drive motors. Future updates go over BLE via **Update firmware**.
+3. Click **Scan**, pair a robot, toggle LED, onboard WiFi, drive motors. Future updates go over BLE via **Update firmware**.
 
 ### Edit firmware (contributors)
 
