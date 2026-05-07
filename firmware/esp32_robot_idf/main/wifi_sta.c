@@ -411,3 +411,19 @@ void wifi_sta_init(const char *hostname) {
     esp_wifi_set_ps(WIFI_PS_NONE);
     esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
 }
+
+void wifi_sta_pause(void) {
+    // s_self_disconnect suppresses the disconnect event handler's
+    // "failed" status publish — this is a deliberate stop, not a
+    // join failure.
+    s_self_disconnect = true;
+    esp_err_t err = esp_wifi_stop();
+    ESP_LOGI(TAG, "pause: esp_wifi_stop=%d", err);
+}
+
+void wifi_sta_resume(void) {
+    esp_err_t err = esp_wifi_start();
+    ESP_LOGI(TAG, "resume: esp_wifi_start=%d", err);
+    // STA_START event handler fires esp_wifi_connect() automatically
+    // (line 182 above); no explicit connect needed here.
+}

@@ -11,6 +11,7 @@
 
 #include "gatt_svr.h"
 #include "restart_util.h"
+#include "wifi_sta.h"
 
 static const char *TAG = "ota";
 
@@ -108,6 +109,9 @@ void ota_handle_data_write(const uint8_t *buf, size_t len) {
     uint8_t op = buf[0];
     if (op == 0x00) {
         do_abort();
+        // User cancelled or fresh-state reset — bring WiFi back if it
+        // was paused for an in-progress OTA. Idempotent.
+        wifi_sta_resume();
         publish_status("idle", 0, 0, NULL);
     } else if (op == 0x01) {
         if (len < 5) { publish_status("failed", 0, 0, "bad begin"); return; }
@@ -117,11 +121,17 @@ void ota_handle_data_write(const uint8_t *buf, size_t len) {
             publish_status("failed", 0, total, "ota_begin failed");
             return;
         }
+        // Free ~50 KB internal RAM for sustained BLE RX during the
+        // stream. NimBLE may silently drop ATT writes when allocs fail
+        // (heap pressure correlates with the 98%-commit-failed pattern).
+        // Resume on abort/failure; commit reboots so no resume needed.
+        wifi_sta_pause();
         publish_status("receiving", 0, total, NULL);
     } else if (op == 0x02) {
         if (!s_in_progress) { publish_status("failed", 0, 0, "no active session"); return; }
         if (do_write(buf + 1, len - 1) != ESP_OK) {
             publish_status("failed", s_received, s_expected, "write short");
+            wifi_sta_resume();
             return;
         }
         // Throttle: report every 32 KB OR every 250 ms, whichever comes first.
@@ -137,12 +147,14 @@ void ota_handle_data_write(const uint8_t *buf, size_t len) {
         publish_status("committing", s_received, s_expected, NULL);
         if (do_commit() != ESP_OK) {
             publish_status("failed", s_received, s_expected, "commit failed");
+            wifi_sta_resume();
             return;
         }
         publish_status("done", s_received, s_expected, NULL);
         // Defer the restart — give the BLE ATT response for this commit
         // write time to land before the radio drops. Same reasoning as
-        // pin_config's deferred restart.
+        // pin_config's deferred restart. WiFi reinit happens fresh on
+        // reboot; no resume needed.
         schedule_restart(500);
     } else if (op == 0x04) {
         // URL-trigger isn't implemented — dashboard's grace-window logic

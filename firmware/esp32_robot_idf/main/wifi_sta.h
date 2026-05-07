@@ -23,3 +23,13 @@ void wifi_sta_handle_join_write(const uint8_t *json, size_t len);
 // Stable pointers (file-static buffers); valid until the next update.
 const char *wifi_sta_scan_json(void);
 const char *wifi_sta_status_json(void);
+
+// Pause/resume the STA driver. esp_wifi_stop() releases driver buffers
+// (~50 KB internal RAM); esp_wifi_start() re-attaches and the existing
+// STA_START event handler kicks reconnect to the saved AP. Used by BLE
+// OTA to free internal RAM during sustained BLE RX, where heap pressure
+// has been correlated with NimBLE silently dropping ATT writes (~98%
+// commit failures). Idempotent — safe to call when already paused or
+// already running.
+void wifi_sta_pause(void);
+void wifi_sta_resume(void);

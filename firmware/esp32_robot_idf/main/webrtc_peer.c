@@ -640,7 +640,13 @@ static void handle_offer(const char *sdp) {
     int rc = esp_peer_open(&cfg, esp_peer_get_default_impl(), &s_peer);
     if (rc != ESP_PEER_ERR_NONE || !s_peer) {
         ESP_LOGE(TAG, "esp_peer_open failed: %d", rc);
-        send_ble_signal_error("esp_peer_open failed");
+        // Surface rc to the dashboard — heap-pressure failures look the
+        // same as configuration errors without it (`-1` ESP_PEER_ERR_NO_MEM,
+        // `-3` ESP_PEER_ERR_INVALID_ARG, etc.). Diagnostic only; no
+        // behavior change.
+        char err_buf[48];
+        snprintf(err_buf, sizeof(err_buf), "esp_peer_open failed: %d", rc);
+        send_ble_signal_error(err_buf);
         return;
     }
 
