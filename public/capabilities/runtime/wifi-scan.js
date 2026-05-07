@@ -52,6 +52,76 @@ function signalBars(r) {
 const LOCK_SVG = `<svg class="wifi-lock" viewBox="0 0 12 14" aria-label="secured"><path d="M3 6V4a3 3 0 0 1 6 0v2h.5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-6a.5.5 0 0 1 .5-.5H3zm1 0h4V4a2 2 0 1 0-4 0v2z"/></svg>`;
 const CHECK_SVG = `<svg class="wifi-check" viewBox="0 0 14 14" aria-label="connected"><path d="M5.5 10.4 2.6 7.5l-.9.9 3.8 3.8 7.6-7.6-.9-.9z"/></svg>`;
 
+// Open the join dialog with SSID prefilled (or empty for "Other network").
+// Resolves to {ssid, password} on submit, null on cancel/close.
+//
+// The dialog uses a real <input type="password"> with autocomplete=
+// "username" (SSID) and "current-password" — so the browser's password
+// manager (Chrome's, iCloud Keychain via Safari, 1Password, Bitwarden,
+// etc.) can save the credential and autofill on the next join. After
+// submit we explicitly construct a PasswordCredential from the form and
+// call navigator.credentials.store() — without that, Chrome's heuristic
+// often skips the save prompt when the page doesn't navigate. The system
+// WiFi keychain stays unreachable (deliberate browser-security boundary);
+// what we get is per-origin sync via whichever password manager the user
+// runs.
+function joinViaDialog(presetSsid) {
+  return new Promise((resolve) => {
+    const dialog = document.getElementById("wifi-join-dialog");
+    const form = document.getElementById("wifi-join-form");
+    if (!dialog || !form) { resolve(null); return; }
+    const ssidInput = document.getElementById("wifi-join-ssid");
+    const passwordInput = document.getElementById("wifi-join-password");
+    const cancelBtn = document.getElementById("wifi-join-cancel");
+    const closeBtn = document.getElementById("wifi-join-close");
+
+    ssidInput.value = presetSsid || "";
+    passwordInput.value = "";
+
+    let resolved = false;
+    const cleanup = () => {
+      form.removeEventListener("submit", onSubmit);
+      cancelBtn?.removeEventListener("click", onCancel);
+      closeBtn?.removeEventListener("click", onCancel);
+      dialog.removeEventListener("close", onClose);
+    };
+    const settle = (value) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      try { dialog.close(); } catch {}
+      resolve(value);
+    };
+    const onSubmit = async (e) => {
+      e.preventDefault();
+      const ssid = ssidInput.value.trim();
+      const password = passwordInput.value;
+      if (!ssid) return;
+      // Explicit credential save — Chrome/Edge support this. Safari/
+      // Firefox don't expose PasswordCredential; their save heuristics
+      // still fire on standard form submits where applicable.
+      if (window.PasswordCredential) {
+        try {
+          await navigator.credentials.store(new PasswordCredential(form));
+        } catch { /* user-declined or unsupported — fine, we still join */ }
+      }
+      settle({ ssid, password });
+    };
+    const onCancel = () => settle(null);
+    const onClose = () => settle(null);
+
+    form.addEventListener("submit", onSubmit);
+    cancelBtn?.addEventListener("click", onCancel);
+    closeBtn?.addEventListener("click", onCancel);
+    dialog.addEventListener("close", onClose);
+
+    dialog.showModal();
+    setTimeout(() => {
+      (presetSsid ? passwordInput : ssidInput).focus();
+    }, 0);
+  });
+}
+
 export function makeWifiScanCap(schema) {
   const { name } = schema;
   const chars = schema.chars || UUIDS_BY_CAP[name];
@@ -117,10 +187,15 @@ export function makeWifiScanCap(schema) {
 
   async function join(entry, ssid, secured) {
     if (!entry[joinField]) return;
+    // Open the dialog even for known-secured networks so the browser's
+    // password manager can autofill (matching origin + SSID-as-username
+    // from prior submits — including iCloud Keychain / Chrome Sync). Open
+    // networks skip the dialog: nothing for the user to confirm.
     let password = "";
     if (secured) {
-      password = prompt(`Password for ${ssid}:`);
-      if (password === null) return;
+      const result = await joinViaDialog(ssid);
+      if (!result) return;
+      password = result.password;
     }
     try {
       await entry[joinField].writeValueWithResponse(encodeJson({ s: ssid, p: password }));
@@ -132,26 +207,12 @@ export function makeWifiScanCap(schema) {
   // When scan fails (classic ESP32 + BLE coexistence commonly returns zero
   // APs even when networks exist), the user can still join by typing SSID +
   // password directly. Mirrors iOS's "Join Other Network…" affordance.
-  // macOS auto-corrects ' / " to curly equivalents (\u2018\u2019\u201C\u201D)
-  // inside prompt() dialogs unless the user has Smart Quotes off. Network
-  // SSIDs are byte-exact — "Jonas's iPhone" with a curly apostrophe doesn't
-  // match the AP's beacon "Jonas's iPhone" with a straight one, and the chip
-  // returns ssid_not_found. Normalize before sending so the typed path
-  // matches the scan-and-join path.
-  function straightenQuotes(s) {
-    return (s || "")
-      .replace(/[\u2018\u2019]/g, "'")
-      .replace(/[\u201C\u201D]/g, '"');
-  }
-
   async function joinManual(entry) {
     if (!entry[joinField]) return;
-    const ssid = straightenQuotes(prompt("Network name (SSID):"));
-    if (!ssid) return;
-    const password = straightenQuotes(prompt(`Password for "${ssid}" (leave blank for open):`));
-    if (password === null) return;
+    const result = await joinViaDialog("");
+    if (!result?.ssid) return;
     try {
-      await entry[joinField].writeValueWithResponse(encodeJson({ s: ssid, p: password }));
+      await entry[joinField].writeValueWithResponse(encodeJson({ s: result.ssid, p: result.password }));
     } catch (err) {
       logFor(entry, `${name} manual join failed: ${err.message}`);
     }

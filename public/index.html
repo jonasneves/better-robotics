@@ -132,6 +132,28 @@
   <button class="menu-item destructive" id="menu-hard-refresh"><svg class="icon-svg"><use href="icons.svg#icon-trash-2"/></svg>Hard refresh…</button>
 </div>
 
+<dialog id="wifi-join-dialog" class="prepare-dialog">
+  <form id="wifi-join-form">
+    <div class="modal-header">
+      <div class="label" id="wifi-join-title">Join WiFi</div>
+      <button type="button" class="icon" id="wifi-join-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
+    </div>
+    <p class="meta" style="margin: 0 0 12px;">Browser saves the password and autofills next time — including across devices via your password manager.</p>
+    <label style="display:block; margin-bottom:8px;">
+      <span class="meta" style="display:block; margin-bottom:2px;">Network</span>
+      <input type="text" name="ssid" id="wifi-join-ssid" autocomplete="username" required style="width:100%;">
+    </label>
+    <label style="display:block; margin-bottom:12px;">
+      <span class="meta" style="display:block; margin-bottom:2px;">Password <span class="meta" style="font-weight: normal;">(blank for open networks)</span></span>
+      <input type="password" name="password" id="wifi-join-password" autocomplete="current-password" style="width:100%;">
+    </label>
+    <div class="modal-footer">
+      <button type="button" class="secondary sm" id="wifi-join-cancel">Cancel</button>
+      <button type="submit" class="primary sm">Join</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="update-fw-dialog" class="prepare-dialog">
   <div class="modal-header">
     <div class="label">Update firmware</div>
