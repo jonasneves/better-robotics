@@ -1,5 +1,5 @@
 import { settings, saveSettings } from "./settings.js";
-import { showLoading, hideLoading } from "https://cdn.jsdelivr.net/npm/@jonasneves/pip@2.6.0/pip-core.esm.js";
+import { showLoading, hideLoading } from "https://cdn.jsdelivr.net/npm/@jonasneves/pip@2.8.1/pip-core.esm.js";
 
 // Loaded lazily — does not pay the ~1.2 GB Q4 download until the user
 // clicks Install in Settings → Pip backend → Local.

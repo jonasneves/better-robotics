@@ -1865,21 +1865,6 @@ dialog[open]::backdrop { opacity: 1; }
    ~36px default, so vertical gap with the 24px button is ~3.5px instead
    of ~5.5px. Match horizontally so the inset stays symmetric. */
 .pip-form { --pip-btn-right: 4px; }
-/* Pip-core's chrome buttons (slash trigger, send/stop, in-chat options) are
-   small, transparent-bg widgets. The global button:active treatments —
-   scale(0.98) plus filter: brightness(0.94) — were designed for primary CTAs
-   on solid fills; on these chrome controls scale reads as a bouncy mis-click
-   on rapid taps, and in dark mode brightness(0.94) drives an already-dark
-   surface into the floor. Let pip-core's own hover/click states carry the
-   feedback. The slash-key also relies on transform: translateY(-50%) for
-   vertical centering, which the global rule was clobbering. */
-.pip-ask-btn:active { transform: none; filter: none; }
-/* slash-key, send-btn, stop-btn all use transform: translateY(-50%) for
-   vertical centering inside the form. Preserve it on press so they don't
-   jump position. */
-.pip-slash-key:active,
-.pip-send-btn:active,
-.pip-stop-btn:active { transform: translateY(-50%); filter: none; }
 /* Tool-trace row — one per tool_use call, appended as Pip dispatches them.
    .pending = in-flight (italic + dim), .error = tool returned/threw. */
 .pip-trace {
