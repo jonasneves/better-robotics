@@ -1267,8 +1267,8 @@ async function openConsole(mode) {
 async function _setConsoleMode(mode) {
   $("console-pi-section").hidden = mode !== "pi";
   $("console-esp-section").hidden = mode !== "esp";
-  $("console-mode-pi").setAttribute("aria-pressed", String(mode === "pi"));
-  $("console-mode-esp").setAttribute("aria-pressed", String(mode === "esp"));
+  $("console-mode-pi")?.setAttribute("aria-pressed", String(mode === "pi"));
+  $("console-mode-esp")?.setAttribute("aria-pressed", String(mode === "esp"));
   if (mode === "pi") {
     const mod = await import("./recovery.js");
     mod.init();
@@ -1532,7 +1532,7 @@ document.addEventListener("DOMContentLoaded", () => {
     openConsole();
   });
   for (const id of ["console-mode-pi", "console-mode-esp"]) {
-    $(id).addEventListener("click", async (e) => {
+    $(id)?.addEventListener("click", async (e) => {
       const mode = e.currentTarget.dataset.mode;
       localStorage.setItem("console-mode", mode);
       await _setConsoleMode(mode);
