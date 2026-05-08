@@ -57,7 +57,7 @@ Buy in US: [Adafruit](https://www.adafruit.com/?q=raspberry+pi+4), CanaKit, PiSh
 Pi boots with a **composite USB gadget** (ECM ethernet + ACM serial) under `usb-gadget.service`, independent of the main firmware service. Plug USB-C from Pi into laptop:
 
 - **ECM ethernet** — Pi appears at `10.55.0.1`; `ssh pi@10.55.0.1` works with the sudo password set in Customize card.
-- **ACM serial** — Pi appears as `/dev/cu.usbmodem*`; dashboard's ⋯ → **Recovery console** menu opens an xterm.js terminal over this. Works even when BLE and WiFi are both dead, because the gadget is a kernel-level service that runs before `pi-robot` and doesn't depend on it.
+- **ACM serial** — Pi appears as `/dev/cu.usbmodem*`; dashboard's ⋯ → **Serial console** → Pi mode opens an xterm.js terminal over this. Works even when BLE and WiFi are both dead, because the gadget is a kernel-level service that runs before `pi-robot` and doesn't depend on it.
 
 Requires a USB-C **data** cable (not charge-only). Gotcha: power-only variants look identical and ship in the box with most chargers. Pi 4's USB-C port is the only gadget-capable port; USB-A on the top edge are hosts and won't work.
 

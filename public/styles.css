@@ -1645,7 +1645,7 @@ details.tray.has-alert > summary::after {
    actions from benign ones so the operator's eye lands on the safe
    action by default. */
 .recovery-actions { margin: 0 0 12px; align-items: center; }
-.recovery-actions #recovery-flash { margin-left: auto; }
+.recovery-actions #esp-serial-flash { margin-left: auto; }
 .recovery-term {
   background: #1e1e1e;
   flex: 1;

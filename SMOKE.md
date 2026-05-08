@@ -48,8 +48,9 @@ Pure-function tests live in `tests/`; run with `make smoke`. Below needs hardwar
 
 ## Recovery
 
-- [ ] USB-C recovery console: Pi powered + plugged → Connect → bash prompt appears.
-- [ ] ESP32 serial monitor: Connect → boot log + serial output streams.
+- [ ] Pi serial console: Pi powered + plugged → Serial console → Pi mode → Connect → bash prompt appears.
+- [ ] ESP32 serial console: Serial console → ESP32 mode → Connect → boot log + serial output streams.
+- [ ] ESP32 flash: Serial console → ESP32 mode → Flash firmware → bins stream, chip reboots.
 - [ ] Heartbeat-only mode: `systemctl stop pi-robot.service` → dashboard shows firmware-down banner with IP + recovery button.
 
 ## Offline / PWA

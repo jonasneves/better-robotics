@@ -1024,9 +1024,9 @@ function renderEntry(entry) {
       <div class="firmware-down-banner">
         <div class="label">pi-robot.service: ${escapeHtml(entry.heartbeat?.pi_robot || "down")}</div>
         <div class="meta">Only the heartbeat plane is responding — capabilities (LED, motors, WiFi, OTA) are unavailable until the firmware comes back.</div>
-        ${entry.heartbeat?.ip ? `<div class="meta">SSH: <code>ssh robot@${escapeHtml(entry.heartbeat.ip)}</code></div>` : `<div class="meta">No IP — robot isn't on WiFi. Use the USB-C recovery console.</div>`}
+        ${entry.heartbeat?.ip ? `<div class="meta">SSH: <code>ssh robot@${escapeHtml(entry.heartbeat.ip)}</code></div>` : `<div class="meta">No IP — robot isn't on WiFi. Use the USB-C serial console.</div>`}
         <div class="row" style="margin-top:8px;">
-          <button class="secondary sm" data-action="open-recovery">Open recovery console</button>
+          <button class="secondary sm" data-action="open-recovery">Open serial console</button>
         </div>
       </div>
     ` : ""}

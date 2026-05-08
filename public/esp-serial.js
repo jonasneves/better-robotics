@@ -207,6 +207,80 @@ async function disconnect() {
   setStatus("");
 }
 
+// Browser-side firmware flash. Detaches the live console session
+// (esptool-js needs exclusive access to the port), streams the four
+// CI-published bins to the chip, then re-opens the console so the
+// operator can watch boot.
+async function flashFlow() {
+  if (!("serial" in navigator)) {
+    setStatus("error", "unsupported browser");
+    log("Web Serial not supported — use Chrome or Edge on desktop");
+    return;
+  }
+  if (!confirm("Flash the latest firmware to the connected ESP32?\n\n"
+             + "This erases the chip's app + bootloader + partition table "
+             + "and replaces them with the build CI most recently published "
+             + "to public/firmware/bins/.")) return;
+  const reconnectAfter = !!_port;
+  if (_port) await disconnect();
+
+  let port;
+  try {
+    port = await navigator.serial.requestPort();
+    try { await port.open({ baudRate: 115200 }); }
+    catch (err) {
+      // Same SerialPort instance can come back from requestPort() in an
+      // already-open state when a prior session (this tab or another) didn't
+      // fully release it. Close + retry recovers it without a page reload.
+      if (err.name === "InvalidStateError") {
+        try { await port.close(); } catch {}
+        await new Promise((r) => setTimeout(r, 200));
+        await port.open({ baudRate: 115200 });
+      } else throw err;
+    }
+  } catch (err) {
+    if (err.name !== "NotFoundError") log(`ESP flash port: ${err.message}`);
+    setStatus("");
+    return;
+  }
+  setStatus("connected", "flashing…");
+  $("esp-serial-flash").disabled = true;
+
+  // Render esptool-js's progress output in the same xterm pane the live
+  // console uses. Pulls in xterm if not already loaded.
+  const { Terminal } = await ensureXtermLoaded();
+  const container = $("esp-serial-console-host");
+  container.innerHTML = "";
+  const term = new Terminal({
+    fontSize: 13,
+    fontFamily: '"SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace',
+    convertEol: true,
+    theme: { background: "#1e1e1e", foreground: "#e4e4e4", cursor: "#e4e4e4" },
+  });
+  term.open(container);
+
+  try {
+    const { flashFirmware } = await import("./flasher.js");
+    await flashFirmware(port, term, (fileIndex, pct) => {
+      setStatus("connected", `flashing file ${fileIndex} ${pct}%`);
+    });
+    setStatus("connected", "flash done");
+  } catch (err) {
+    log(`Flash failed: ${err.message}`);
+    term.writeln(`\r\n[flash error: ${err.message}]`);
+    setStatus("error", err.message);
+  } finally {
+    try { await port.close(); } catch {}
+    term.dispose();
+    $("esp-serial-flash").disabled = false;
+  }
+
+  // Re-open the live console so the operator can watch boot. esptool-js's
+  // hardReset auto-resets the chip after flash, so the boot sequence lands
+  // in the freshly-cleared term.
+  if (reconnectAfter) await connect();
+}
+
 // Same purpose as recovery.releasePort — see comment there.
 export async function releasePort() { if (_port) await disconnect(); }
 
@@ -215,6 +289,7 @@ export function init() {
   _wired = true;
   $("console-close").addEventListener("click", () => $("console-modal").close());
   $("esp-serial-connect").addEventListener("click", () => _port ? disconnect() : connect());
+  $("esp-serial-flash").addEventListener("click", flashFlow);
   // Auto-disconnect when the dialog closes — leaving the port open across
   // dialog hides would block other tools (Flash button) from reusing it.
   $("console-modal").addEventListener("close", () => { if (_port) disconnect(); });
