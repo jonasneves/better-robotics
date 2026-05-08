@@ -1,14 +1,22 @@
-// ESP32 serial monitor — companion to recovery.js (Pi). Different tool because
-// ESP32 firmware is line-buffered Serial.println output, not a TTY: ewt-console
-// (a log box with optional input) is the right granularity, not xterm. We
-// already load esp-web-tools@10 for the Flash button (index.html), so the
-// <ewt-console> element is in the bundle for free. See README architecture
-// note + the architectural reflection where this got picked.
+// ESP32 serial monitor — same shape as recovery.js (Pi USB-CDC) so both
+// Console modes share xterm.js + Web Serial. We used to mount <ewt-console>
+// here, but that element is registered only as a side-effect of clicking
+// esp-web-tools' Flash button (it lives inside a content-hashed install-
+// dialog chunk that install-button.js lazy-imports). Until then it's an
+// HTMLUnknownElement: setting `port` is a no-op, nothing pumps, terminal
+// stays blank. The xterm path has no such ordering trap.
 import { $ } from "./dom.js";
+import { log } from "./log.js";
 
 let _wired = false;
 let _port = null;
-let _consoleEl = null;
+let _reader = null;
+let _writer = null;
+let _readPump = null;
+let _term = null;
+let _fit = null;
+let _resizeObs = null;
+let _xtermModule = null;
 
 // state: "" (idle/disconnected) | "connected" | "connecting" | "error".
 // Drives the dot color; text only renders for non-default detail messages.
@@ -17,6 +25,23 @@ function setStatus(state, text = "") {
   const el = $("esp-serial-status");
   if (dot) dot.className = `dot${state ? ` ${state}` : ""}`;
   if (el) el.textContent = text;
+}
+
+async function ensureXtermLoaded() {
+  if (_xtermModule) return _xtermModule;
+  if (!document.querySelector('link[data-xterm-css]')) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.css";
+    link.dataset.xtermCss = "1";
+    document.head.appendChild(link);
+  }
+  const [core, fit] = await Promise.all([
+    import("https://cdn.jsdelivr.net/npm/@xterm/xterm@5/+esm"),
+    import("https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10/+esm"),
+  ]);
+  _xtermModule = { Terminal: core.Terminal, FitAddon: fit.FitAddon };
+  return _xtermModule;
 }
 
 // Last-used port hint persisted as VID:PID. SerialPort objects themselves
@@ -54,8 +79,7 @@ function pickKnown(ports) {
 // Then deassert DTR/RTS immediately. ESP32-CAM (and most ESP32 dev boards)
 // wire DTR/RTS through transistors to EN + GPIO0 — Chrome's default
 // asserted state on open() pulses those, which resets the chip and kills
-// any active BLE session. Setting both low keeps the chip running. No-op
-// on hardware that doesn't wire those signals (e.g. Pi USB-CDC gadgets).
+// any active BLE session. Setting both low keeps the chip running.
 async function openWithRetry(port) {
   try { await port.open({ baudRate: 115200 }); }
   catch (err) {
@@ -70,6 +94,11 @@ async function openWithRetry(port) {
 
 async function connect() {
   if (_port) return;
+  if (!("serial" in navigator)) {
+    setStatus("error", "unsupported browser");
+    log("Web Serial not supported — use Chrome or Edge on desktop");
+    return;
+  }
   // Skip the picker when we already have permission for a port. Chrome
   // persists the grant across dialog opens AND page reloads (per origin).
   // When more than one port is granted, prefer the one matching the
@@ -98,45 +127,81 @@ async function connect() {
     return;
   }
   rememberPort(_port);
-  // Create <ewt-console> fresh with port set BEFORE the element is inserted
-  // into the DOM — its connectedCallback runs the moment we appendChild and
-  // assumes a port exists. Static-HTML insertion crashes ewt internally.
-  _consoleEl = document.createElement("ewt-console");
-  _consoleEl.port = _port;
-  _consoleEl.setAttribute("allow-input", "");
-  const host = $("esp-serial-console-host");
-  host.innerHTML = "";
-  host.appendChild(_consoleEl);
+
+  const { Terminal, FitAddon } = await ensureXtermLoaded();
+  const container = $("esp-serial-console-host");
+  container.innerHTML = "";
+  _term = new Terminal({
+    fontSize: 13,
+    fontFamily: '"SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace',
+    cursorBlink: true,
+    convertEol: false,
+    theme: { background: "#1e1e1e", foreground: "#e4e4e4", cursor: "#e4e4e4" },
+  });
+  _fit = new FitAddon();
+  _term.loadAddon(_fit);
+  _term.open(container);
+  // Defer fit one frame so the dialog's open-animation layout has resolved
+  // (same FitAddon early-measure trap as recovery.js — see comment there).
+  await new Promise(r => requestAnimationFrame(r));
+  try { _fit.fit(); } catch {}
+  _resizeObs = new ResizeObserver(() => {
+    const r = container.getBoundingClientRect();
+    if (r.width < 10 || r.height < 10) return;
+    try { _fit?.fit(); } catch {}
+  });
+  _resizeObs.observe(container);
+  _term.focus();
+
+  _term.onData(async (data) => {
+    if (!_writer) return;
+    try { await _writer.write(new TextEncoder().encode(data)); }
+    catch (err) { _term?.writeln(`\r\n[write error: ${err.message}]`); }
+  });
+
+  _writer = _port.writable.getWriter();
+  _reader = _port.readable.getReader();
+  _readPump = (async () => {
+    try {
+      while (true) {
+        const { value, done } = await _reader.read();
+        if (done) break;
+        if (value) _term?.write(value);
+      }
+    } catch (err) {
+      _term?.writeln(`\r\n[read error: ${err.message}]`);
+    }
+  })();
+
   $("esp-serial-connect").textContent = "Disconnect";
   setStatus("connected");
 }
 
 async function disconnect() {
-  // Ordering matters: remove the element FIRST so ewt-console's
-  // disconnectedCallback cancels its reader and releases the lock on
-  // port.readable. THEN close the port. If we close first (or in parallel),
-  // close() rejects or hangs because the reader still holds the lock, and
-  // the port ends up in an "open" limbo — the install-dialog's later
-  // port.open() then throws InvalidStateError ("port is already open").
-  if (_consoleEl) {
-    try { _consoleEl.remove(); } catch {}
-    _consoleEl = null;
-    // disconnectedCallback runs synchronously on removal, but reader
-    // cancellation is async. Give the microtask queue a beat to drain.
-    await new Promise((r) => setTimeout(r, 50));
-  }
+  // Release order matters — same dance recovery.js does. Reader.cancel()
+  // resolves before the in-flight read() promise settles, so releaseLock()
+  // must wait for the read pump to actually exit, otherwise port.close()
+  // rejects with "stream is locked" and the port stays in an "open" limbo
+  // that blocks a subsequent flash attempt with InvalidStateError.
+  try { await _reader?.cancel(); } catch {}
+  try { await _readPump; } catch {}
+  try { _reader?.releaseLock(); } catch {}
+  try { _writer?.releaseLock(); } catch {}
   if (_port) {
-    // Two-attempt close: if the first throws (reader still locked, rare),
-    // wait a bit longer and retry. If the second still fails, give up —
-    // state is wedged but better than hanging forever. Won't clobber
-    // future flash attempts because we still null out _port.
     try { await _port.close(); }
     catch {
       await new Promise((r) => setTimeout(r, 500));
       try { await _port.close(); } catch {}
     }
-    _port = null;
   }
+  await new Promise((r) => setTimeout(r, 100));
+  _reader = _writer = _readPump = _port = null;
+  _resizeObs?.disconnect();
+  _resizeObs = null;
+  _fit?.dispose();
+  _fit = null;
+  _term?.dispose();
+  _term = null;
   $("esp-serial-console-host").innerHTML = "";
   $("esp-serial-connect").textContent = "Connect";
   setStatus("");
@@ -154,4 +219,3 @@ export function init() {
   // dialog hides would block other tools (Flash button) from reusing it.
   $("console-modal").addEventListener("close", () => { if (_port) disconnect(); });
 }
-

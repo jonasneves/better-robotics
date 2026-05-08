@@ -871,14 +871,13 @@ details.tray.has-alert > summary::after {
 .robot-state.sticky::before { animation: none; background: var(--ink-muted); }
 @keyframes robot-state-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-/* ESP32 serial monitor — see esp-serial.js. ewt-console handles its own
-   internals (shadow DOM); we just give it height + width to fill. */
+/* ESP32 serial monitor — xterm.js host (same primitive as .recovery-term).
+   min-height: 0 so the flex column actually shrinks past the default
+   `min-height: auto` content size. */
 .esp-serial-console {
-  display: block;
-  width: 100%;
+  background: #1e1e1e;
   flex: 1;
-  min-height: 380px;
-  border: 1px solid var(--border-default);
+  min-height: 0;
   overflow: hidden;
 }
 

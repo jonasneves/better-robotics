@@ -358,9 +358,8 @@
       <span class="meta" id="recovery-status"></span>
     </div>
   </div>
-  <!-- ESP32 mode (esp-serial.js operates on these IDs). The <ewt-console>
-       element is created dynamically by esp-serial.js on Connect (its
-       connectedCallback crashes if mounted with no port). -->
+  <!-- ESP32 mode (esp-serial.js operates on these IDs). xterm.js mounts
+       into #esp-serial-console-host on Connect, same as recovery.js. -->
   <div class="console-section" id="console-esp-section" hidden>
     <div class="row" style="margin: 0 0 12px;">
       <button class="secondary sm" id="esp-serial-connect">Connect</button>
