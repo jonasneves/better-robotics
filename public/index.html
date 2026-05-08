@@ -142,7 +142,7 @@
       <div class="label" id="wifi-join-title">Join WiFi</div>
       <button type="button" class="icon" id="wifi-join-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
     </div>
-    <p class="meta" style="margin: 0 0 12px;">Browser saves the password and autofills next time — including across devices via your password manager.</p>
+    <p class="hint" style="margin: 0 0 12px;">Browser saves the password and autofills next time — including across devices via your password manager.</p>
     <label style="display:block; margin-bottom:8px;">
       <span class="meta" style="display:block; margin-bottom:2px;">Network</span>
       <input type="text" name="ssid" id="wifi-join-ssid" autocomplete="username" required style="width:100%;">
@@ -177,7 +177,7 @@
     <div class="label">Diagnostics</div>
     <button class="icon" id="diagnostics-close" aria-label="Close"><svg class="icon-svg"><use href="icons.svg#icon-x"/></svg></button>
   </div>
-  <p class="meta" style="margin: 0 0 12px;">Captures STUN probe, last pair attempt, and connected-robot telemetry. Nothing persists; close to discard.</p>
+  <p class="hint" style="margin: 0 0 12px;">Captures STUN probe, last pair attempt, and connected-robot telemetry. Nothing persists; close to discard.</p>
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
     <button class="secondary" id="diagnostics-refresh">Refresh</button>
     <button class="secondary" id="diagnostics-copy">Copy</button>
@@ -200,7 +200,7 @@
     <li>Local Pip model weights (≈1.2&nbsp;GB re-download if you had it installed)</li>
     <li>Auth tokens (you'll need to sign in again)</li>
   </ul>
-  <p class="meta" style="margin: 0 0 16px;">Bluetooth pairing is controlled by the browser, not this app. If a robot won't reconnect after the refresh, revoke it at <code>chrome://bluetooth-internals/#devices</code> and re-pair.</p>
+  <p class="hint" style="margin: 0 0 16px;">Bluetooth pairing is controlled by the browser, not this app. If a robot won't reconnect after the refresh, revoke it at <code>chrome://bluetooth-internals/#devices</code> and re-pair.</p>
   <div class="modal-footer">
     <button class="secondary" id="hard-refresh-cancel">Cancel</button>
     <button class="danger" id="hard-refresh-confirm" autofocus>Clear everything and reload</button>
