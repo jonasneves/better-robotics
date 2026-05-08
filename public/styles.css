@@ -1873,10 +1873,13 @@ dialog[open]::backdrop { opacity: 1; }
    surface into the floor. Let pip-core's own hover/click states carry the
    feedback. The slash-key also relies on transform: translateY(-50%) for
    vertical centering, which the global rule was clobbering. */
-.pip-send-btn:active,
-.pip-stop-btn:active,
 .pip-ask-btn:active { transform: none; filter: none; }
-.pip-slash-key:active { transform: translateY(-50%); filter: none; }
+/* slash-key, send-btn, stop-btn all use transform: translateY(-50%) for
+   vertical centering inside the form. Preserve it on press so they don't
+   jump position. */
+.pip-slash-key:active,
+.pip-send-btn:active,
+.pip-stop-btn:active { transform: translateY(-50%); filter: none; }
 /* Tool-trace row — one per tool_use call, appended as Pip dispatches them.
    .pending = in-flight (italic + dim), .error = tool returned/threw. */
 .pip-trace {
