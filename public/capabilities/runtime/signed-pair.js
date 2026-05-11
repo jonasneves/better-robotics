@@ -220,8 +220,7 @@ function keyboardTick() {
     else if (axis === "turn+") turn = 100;
     else if (axis === "turn-") turn = -100;
   }
-  const [l, r] = mix(throttle, turn);
-  setPairValue(entry, "motors", l, r);
+  setPairValue(entry, "motors", throttle, turn);
 }
 
 function stopKeyboardMotors() {

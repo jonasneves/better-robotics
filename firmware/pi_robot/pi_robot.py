@@ -851,7 +851,20 @@ def _motor_handle_write(data: bytearray) -> None:
     if len(data) == 2:
         _motor_last_write_at = asyncio.get_event_loop().time()
         _motor_pulse_id += 1
-        _apply_motors(signed(data[0]), signed(data[1]))
+        forward_pct = signed(data[0])  # % of max speed, positive = forward
+        turn_pct    = signed(data[1])  # % of max turn,  positive = right
+        if _motion_available and MOTORS_ENABLED and WHEEL_SEPARATION > 0 and MAX_WHEEL_SPEED > 0:
+            max_omega = 2.0 * MAX_WHEEL_SPEED / WHEEL_SEPARATION
+            v     = (forward_pct / 100.0) * MAX_WHEEL_SPEED
+            omega = -(turn_pct   / 100.0) * max_omega  # negative omega = clockwise = right
+            half_sep = WHEEL_SEPARATION / 2.0
+            scale    = 100.0 / MAX_WHEEL_SPEED
+            left  = max(-100, min(100, int(round((v - omega * half_sep) * scale))))
+            right = max(-100, min(100, int(round((v + omega * half_sep) * scale))))
+        else:
+            left  = max(-100, min(100, forward_pct + turn_pct))
+            right = max(-100, min(100, forward_pct - turn_pct))
+        _apply_motors(left, right)
     elif len(data) == 4:
         l = max(-LLM_MAX_SPEED, min(LLM_MAX_SPEED, signed(data[0])))
         r = max(-LLM_MAX_SPEED, min(LLM_MAX_SPEED, signed(data[1])))

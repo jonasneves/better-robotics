@@ -46,7 +46,8 @@ export function attachJoypad(pad, knob, { onDrive, onStop, heartbeatMs = 200 } =
     const nx = Math.cos(angle) * dist;
     const ny = Math.sin(angle) * dist;
     knob.style.transform = `translate(${nx * radius}px, ${ny * radius}px)`;
-    [lastL, lastR] = mix(-ny * 100, nx * 100);  // Y inverted: up = +throttle
+    lastL = -ny * 100;  // forward%: up = +throttle
+    lastR =  nx * 100;  // turn%:    right = +turn
     onDrive?.(lastL, lastR);
   };
 
