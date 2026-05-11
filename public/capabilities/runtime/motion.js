@@ -114,7 +114,7 @@ export function makeMotionCap(schema) {
         </div>
         <div class="segmented motion-ctrl-seg">
           <button class="mode-btn" data-action="motion-ctrl-sms"
-            aria-pressed="${ctrl === "spin_move_spin"}" type="button">Spin→Move→Spin</button>
+            aria-pressed="${ctrl === "spin_move_spin"}" type="button">Pose · Move · Pose</button>
           <button class="mode-btn" data-action="motion-ctrl-cont"
             aria-pressed="${ctrl === "continuous"}" type="button">Continuous</button>
         </div>
