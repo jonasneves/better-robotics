@@ -559,6 +559,10 @@ let _shareSenders = [];
 
 async function toggleShareCamera() {
   if (_shareStream) { _stopSharing(); return; }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showCommandStatus(cameraUnavailableReason(), "alert");
+    return;
+  }
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -635,12 +639,25 @@ function clearScanError() {
   $("phone-scanner-fallback").hidden = true;
 }
 
+// navigator.mediaDevices is undefined in any insecure context — accessing
+// phone.html over http://<ip>/<mac>.local instead of https:// is the most
+// common trip. Surface that reason instead of the raw TypeError.
+function cameraUnavailableReason() {
+  return window.isSecureContext
+    ? "Camera isn't available in this browser."
+    : "Camera needs HTTPS. Open this page over https:// (or use the GitHub Pages URL).";
+}
+
 async function startQrScan() {
   if (typeof window.jsQR !== "function") {
     showScanError("QR decoder didn't load. Reload the page or check your network.");
     return;
   }
   clearScanError();
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showScanError(cameraUnavailableReason());
+    return;
+  }
   try {
     _scanStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "environment" } },
