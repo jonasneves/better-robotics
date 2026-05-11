@@ -4,7 +4,7 @@
 
 No install, no servers.
 
-[![Live](https://img.shields.io/badge/live-neevs.io%2Fbetter--robotics-blue)](https://neevs.io/better-robotics/)
+[![Live](https://img.shields.io/badge/live-neves.cloud%2Fbetter--robotics-blue)](https://neves.cloud/better-robotics/)
 [![Build firmware](https://github.com/jonasneves/better-robotics/actions/workflows/build-firmware.yml/badge.svg)](https://github.com/jonasneves/better-robotics/actions/workflows/build-firmware.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 [![Web Bluetooth](https://img.shields.io/badge/Web%20Bluetooth-Chrome%20%7C%20Edge-orange)](#browser-support)
