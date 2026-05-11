@@ -121,15 +121,24 @@ function piRowsFragment(claims) {
     const lc = claims[lp];
     const rc = claims[rp];
     const y = PI_PAD_Y + (i / 2) * PI_ROW_H + PI_ROW_H / 2;
+    // data-wire links pin-dot + claim text to the motor-wire chain
+    // (claim-text + wire path + driver terminal share the same value, so
+    // hovering any element lights up the whole connection). Only motor
+    // claims get the attribute; LED/camera-style single-pin caps have
+    // nothing to chain to. Tooltips intentionally minimal — the GPIO
+    // label, physical pin number, and cap/role are already shown in
+    // adjacent columns, so a verbose title would just restate them.
+    const lWire = lc?.cap === "motors" ? ` data-wire="${escapeHtml(lc.role)}"` : "";
+    const rWire = rc?.cap === "motors" ? ` data-wire="${escapeHtml(rc.role)}"` : "";
     rows.push(`
       <g class="pin-row">
-        ${lc ? `<text class="pin-claim" x="118" y="${y}" text-anchor="end">${escapeHtml(lc.cap)} · ${escapeHtml(lc.role)}</text>` : ""}
+        ${lc ? `<text class="pin-claim" x="118" y="${y}" text-anchor="end"${lWire}>${escapeHtml(lc.cap)} · ${escapeHtml(lc.role)}</text>` : ""}
         <text class="pin-label" x="178" y="${y}" text-anchor="end">${escapeHtml(ll)}</text>
-        <circle class="pin-dot kind-${lk} ${lc ? "claimed" : ""}" cx="${PI_LEFT_CX}" cy="${y}" r="${PI_PIN_R}" data-phys="${lp}"><title>${escapeHtml(ll)} (physical ${lp})${lc ? " — " + escapeHtml(lc.cap) + " " + escapeHtml(lc.role) : ""}</title></circle>
+        <circle class="pin-dot kind-${lk} ${lc ? "claimed" : ""}" cx="${PI_LEFT_CX}" cy="${y}" r="${PI_PIN_R}" data-phys="${lp}"${lWire}><title>${escapeHtml(ll)}</title></circle>
         <text class="pin-num" x="225" y="${y}" text-anchor="middle">${lp}·${rp}</text>
-        <circle class="pin-dot kind-${rk} ${rc ? "claimed" : ""}" cx="${PI_RIGHT_CX}" cy="${y}" r="${PI_PIN_R}" data-phys="${rp}"><title>${escapeHtml(rl)} (physical ${rp})${rc ? " — " + escapeHtml(rc.cap) + " " + escapeHtml(rc.role) : ""}</title></circle>
+        <circle class="pin-dot kind-${rk} ${rc ? "claimed" : ""}" cx="${PI_RIGHT_CX}" cy="${y}" r="${PI_PIN_R}" data-phys="${rp}"${rWire}><title>${escapeHtml(rl)}</title></circle>
         <text class="pin-label" x="272" y="${y}" text-anchor="start">${escapeHtml(rl)}</text>
-        ${rc ? `<text class="pin-claim" x="332" y="${y}" text-anchor="start">${escapeHtml(rc.cap)} · ${escapeHtml(rc.role)}</text>` : ""}
+        ${rc ? `<text class="pin-claim" x="332" y="${y}" text-anchor="start"${rWire}>${escapeHtml(rc.cap)} · ${escapeHtml(rc.role)}</text>` : ""}
       </g>
     `);
   }
@@ -195,12 +204,23 @@ function renderBoardWithDriver(claims) {
     <text class="driver-title" x="${PI_W / 2}" y="${DRIVER_Y + 22}" text-anchor="middle">H-bridge driver inputs</text>
   `;
 
+  // Reverse ROLE_TO_TERMINAL via the live claims map — only includes
+  // terminals that are actually wired in the current config, so unwired
+  // terminals stay non-interactive (no data-wire, no hover chain).
+  const terminalToWire = {};
+  for (const info of Object.values(claims)) {
+    if (info?.cap !== "motors") continue;
+    const t = ROLE_TO_TERMINAL[info.role];
+    if (t) terminalToWire[t] = info.role;
+  }
+
   const terminals = TERMINAL_ROLES.map((role, i) => {
     const cx = TERMINAL_XS[i];
     const kind = role.startsWith("en") ? "enable" : "input";
+    const wire = terminalToWire[role] ? ` data-wire="${escapeHtml(terminalToWire[role])}"` : "";
     return `
       <text class="driver-label" x="${cx}" y="${TERM_CY - 14}" text-anchor="middle">${TERMINAL_LABELS[role]}</text>
-      <circle class="driver-pin ${kind}" cx="${cx}" cy="${TERM_CY}" r="${TERM_R}" data-role="${role}"/>
+      <circle class="driver-pin ${kind}" cx="${cx}" cy="${TERM_CY}" r="${TERM_R}" data-role="${role}"${wire}/>
     `;
   }).join("");
 
@@ -236,7 +256,7 @@ function renderBoardWithDriver(claims) {
     // gives a smooth S-curve regardless of horizontal offset.
     const midY = (startY + endY) / 2;
     const wireClass = driverRole.startsWith("en") ? "wire-enable" : "wire-input";
-    wires.push(`<path class="motor-wire ${wireClass}" d="M${startX},${startY} C${startX},${midY} ${endX},${midY} ${endX},${endY}"/>`);
+    wires.push(`<path class="motor-wire ${wireClass}" d="M${startX},${startY} C${startX},${midY} ${endX},${midY} ${endX},${endY}" data-wire="${escapeHtml(info.role)}"/>`);
   }
 
   return `
@@ -345,6 +365,7 @@ function renderView(entry) {
     <div class="row" style="margin-top: 12px;">${legend}${editBtn}</div>
   `;
   $("pinout-edit-btn")?.addEventListener("click", () => beginEdit(entry.id));
+  wireUpMotorChains($("pinout-body"));
 }
 
 function renderEdit(entry) {
@@ -558,6 +579,7 @@ function renderEdit(entry) {
   // on whatever input is currently focused so the highlight tracks typing.
   const act = document.activeElement;
   if (act?.dataset?.path) highlightPinFromInput(act);
+  wireUpMotorChains($("pinout-body"));
 }
 
 function highlightPinFromInput(el) {
@@ -573,6 +595,37 @@ function highlightPinFromInput(el) {
 function clearPinHighlight() {
   document.querySelectorAll(".pinout-svg .pin-dot.focused")
     .forEach(el => el.classList.remove("focused"));
+}
+
+// Wires up cross-element hover + click on motor connections. Elements
+// tagged with the same `data-wire` value (pin-dot, claim-text, wire
+// path, driver terminal) light up together on hover. Click jumps focus
+// to the matching editor input — only effective in edit mode, when the
+// inputs exist; in view mode it's a no-op so the chain still works as a
+// read-only legend.
+function wireUpMotorChains(container) {
+  const activate = (wire) => {
+    container.querySelectorAll(`[data-wire="${wire}"]`)
+      .forEach(e => e.classList.add("wire-active"));
+  };
+  const deactivate = () => {
+    container.querySelectorAll(".wire-active")
+      .forEach(e => e.classList.remove("wire-active"));
+  };
+  container.querySelectorAll("[data-wire]").forEach(el => {
+    const wire = el.dataset.wire;
+    el.addEventListener("mouseenter", () => activate(wire));
+    el.addEventListener("mouseleave", deactivate);
+    el.addEventListener("click", () => {
+      // role "left forward" → config path "motors_pins.left.forward".
+      const path = `motors_pins.${wire.replace(" ", ".")}`;
+      const input = container.querySelector(`input[data-path="${path}"]`);
+      if (input) {
+        input.focus();
+        try { input.setSelectionRange(0, input.value.length); } catch {}
+      }
+    });
+  });
 }
 
 function beginEdit(id) {

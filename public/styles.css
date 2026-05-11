@@ -1488,7 +1488,24 @@ details.tray.has-alert > summary::after {
   stroke-width: 1;
   transition: filter 0.12s ease;
 }
-.pinout-svg .pin-dot:hover { filter: brightness(1.25); cursor: help; }
+.pinout-svg .pin-dot:hover { filter: brightness(1.25); }
+/* Elements that participate in a motor wire chain (pin-dot, claim text,
+   wire path, driver terminal) — tagged with matching data-wire values.
+   Cursor signals "this is interactive"; .wire-active fires on hover of
+   any element in the chain to light up the whole connection. */
+.pinout-svg [data-wire] { cursor: pointer; }
+.pinout-svg .pin-dot.wire-active {
+  stroke: #93c5fd;
+  stroke-width: 3.5;
+  filter: drop-shadow(0 0 8px rgba(147, 197, 253, 0.9));
+}
+.pinout-svg .motor-wire.wire-active { opacity: 1; stroke-width: 3.2; }
+.pinout-svg .driver-pin.wire-active {
+  stroke: #93c5fd;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 6px rgba(147, 197, 253, 0.9));
+}
+.pinout-svg .pin-claim.wire-active { fill: #93c5fd; font-weight: 700; }
 .pinout-svg .pin-dot.kind-3v3   { fill: #f59e0b; }
 .pinout-svg .pin-dot.kind-5v    { fill: #ef4444; }
 .pinout-svg .pin-dot.kind-gnd   { fill: #525252; }
