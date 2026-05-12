@@ -158,6 +158,21 @@ MOTORS_PINS    = _config.get("motors_pins", {
     "left":  {"forward": 5,  "backward": 6},
     "right": {"forward": 13, "backward": 26},
 })
+# Per-robot motor orientation — derived from the dashboard's calibration
+# flow, persisted here. The dashboard sends (L, R) in operator-frame
+# ("L drives the wheel on the operator's left, forward = wheel rolls
+# forward"). The mapping to motor-A / motor-B drivers and their direction
+# depends on physical wiring + motor mounting, which is unknowable from
+# the firmware. Calibration discovers it once and writes these three flips:
+#   swap     — what we receive as L drives motor B instead of motor A.
+#   invert_a — motor A's "forward" pin actually spins the wheel backward.
+#   invert_b — same for motor B.
+# All false = "the user wired everything in the canonical way." Stays
+# backwards-compatible with existing Pis (missing key → all false).
+_ORIENT = _config.get("motors_orientation") or {}
+ORIENT_SWAP     = bool(_ORIENT.get("swap", False))
+ORIENT_INVERT_A = bool(_ORIENT.get("invert_a", False))
+ORIENT_INVERT_B = bool(_ORIENT.get("invert_b", False))
 CAMERA_ENABLED = _config.get("camera_enabled", "auto")  # "auto" | True | False
 
 # Dashboards the robot trusts. Each .pub is one line:
@@ -803,8 +818,15 @@ def _apply_motors(left: int, right: int) -> None:
     if left == _motor_left and right == _motor_right:
         return
     _motor_left, _motor_right = left, right
-    _drive(_motor_left_drv, left)
-    _drive(_motor_right_drv, right)
+    # Apply calibrated orientation just before driving — _motor_left /
+    # _motor_right + the BLE publish stay in the operator (logical) frame
+    # so telemetry reads back what the dashboard sent.
+    a_val = right if ORIENT_SWAP else left
+    b_val = left  if ORIENT_SWAP else right
+    if ORIENT_INVERT_A: a_val = -a_val
+    if ORIENT_INVERT_B: b_val = -b_val
+    _drive(_motor_left_drv,  a_val)   # motor-A driver (MOTORS_PINS["left"])
+    _drive(_motor_right_drv, b_val)   # motor-B driver (MOTORS_PINS["right"])
     _publish(MOTOR_CHAR_UUID, bytearray([left & 0xff, right & 0xff]))
     log.info("motors → (%+d, %+d)", left, right)
 
@@ -1169,6 +1191,29 @@ def _ops_handle_write(data: bytearray) -> None:
         # that alongside concurrent telemetry from the callback thread
         # glitched BlueZ enough to drop the link.
         _schedule(_get_config_task())
+    elif op == "motors-pulse-raw":
+        # Calibration verb — drive a single motor for a brief pulse with
+        # NO orientation transform applied, so the dashboard sees raw
+        # motor-A vs motor-B behavior and can derive the orientation
+        # flips. Bypasses _apply_motors / pulse-id machinery on purpose.
+        # Bounded (50–600 ms, |speed| ≤ 40) so a malformed/replayed verb
+        # can't run a motor for long. Watchdog still covers crash paths.
+        side  = args.get("motor")           # "a" | "b"
+        dirn  = args.get("direction")        # "forward" | "backward"
+        durms = int(args.get("duration_ms", 300))
+        durms = max(50, min(600, durms))
+        speed = max(10, min(40, int(args.get("speed", 30))))
+        drv = _motor_left_drv if side == "a" else (_motor_right_drv if side == "b" else None)
+        if drv is None or dirn not in ("forward", "backward"):
+            log.warning("ops: motors-pulse-raw bad args %r", args)
+            return
+        log.info("ops: motors-pulse-raw motor=%s dir=%s dur=%dms", side, dirn, durms)
+        if dirn == "forward": drv.forward(speed / 100.0)
+        else:                  drv.backward(speed / 100.0)
+        async def _stop_after(d, t):
+            await asyncio.sleep(t)
+            d.stop()
+        _schedule(_stop_after(drv, durms / 1000.0))
     elif op == "apply-staged-ota":
         # Dashboard streamed a bundle JSON to pi_robot_rtc.py over WebRTC
         # (~MB/s), which staged it to a file. We read + apply via the
