@@ -5,10 +5,9 @@
 #include "esp_err.h"
 
 // MPU6050 via I2C. Outputs pitch angle only — this is all a two-wheeled
-// balance bot needs. Complementary filter blends gyro integration (fast,
-// drifts) with accelerometer geometry (slow, noisy) at a 98/2 ratio tuned
-// for a 100 Hz loop. Fusing at higher rates needs less accel weight; lower
-// rates need more — keep loop rate and ALPHA in sync if you change timing.
+// balance bot needs. Filter is selected at build time via menuconfig:
+//   BALANCE_BOT_IMU_FILTER_COMPLEMENTARY — fixed-ratio blend (default)
+//   BALANCE_BOT_IMU_FILTER_KALMAN        — 2-state Kalman with bias correction
 //
 // Axis convention (chip mounted flat, Y-axis pointing up when balanced):
 //   pitch > 0  — robot tilts forward (top toward front)
