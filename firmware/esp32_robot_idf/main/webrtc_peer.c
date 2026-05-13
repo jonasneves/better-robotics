@@ -462,41 +462,63 @@ static int on_peer_data(esp_peer_data_frame_t *frame, void *ctx) {
 
 // ── peer connection lifecycle ────────────────────────────────────────────
 
-// Strip TCP candidates from the offer SDP — chip can only use UDP for ICE.
-// IPv6 stays: lwIP IPv6 is enabled, and v6 host↔host is the fast path on
-// apartment networks where the v4 path goes through a slow centralized NAT.
+// Filter the offer SDP to RELAY-ONLY candidates before injection.
+//
+// libpeer's binary agent locks onto the first ICE pair that completes
+// STUN binding and never re-evaluates. Two failure shapes hit us:
+//
+//   1. host pairs cross-network: laptop on its LAN, chip on cellular —
+//      binding succeeds for a moment via STUN-reflexive but the chip
+//      can't actually route to the laptop's RFC1918 / Tailscale CGNAT
+//      IP, so DTLS never completes.
+//   2. srflx-srflx through symmetric NAT (T-Mobile observed): the NAT
+//      entry is hot during binding request/response, but DTLS handshake
+//      bytes get a freshly-mapped external port that the peer's NAT
+//      has no rule for; packets drop, DTLS times out.
+//
+// Both pairs win the priority race over relay because RFC 8445 ranks
+// host > srflx > relay. ICE locks on, can't fall through. Meanwhile
+// the chip's TURN allocation is healthy (we see PeerIndication traffic
+// on the relay address throughout the failed run).
+//
+// Forcing relay-only at the offer-filter layer means ICE can only form
+// pairs through the TURN relay, which carries DTLS reliably regardless
+// of NAT type or network topology. Cost: ~100-300 ms latency vs a
+// same-LAN host pair, but same-LAN was always rare for this fleet
+// (dashboard often on a different network than the robot) and TURN is
+// the only path that survives cellular / corporate / WiFi-as-a-service.
+//
+// Upgrade path: when libpeer-default gains pair re-evaluation on DTLS
+// timeout, or exposes an ICE policy knob, we can flip back to all-types.
 static char *filter_sdp_for_chip(const char *sdp) {
     size_t in_len = strlen(sdp);
     char *out = malloc(in_len + 1);
     if (!out) return NULL;
     size_t o = 0;
     const char *p = sdp;
-    int dropped = 0;
+    int kept = 0, dropped = 0;
     while (*p) {
         const char *eol = strchr(p, '\n');
         size_t line_len = eol ? (size_t)(eol - p + 1) : strlen(p);
         bool drop = false;
         if (strncmp(p, "a=candidate:", 12) == 0) {
-            const char *q = p + 12;
-            int tok = 0;
-            while (q < p + line_len && tok < 2) {
-                while (q < p + line_len && *q != ' ') q++;
-                while (q < p + line_len && *q == ' ') q++;
-                tok++;
-            }
-            if (q < p + line_len && (q[0] == 't' || q[0] == 'T')
-                                  && (q[1] == 'c' || q[1] == 'C')
-                                  && (q[2] == 'p' || q[2] == 'P')) {
-                drop = true;
-            }
+            // RFC 5245 mandates " typ <kind>" in every candidate line.
+            // Keep only typ relay; drop host / srflx / prflx (and TCP
+            // candidates fall out of this naturally — Cloudflare TURN
+            // emits relay candidates as UDP-only).
+            const char *typ = strstr(p, " typ ");
+            bool is_relay = typ && (typ + 5 < p + line_len)
+                                && strncmp(typ + 5, "relay", 5) == 0;
+            if (!is_relay) drop = true;
         }
         if (drop) dropped++;
-        else { memcpy(out + o, p, line_len); o += line_len; }
+        else if (strncmp(p, "a=candidate:", 12) == 0) kept++;
+        if (!drop) { memcpy(out + o, p, line_len); o += line_len; }
         if (!eol) break;
         p = eol + 1;
     }
     out[o] = 0;
-    if (dropped) ESP_LOGI(TAG, "filtered SDP: dropped %d TCP candidate(s)", dropped);
+    ESP_LOGI(TAG, "filtered SDP: kept %d relay candidate(s), dropped %d non-relay", kept, dropped);
     return out;
 }
 
