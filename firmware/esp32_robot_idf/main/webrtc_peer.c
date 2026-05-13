@@ -383,13 +383,16 @@ static int on_peer_state(esp_peer_state_t state, void *ctx) {
 // We ship SDP back over BLE; ignore trickle candidates because the
 // answer SDP includes them all by the time esp_peer emits it (with the
 // default impl, anyway).
-// Log m=, a=group:, a=mid: lines from an SDP for diagnosing m-line and
-// MID mismatch between offer and answer (Chrome rejects answers whose
-// m-lines or MIDs don't match the offer's order).
+// Log m=, a=group:, a=mid:, and a=candidate: lines from an SDP. The
+// m=/group:/mid: lines diagnose Chrome's strict m-line and MID ordering
+// (Chrome rejects answers with mismatched MIDs). The a=candidate: lines
+// surface what ICE will actually pair against — load-bearing when one
+// side is policy-restricted (relay-only) and we need to confirm the
+// other side's candidate set includes a compatible type.
 static void log_sdp_mlines(const char *tag, const char *sdp) {
     const char *p = sdp;
     int n = 0;
-    const char *prefixes[] = { "\nm=", "\na=group:", "\na=mid:" };
+    const char *prefixes[] = { "\nm=", "\na=group:", "\na=mid:", "\na=candidate:" };
     while (*p) {
         const char *next = NULL;
         for (size_t i = 0; i < sizeof(prefixes)/sizeof(prefixes[0]); i++) {
@@ -401,7 +404,7 @@ static void log_sdp_mlines(const char *tag, const char *sdp) {
         const char *eol = strchr(p, '\r');
         if (!eol) eol = strchr(p, '\n');
         size_t len = eol ? (size_t)(eol - p) : strlen(p);
-        if (len > 100) len = 100;
+        if (len > 140) len = 140;  // candidate lines run long
         ESP_LOGI(TAG, "  %s[%d]: %.*s", tag, n++, (int)len, p);
         p = eol ? eol : p + len;
     }
