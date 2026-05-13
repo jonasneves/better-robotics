@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cJSON.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -20,6 +21,7 @@
 #include "camera.h"
 #include "gatt_svr.h"
 #include "ota.h"
+#include "wifi_sta.h"
 
 static const char *TAG = "rtc";
 
@@ -637,13 +639,47 @@ static void handle_offer(const char *sdp) {
         .on_channel_close    = on_peer_channel_close,
     };
 
+    // libpeer needs ~50-80 KB of CONTIGUOUS internal RAM for DTLS + agent
+    // + SRTP/SCTP allocations. The classic ESP32's ~280 KB internal heap
+    // is shared with WiFi STA (~50 KB), BLE NimBLE, and camera reservations,
+    // and fragments enough that esp_peer_open returns ESP_PEER_ERR_NO_MEM
+    // (-2) even with multi-MB PSRAM free. Mirror the OTA pattern:
+    // pause WiFi for the open call, resume after — same intervention used
+    // for BLE OTA's NimBLE-ATT-drop pattern (see ota.c). After resume we
+    // wait briefly for the STA to reassociate + DHCP so ICE gathering in
+    // esp_peer_new_connection can collect host candidates; missing them
+    // forces fallback to TURN-relay which adds 100-300 ms.
+    size_t pre_internal = esp_get_free_internal_heap_size();
+    size_t pre_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    ESP_LOGI(TAG, "pre-open heap: internal_free=%u largest=%u",
+             (unsigned)pre_internal, (unsigned)pre_largest);
+    wifi_sta_pause();
+    size_t paused_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    ESP_LOGI(TAG, "wifi paused: internal_free=%u largest=%u",
+             (unsigned)esp_get_free_internal_heap_size(), (unsigned)paused_largest);
+
     int rc = esp_peer_open(&cfg, esp_peer_get_default_impl(), &s_peer);
+
+    wifi_sta_resume();
+    // Block briefly for IP — without it, esp_peer_new_connection below
+    // gathers no host candidates and ICE only succeeds via the TURN
+    // relay. 3 s is generous on a previously-joined AP; falls through
+    // if the AP is slow so we still attempt the connection.
+    int ip_wait_ms = 0;
+    while (!wifi_sta_has_ip() && ip_wait_ms < 3000) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        ip_wait_ms += 100;
+    }
+    ESP_LOGI(TAG, "wifi resumed: has_ip=%d after %d ms",
+             (int)wifi_sta_has_ip(), ip_wait_ms);
+
     if (rc != ESP_PEER_ERR_NONE || !s_peer) {
-        ESP_LOGE(TAG, "esp_peer_open failed: %d", rc);
+        ESP_LOGE(TAG, "esp_peer_open failed: %d (largest internal block before/paused: %u/%u)",
+                 rc, (unsigned)pre_largest, (unsigned)paused_largest);
         // Surface rc to the dashboard — heap-pressure failures look the
-        // same as configuration errors without it (`-1` ESP_PEER_ERR_NO_MEM,
-        // `-3` ESP_PEER_ERR_INVALID_ARG, etc.). Diagnostic only; no
-        // behavior change.
+        // same as configuration errors without it. Error codes from
+        // esp_peer_types.h: -1 INVALID_ARG, -2 NO_MEM, -3 WRONG_STATE,
+        // -4 NOT_SUPPORT, -6 FAIL.
         char err_buf[48];
         snprintf(err_buf, sizeof(err_buf), "esp_peer_open failed: %d", rc);
         send_ble_signal_error(err_buf);
