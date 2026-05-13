@@ -8,14 +8,12 @@ export const GROUNDING_ENABLED = true;
 
 // Keep in sync with perception.js / local-llm.js so a single runtime copy
 // is loaded when multiple pipelines coexist. Unversioned URL tracks the
-// latest v4.x, which ships the native WebGPU EP (broader op coverage
-// than onnxruntime-web's old WebGPU backend — fixes the Cast placement
-// failure that previously killed OWLv2).
+// latest v4.x — ships the native WebGPU EP with broader op coverage than
+// onnxruntime-web's old WebGPU backend.
 const TRANSFORMERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers";
 // Grounding DINO tiny — officially supported zero-shot-object-detection
 // model in transformers.js (landed in v3.3). q4f16 variant is ~151MB,
-// WebGPU-friendly. OWLv2 was rejected because its ONNX graph tripped
-// onnxruntime-web's older backend on an unplaceable Cast(13) op.
+// WebGPU-friendly.
 const MODEL_ID = "onnx-community/grounding-dino-tiny-ONNX";
 const MODEL_DTYPE = "q4f16";
 const MAX_DIM = 640;

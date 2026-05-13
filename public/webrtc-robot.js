@@ -1,6 +1,6 @@
-// ESP32 has no fallback signaling path — BLE pair is the precondition for
-// using the dashboard at all, and the chip-side wss client was removed
-// (~165 KB flash, ~4 KB DRAM saved).
+// ESP32 has no fallback signaling path — BLE pair is the precondition
+// for using the dashboard at all, so signaling rides BLE only. (Pi
+// uses wss because aiortc handles WebSocket trivially.)
 //
 // Wire format on the SIGNAL char (both directions, mirrors OTA/snapshot):
 //   0x01 [u16 BE total]   begin
@@ -22,7 +22,6 @@ const ICE_TIMEOUT_MS = 90000;
 const BLE_SIG_CHUNK  = 100;
 
 // wss-path peer-id prefixes. Pi rtc daemon presents as "desktop-<id>".
-// (ESP32 used to be "esp32-<id>" — that path was retired.)
 const PI_WSS_CONFIG = { roomPrefix: "pi-rtc-", accept: "desktop-" };
 
 // Per-robot peer connections, lazy-built. Keyed by robot id.
@@ -49,10 +48,8 @@ export function unregisterExternalPc(robotId, label) {
 //   onStatus:    (msg) => void    — progress messages for UI
 //
 // Selector by robot type: ESP32 uses BLE-signaling (signalChar required);
-// Pi uses wss. No fallback — the chip-side wss client was retired, so
-// falling back from BLE-signaling has no peer on the other side. If BLE
-// fails on ESP32, surface it directly so the operator knows the BLE link
-// is the problem, not the signaling path.
+// Pi uses wss. No fallback — if BLE fails on ESP32, surface it directly
+// so the operator knows the BLE link is the problem, not signaling.
 export async function openChannel(robotId, robotName, label, opts = {}) {
   const { signalChar, robotType } = opts;
   if (robotType === "esp32") {
@@ -126,10 +123,9 @@ async function openChannelViaBLE(robotId, label, signalChar, opts) {
   try {
     onStatus("Generating offer…");
     const offer = await pc.createOffer();
-    // No MID rewrite here — esp_peer always emits MID="0" in its answer
+    // No MID rewrite here — esp_peer always emits MID="0" in its answer,
     // and chip-side webrtc_peer.c rewrites the answer's BUNDLE/mid back
-    // to whatever the offer's MID was before forwarding over BLE. This
-    // keeps the dashboard side simple regardless of esp_peer quirks.
+    // to the offer's MID before forwarding over BLE.
     await pc.setLocalDescription(offer);
 
     // Non-trickle ICE: wait for gathering to complete so the SDP carries

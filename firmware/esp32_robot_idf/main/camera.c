@@ -6,8 +6,8 @@
 
 static const char *TAG = "camera";
 
-// AI-Thinker ESP32-CAM pin map — same as the .ino. If a board variant
-// shows up, switch on an ifdef rather than patching in place.
+// AI-Thinker ESP32-CAM pin map. If a board variant shows up, switch on
+// an ifdef rather than patching in place.
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM      0
@@ -76,15 +76,12 @@ bool camera_init(void) {
     }
     ESP_LOGI(TAG, "ok, psram=%d, qvga@q=18 fb=%d", psram, cfg.fb_count);
 
-    // Sensor tuning — vflip handles the AI-Thinker mounting quirk
-    // (camera connector exits the module so the image is upside-down for
-    // a robot pointing forward). hmirror stays OFF: the operator looks
-    // through the robot's eyes at the world, so left-in-image = left-in-
-    // world. Brightness/saturation/contrast/sharpness are post-DSP knobs;
-    // factory defaults read flat indoors. AEC pipeline tweaks
-    // (set_aec2/set_gainceiling/set_awb_gain=1) broke OV2640 on this die
-    // earlier — stay reverted. set_awb_gain(s, 0) is the inverse and
-    // safe: keeps WB auto-mode ON but stops per-frame gain hunting.
+    // vflip handles the AI-Thinker mounting quirk (camera connector exits
+    // the module so the image is upside-down for a forward-facing robot).
+    // hmirror OFF: operator looks through the robot's eyes, left-in-image
+    // = left-in-world. set_aec2/set_gainceiling/set_awb_gain=1 break
+    // OV2640 on this die; set_awb_gain(s, 0) keeps WB auto-mode on but
+    // stops per-frame gain hunting.
     sensor_t *s = esp_camera_sensor_get();
     if (s) {
         s->set_vflip(s, 1);

@@ -24,7 +24,6 @@ import { initAuthUI, fingerprint as dashFingerprint, pubkeySsh, onKeyChange } fr
 import { initPasswordsUI } from "./passwords.js";
 import { initAssistant, emitPipEvent } from "./assistant.js";
 import { initPhones, broadcastTargetInfo } from "./phones.js";
-// (local-llm imports moved to assistant.js where the /install slash lives)
 import { initHelpers, setHelpersRobotRenderer, renderHelpers } from "./helpers.js";
 // aruco.js is wired through helpers.js — phone helpers can be designated
 // as the overhead camera; detection runs against the helper's existing
@@ -73,20 +72,18 @@ function metaText(entry) {
     formatUptime(t),
     formatResetReason(t?.reset_reason),
   ];
-  // Free RAM + temp folded in here so the body's separate telemetry
-  // line (which duplicated uptime) can be dropped — one canonical
-  // status row at the top instead of two.
+  // One canonical status row at the top — free RAM + temp join the
+  // WiFi/uptime line so the body doesn't need a separate telemetry row.
   if (typeof t?.mem_free_mb === "number") parts.push(`${t.mem_free_mb} MB free`);
   else if (typeof t?.free_heap === "number") parts.push(`${Math.floor(t.free_heap / 1024)} KB free`);
   if (typeof t?.temp_c === "number") parts.push(`${t.temp_c.toFixed(1)}°C`);
   return parts.filter(Boolean).join(" · ");
 }
 
-// Surgical patcher for the secondary row + body telemetry line. Avoids the
-// full-card innerHTML rewrite that telemetry's 10 s notify rhythm was
-// causing — that rewrite destroyed/recreated the entire card DOM, which
-// reads as a card flash. patchOtaSection set the precedent; this generalizes
-// to the high-frequency notify channels.
+// Surgical patcher for the secondary row + body telemetry line. Avoids a
+// full-card innerHTML rewrite on every 10 s telemetry notify — the
+// rewrite destroys/recreates the entire card DOM and reads as a flash.
+// Same shape as patchOtaSection, generalized to high-frequency channels.
 function patchSecondaryRow(entry) {
   const node = entry.node;
   if (!node) return;
@@ -429,8 +426,8 @@ async function connect(id) {
       });
     } catch { /* ops-response char absent on older firmware — optional */ }
 
-    // signal char (Phase 2.F.1) — chunked SDP exchange for WebRTC over BLE.
-    // When present, webrtc-robot.js uses BLE for signaling instead of
+    // signal char — chunked SDP exchange for WebRTC over BLE. When
+    // present, webrtc-robot.js uses BLE for signaling instead of
     // wss://signal.neevs.io — fully P2P over LAN, no internet rendezvous.
     // Older firmware silently skips and falls back to the wss path.
     try {
@@ -549,11 +546,8 @@ function onDisconnected(id) {
   if (entry.autoReconnect !== false) {
     emitPipEvent("robot.disconnected", { id, name: entry.name });
     // OTA-induced disconnect: the firmware sets entry.expectingReconnectUntil
-    // before its restart, so we know to keep trying. Without this the user
-    // had to click Connect manually after every OTA — every reboot read as
-    // "user error: just reconnect" when actually the dashboard knew the
-    // disconnect was coming and could've retried itself. Backoff at 3 / 6 /
-    // 12 / 25 s spreads attempts across the chip's ~10-30 s reboot window.
+    // before its restart, so we keep retrying. Backoff 3 / 6 / 12 / 25 s
+    // spreads attempts across the chip's ~10-30 s reboot window.
     if (entry.expectingReconnectUntil && Date.now() < entry.expectingReconnectUntil) {
       schedulePostOtaReconnect(id);
     }
@@ -630,12 +624,11 @@ function updateQrHint() {
 }
 
 // Robot presence — probe each paired robot's :81/health endpoint to show
-// "BR-XXXX on wifi" when the dashboard isn't BLE-connected to it. Pi-only
-// after Phase 2.H: ESP32 firmware no longer runs an HTTP server (everything
-// flows over BLE + WebRTC). ESP32 robots still appear in the panel when
-// BLE-connected via the wifi-status notify; they just don't surface
-// passively when only on WiFi. Pi continues to expose pi_robot_health.py
-// on :81 for service-crash detection (pi_robot_service field).
+// "BR-XXXX on wifi" when the dashboard isn't BLE-connected to it. Pi-only;
+// ESP32 firmware doesn't run an HTTP server (everything flows over BLE +
+// WebRTC). ESP32 still appears via BLE wifi-status notify when paired.
+// Pi exposes pi_robot_health.py on :81 for service-crash detection
+// (pi_robot_service field).
 const HEALTH_PORT = 81;
 const PROBE_TIMEOUT_MS = 4000;
 const PROBE_INTERVAL_MS = 30000;
@@ -654,9 +647,8 @@ async function _probeUrl(url) {
 }
 
 async function _probeRobot(known) {
-  // Skip ESP32 robots — Phase 2.H removed their HTTP /health endpoint.
-  // Their presence shows up via the BLE wifi-status notify when paired,
-  // not via passive probing.
+  // ESP32 firmware doesn't expose /health — presence shows up via the
+  // BLE wifi-status notify when paired, not via passive probing.
   if (known.fwType === "esp32") return null;
   const candidates = [];
   if (known.name) {
@@ -680,8 +672,8 @@ async function _probeTick() {
     const health = await _probeRobot(r);
     if (!health) return;
     const id = r.id;
-    // Pi /health includes pi_robot_service; same active→inactive transition
-    // detection the WS-based path used to do, just sourced from the probe.
+    // active→inactive transition surfaces as a service-crash event so
+    // Pip can nudge the user toward recovery.
     const now = health.pi_robot_service;
     const was = _lastRobotServiceState.get(id);
     if (was === "active" && now && now !== "active") {
@@ -772,9 +764,8 @@ function renderEntry(entry) {
     ? (/no longer in range|not found/i.test(entry.lastConnectError || "") ? "Out of range" : "Error")
     : firmwareDown ? "Firmware down"
     : "";
-  // Card-style status hint via a colored left edge stripe (see .robot.connected
-  // etc. in styles.css). Replaces the previous in-row dot — the stripe carries
-  // status with more visual presence and the dot was redundant next to it.
+  // Card-style status hint via a colored left edge stripe (see
+  // .robot.connected etc. in styles.css).
   entry.node.classList.toggle("status-connected",     status === "connected");
   entry.node.classList.toggle("status-connecting",    connecting);
   entry.node.classList.toggle("status-error",         status === "error");
@@ -1086,8 +1077,7 @@ function openMenu(triggerBtn, id) {
   $("menu-restart").hidden = !entry?.opsChar;
   $("menu-reboot").hidden  = !entry?.opsChar;
   $("menu-log").hidden     = !entry?.opsChar;
-  // Shell is Pi-only (no shell on ESP32) and only useful when WiFi is up
-  // (signaling is HTTP-on-:82 today). pi-robot-rtc.service must also be
+  // Shell is Pi-only (no shell on ESP32). pi-robot-rtc.service must be
   // installed; if it's not, the connect button surfaces a clear error.
   $("menu-shell").hidden   = !(entry?.fwType === "pi" && entry?.status === "connected");
   $("menu-pinout").hidden  = !(entry?.status === "connected" && entry?.fwInfo);
@@ -1245,13 +1235,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // Wire the recovery menu FIRST and in isolation. Anything throwing in
   // the rest of init can no longer strand the user without Hard Refresh.
   try { wireRecoveryMenu(); } catch (err) { console.error("[recovery-menu]", err); }
-  // Browsers without Web Bluetooth (iOS Safari is the common case — a phone
-  // user who navigated phone → "Open dashboard view") still need the chrome
-  // to work: they should be able to open the BetterRobotics menu, install
-  // the PWA, check for updates, get a random profile name. The earlier
-  // early-return killed every wiring below it, so the menu was inert and
-  // the avatar stayed at "?". Now: surface the unsupported banner + disable
-  // BLE-only buttons, but let the rest of init run.
+  // Browsers without Web Bluetooth (iOS Safari is the common case — a
+  // phone user who navigated phone → "Open dashboard view") still need
+  // the chrome to work: BetterRobotics menu, PWA install, update check,
+  // random profile name. Surface the unsupported banner + disable BLE-only
+  // buttons, then let the rest of init run.
   const hasBLE = !!navigator.bluetooth;
   if (!hasBLE) {
     $("unsupported").hidden = false;

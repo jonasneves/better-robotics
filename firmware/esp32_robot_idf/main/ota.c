@@ -157,8 +157,8 @@ void ota_handle_data_write(const uint8_t *buf, size_t len) {
         // reboot; no resume needed.
         schedule_restart(500);
     } else if (op == 0x04) {
-        // URL-trigger isn't implemented — dashboard's grace-window logic
-        // sees "failed" and falls back to BLE-stream OTA. Same as the .ino.
+        // URL-trigger isn't implemented. Dashboard's grace-window logic
+        // sees "failed" and falls back to BLE-stream OTA.
         publish_status("failed", 0, 0, "url-trigger unavailable");
     }
 }

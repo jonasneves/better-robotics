@@ -4,9 +4,8 @@
 
 No install, no servers.
 
-[![Live](https://img.shields.io/badge/live-neves.cloud%2Fbetter--robotics-blue)](https://neves.cloud/better-robotics/)
+[![Live](https://img.shields.io/badge/live-better--robotics.github.io-blue)](https://better-robotics.github.io/)
 [![Build firmware](https://github.com/jonasneves/better-robotics/actions/workflows/build-firmware.yml/badge.svg)](https://github.com/jonasneves/better-robotics/actions/workflows/build-firmware.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 [![Web Bluetooth](https://img.shields.io/badge/Web%20Bluetooth-Chrome%20%7C%20Edge-orange)](#browser-support)
 
 ## What this is
@@ -55,54 +54,39 @@ Three independent planes:
 
 **Safety on disconnect.** Actuator characteristics (motor, servo, pump, relay) ship with a firmware watchdog. Every write resets a timer; if no write lands in the window, firmware reverts to a safe default. Silence is the trigger, not a redundant radio.
 
-## What it isn't
-
-The wedge is **fork-and-run dev environment with AI assist**, not these adjacent shapes:
-
-- **Not a teleop dashboard.** Joystick UIs for human pilots are a different shape. Decision loops are seconds, not 20Hz.
-- **Not a fleet manager.** Server-resident cloud for managing N robots is Viam's space; here, it's one operator forking their own platform.
-- **Not autonomous.** The LLM doesn't drive everything. Pip is one of two authorable surfaces; user code is co-equal; ask-human is the terminal cascade rung.
-- **Not real-time.** Pulse-bounded motion is the response: every motor command carries a `duration_ms` and firmware auto-stops at the end.
-- **Not spatially aware.** Monocular camera + VLM + open-vocab detector. No depth, no SLAM, no metric maps. Navigation is semantic, not geometric.
-- **Not a primary-online product.** Works on cafe wifi, after API outages, with no network at all (offline shell + local LFM fallback once installed). Cloud is augmentation.
-
 ## Quickstart
 
 ### Use it (no install)
 
-1. Open [neves.cloud/better-robotics](https://neves.cloud/better-robotics/) in Chrome or Edge.
+1. Open [better-robotics.github.io](https://better-robotics.github.io/) in Chrome or Edge.
 2. Flash or prepare hardware:
    - **ESP32 on USB:** click **Flash firmware** — bins come from GitHub Pages, no local toolchain.
    - **Pi 4 with a flashed SD card:** click **Customize card** (or hit the URL with `?prepare`) and point it at the mounted boot partition.
 3. Click **Scan**, pair a robot, toggle LED, onboard WiFi, drive motors. Future updates go over BLE via **Update firmware**.
 
-### Edit firmware (contributors)
+### Develop locally
 
 ```bash
-make setup          # one-time — arduino-cli + ESP32 core (macOS)
-make flash          # compile local source, upload over USB — fast iteration
-make preview        # serve the dashboard locally while you iterate
+make setup          # one-time ESP-IDF + arduino-cli setup (macOS)
+make flash          # build ESP32 firmware, upload over USB
+make preview        # serve the dashboard at http://localhost:8000
 ```
 
-Commit + push when ready. CI rebuilds firmware artifacts on every `firmware/**` change and commits them back; devices pick up the new version via OTA.
+Pi firmware is Python; see [`firmware/pi_robot/README.md`](firmware/pi_robot/README.md) for the SD-card prep flow and BLE service spec.
+
+Commit and push. CI rebuilds firmware artifacts on `firmware/**` changes and commits them back; devices pick up new versions via OTA.
 
 ## Repo layout
 
-- `firmware/esp32_robot_idf/` — ESP32 firmware (ESP-IDF; LED, WiFi onboarding, OTA, motors, camera, WebRTC peer).
-- `firmware/pi_robot/` — Raspberry Pi firmware (Python + `bless`). Same service UUID and characteristic UUIDs as ESP32. [Details](firmware/pi_robot/README.md).
-- `public/` — the dashboard (static ES modules, no build step). `docs/` is a symlink for GitHub Pages.
-- `tests/` — pure-function unit tests; `make smoke`. Manual checklist in [SMOKE.md](SMOKE.md).
-- `.claude/` — agent + project context (wedge, model discipline, control-loop architecture).
+```
+firmware/esp32_robot_idf/   ESP32 firmware (ESP-IDF)
+firmware/pi_robot/          Raspberry Pi firmware (Python + bless)
+public/                     Dashboard — static ES modules, no build step
+tests/                      Pure-function unit tests · make smoke
+.claude/                    Agent + project context
+```
 
-The dashboard is flat by convention; naming prefixes carry the subsystem boundary:
-
-- **Pair layer** (`pairing.js`, `phones.js`, `mobile.js`, `phone.html`) — desktop ↔ phone WebRTC link.
-- **Perception + detection** (`perception.js`, `grounding.js`) — in-browser LFM2.5-VL-450M (VLM), Grounding DINO tiny (open-vocab detector).
-- **Pip / assistant** (`assistant.js`, `claude.js`, `local-llm.js`, `pip-tools.js`, `replay.js`) — tool-using LLM integration, tool schemas, executor, replay logging, offline LFM fallback.
-- **Robot ops** (`ble.js`, `ops-response.js`, `capabilities/`) — BLE protocol, typed-ops channel, per-capability cards + runtime handlers.
-- **Robot lifecycle** (`prepare.js`, `recovery.js`, `pinout.js`) — SD-card prep, USB serial recovery, pinout config editor.
-- **User code** (`scripts.js`) — browser-resident IDE; the `robot` API mirrors BLE capabilities. See [USER-CODE.md](USER-CODE.md).
-- **App shell** (`app.js`, `dom.js`, `state.js`, `settings.js`, `log.js`, `auth.js`, `passwords.js`, `index.html`, `styles.css`).
+ESP32 and Pi expose the same service UUID and characteristic UUIDs, so the dashboard talks to either without conditional logic. `docs/` is a symlink to `public/` for GitHub Pages serving. The dashboard is flat by convention — naming prefixes carry subsystem boundaries; see `.claude/CLAUDE.md` for the subsystem map.
 
 ## Further reading
 

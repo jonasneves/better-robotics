@@ -17,11 +17,9 @@ static char s_buf[FW_INFO_BUF_SIZE];
 
 void fw_info_init(const pin_config_t *pins) {
     int o = 0;
-    // Pull from esp_app_desc — populated by IDF's build system from
-    // `git describe --always` (with `-dirty` suffix on uncommitted
-    // changes). Was reading version.h's GIT_SHA macro which only got
-    // stamped by CI's `make publish-firmware`, so local flashes always
-    // reported a stale SHA to the dashboard.
+    // esp_app_desc is populated by IDF from `git describe --always`
+    // (with `-dirty` suffix on uncommitted changes) at every build,
+    // so local flashes report an accurate SHA without a CI stamp step.
     const char *version = esp_app_get_description()->version;
     o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,
         "{\"type\":\"esp32\",\"url\":\"firmware/bins/esp32_robot.bin\","

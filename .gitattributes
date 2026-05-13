@@ -1,7 +1,9 @@
 # Hidden-prefix folders are encrypted with git-crypt + the personal key
 # stored in Apple Keychain. After clone, run `gcp-unlock` (defined in
 # dotfiles' .zshrc) to install the filter and decrypt the working tree.
-.claude/**   filter=git-crypt diff=git-crypt
+# .claude/ stays plain text — it's not secrets, it's project context
+# (wedge, lenses, agent prompts) that benefits from being readable in
+# code review and on github.com without a key dance.
 .docs/**     filter=git-crypt diff=git-crypt
 .private/**  filter=git-crypt diff=git-crypt
 .secret/**   filter=git-crypt diff=git-crypt

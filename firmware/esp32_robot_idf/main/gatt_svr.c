@@ -296,7 +296,7 @@ static const struct ble_gatt_chr_def s_chars[] = {
         .uuid = &s_ota_data_uuid.u,
         .access_cb = ota_data_access,
         // WRITE | WRITE_NR — without-response lets the dashboard stream
-        // chunks without per-frame ATT acks. Same flags as the .ino.
+        // chunks without per-frame ATT acks.
         .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
     },
     {

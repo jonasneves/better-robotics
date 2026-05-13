@@ -8,10 +8,6 @@
 // Service table for the project's main_service. Owned by gatt_svr.c —
 // caps call notify_X() after applying state to push the new value to
 // any subscribed dashboard.
-//
-// Phases 2.C.1 + 2.C.2 cover: LED, FLASH, MOTOR, PIN_CONFIG, WIFI_SCAN,
-// WIFI_JOIN, WIFI_STATUS. Remaining (OTA, fw-info, telemetry, snapshot,
-// camera-profile, ops/ops-response) land in later 2.C sub-phases.
 void gatt_svr_init(void);
 
 // SERVICE_UUID parsed once at init — ble_host borrows this for advertising.

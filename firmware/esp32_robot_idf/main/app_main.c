@@ -21,9 +21,9 @@ static const char *TAG = "esp32_robot";
 
 // Connection-first init (CLAUDE.md), but on classic ESP32-CAM the camera
 // must allocate its 32 KB DMA buffer in fresh internal heap (PSRAM isn't
-// DMA-coherent on this chip). Allocation order matches the .ino:
+// DMA-coherent on this chip). Allocation order:
 //
-//   1. NVS              (Preferences-equivalent for pin / wifi / cam)
+//   1. NVS              (per-key persistence for pin / wifi / cam)
 //   2. pin_config       (load runtime overrides)
 //   3. Camera           (esp32-camera; fights for DRAM first, fails
 //                        loudly if PSRAM is missing — fw-info hides
@@ -46,8 +46,8 @@ void app_main(void) {
     pin_config_t pins;
     pin_config_load(&pins);
 
-    // Stable per-chip suffix — low 16 bits of the WiFi MAC. Same shape as
-    // the .ino so paired robots in localStorage keep matching.
+    // Stable per-chip suffix — low 16 bits of the WiFi MAC. Identity must
+    // not change across reflashes or paired robots in localStorage break.
     uint8_t mac[6];
     ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA));
     char ble_name[16];

@@ -150,9 +150,9 @@ export function init() {
   $("console-close").addEventListener("click", () => $("console-modal").close());
   $("recovery-connect").addEventListener("click", () => _port ? disconnect() : connect());
   $("recovery-show-all")?.addEventListener("click", () => connect({ unfiltered: true }));
-  // No outside-click dismiss — terminal session is real work; accidental
-  // clicks outside the modal used to kill the connection and scrollback.
-  // Explicit × button is the only way out.
+  // No outside-click dismiss — terminal session is real work; an
+  // accidental click would kill the connection and scrollback. Explicit
+  // × button only.
   $("console-modal").addEventListener("close", () => { if (_port) disconnect(); });
 }
 

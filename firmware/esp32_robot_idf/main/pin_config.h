@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// -1 = "not wired, disable this cap." Same sentinel the .ino used.
+// -1 = "not wired, disable this cap."
 typedef struct {
     int led;
     int flash;
@@ -17,9 +17,8 @@ typedef struct {
 bool pin_valid(int pin);
 bool pin_motors_configured(const pin_config_t *cfg);
 
-// Load from NVS namespace "pins". Defaults match the .ino's AI-Thinker
-// layout (LED=33, FLASH=4, motors 14/15/13/12) so a fresh chip behaves
-// like the Arduino firmware did out of the box.
+// Load from NVS namespace "pins". Defaults are the AI-Thinker layout
+// (LED=33, FLASH=4, motors 14/15/13/12) — see pin_config.c.
 void pin_config_load(pin_config_t *out);
 
 // Handle a JSON write from the BLE pin-config char. Validates against the

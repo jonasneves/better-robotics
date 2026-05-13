@@ -302,9 +302,6 @@ static void video_pump_tick(void) {
             rc = esp_peer_send_data(s_peer, &df);
         }
         if (rc != ESP_PEER_ERR_NONE) full_send = false;
-        // 2 ms inter-chunk pacing — was 5 ms when WIFI_PS_MIN_MODEM was the
-        // default and the radio needed wake-up time. With PS_NONE restored,
-        // most of that delay is dead weight.
         if (chunk + 1 < total_chunks) vTaskDelay(pdMS_TO_TICKS(2));
     }
 

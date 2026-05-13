@@ -29,7 +29,7 @@ Three services run alongside `pi-robot.service`, each independently restartable:
 
 ## SD-card first boot
 
-Flash Raspberry Pi OS, then open the [dashboard](https://neves.cloud/better-robotics/) and click **Customize card** in the Set up new hardware panel (or `?prepare` in the URL). Fill in hostname + sudo password, paste or pick an SSH public key, point at the mounted boot partition (usually `/Volumes/bootfs` on macOS). The dialog stages aarch64 Python wheels (`bless`, `bleak`, `dbus-fast`, `dbus-next`, `typing-extensions`) into `/boot/firmware/wheels/`, pi_robot source into `/boot/firmware/betterpi/`, renders `firstrun.sh`, and patches `cmdline.txt` + `config.txt`. Wheels for both Python 3.11 and 3.13 are bundled so Bookworm or Trixie works without re-prep.
+Flash Raspberry Pi OS, then open the [dashboard](https://better-robotics.github.io/) and click **Customize card** in the Set up new hardware panel (or `?prepare` in the URL). Fill in hostname + sudo password, paste or pick an SSH public key, point at the mounted boot partition (usually `/Volumes/bootfs` on macOS). The dialog stages aarch64 Python wheels (`bless`, `bleak`, `dbus-fast`, `dbus-next`, `typing-extensions`) into `/boot/firmware/wheels/`, pi_robot source into `/boot/firmware/betterpi/`, renders `firstrun.sh`, and patches `cmdline.txt` + `config.txt`. Wheels for both Python 3.11 and 3.13 are bundled so Bookworm or Trixie works without re-prep.
 
 First boot runs entirely offline: no WiFi, no captive portal, no PyPI roundtrip. `firstrun.sh` copies staged firmware into `/home/pi/better-robotics/firmware/pi_robot/`, creates a venv with `--system-site-packages` (picks up `python3-lgpio` from the base image), installs with `pip install --no-index --find-links=/boot/firmware/wheels`, unblocks Bluetooth via rfkill, enables BlueZ's experimental advertising API, and starts `pi-robot.service` as root. Progress appends to `/boot/firmware/firstrun.status` as an offline breadcrumb.
 
@@ -46,7 +46,7 @@ pip install -r requirements.txt
 python3 pi_robot.py
 ```
 
-Needs `bluetoothd` running and (usually) the user in the `bluetooth` group. Robot advertises as `BR-XXXX` (suffix from Pi chip serial). Scan from the dashboard at [neves.cloud/better-robotics](https://neves.cloud/better-robotics/).
+Needs `bluetoothd` running and (usually) the user in the `bluetooth` group. Robot advertises as `BR-XXXX` (suffix from Pi chip serial). Scan from the dashboard at [better-robotics.github.io](https://better-robotics.github.io/).
 
 ## LED wiring
 

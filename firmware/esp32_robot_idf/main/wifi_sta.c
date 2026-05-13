@@ -53,9 +53,9 @@ bool wifi_sta_has_ip(void) { return s_has_ip; }
 const char *wifi_sta_status_json(void) { return s_status_json; }
 const char *wifi_sta_scan_json(void) { return s_scan_json; }
 
-// JSON string escape — matches the .ino's jsonEscape: handle quote +
-// backslash + newline + carriage return; drop other control chars so
-// stray bytes from a misbehaving AP can't break the dashboard's parser.
+// JSON string escape: quote / backslash / newline / carriage return —
+// drop other control chars so stray bytes from a misbehaving AP can't
+// break the dashboard's parser.
 static size_t json_escape(char *out, size_t out_size, const char *s) {
     size_t o = 0;
     for (size_t i = 0; s[i] && o + 3 < out_size; i++) {
@@ -70,7 +70,7 @@ static size_t json_escape(char *out, size_t out_size, const char *s) {
     return o;
 }
 
-// Map -100..-50 dBm → 0..100 strength (matches .ino's rssiToStrength).
+// Map -100..-50 dBm → 0..100 strength.
 static int rssi_to_strength(int rssi) {
     int s = (rssi + 100) * 2;
     if (s < 0) return 0;
@@ -230,8 +230,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         if (s_attempting_join) {
             s_attempting_join = false;
             esp_timer_stop(s_join_timeout_timer);
-            // Persist only AFTER the join succeeded — same shape as the
-            // .ino's PHASE_JOINING success path. Avoids saving a bad
+            // Persist only AFTER the join succeeded. Avoids saving a bad
             // password that would loop on next boot.
             persist_creds(s_pending_ssid, s_pending_pass);
         }
@@ -272,12 +271,10 @@ void wifi_sta_scan_start(void) {
         .bssid = NULL,
         .channel = 0,
         .show_hidden = false,
-        // Passive scan + default dwell. BLE coex aggressively drops
-        // active probe responses on classic ESP32, so beacon-only
-        // listening is more reliable. The earlier .passive=500 override
-        // tripped wifi's "Should use default passive scan time" warning
-        // — coex prefers its own dwell when BT is enabled because longer
-        // scans starve the BT radio. .scan_time omitted → ESP-IDF picks.
+        // Passive scan + default dwell. BLE coex aggressively drops active
+        // probe responses on classic ESP32, so beacon-only listening is
+        // more reliable. .scan_time omitted because coex prefers its own
+        // dwell when BT is enabled — overriding warns and gets ignored.
         .scan_type = WIFI_SCAN_TYPE_PASSIVE,
     };
     esp_err_t rc = esp_wifi_scan_start(&cfg, false);
@@ -293,10 +290,9 @@ void wifi_sta_scan_start(void) {
     s_scan_in_flight = true;
 }
 
-// Tiny string-key extractor — matches the .ino's pattern. Returns true
-// if the key was found and copied into out. JSON values must be
-// double-quoted; embedded backslash-escapes are handled minimally
-// (\\ and \" stay as one char in the value).
+// Tiny string-key extractor. Returns true if key was found and copied
+// into out. JSON values must be double-quoted; embedded backslash-escapes
+// handled minimally (\\ and \" stay as one char in the value).
 static bool extract_str_key(const char *json, size_t len, const char *key,
                              char *out, size_t out_size) {
     char needle[16];
@@ -402,12 +398,8 @@ void wifi_sta_init(const char *hostname) {
     }
 
     ESP_ERROR_CHECK(esp_wifi_start());
-    // PS_NONE: radio always on, full throughput available. Tried
-    // PS_MIN_MODEM with a webrtc-peer toggle (open=NONE, close=MIN_MODEM)
-    // to give BLE coex breathing room during idle, but it tanked HTTP
-    // streaming throughput because http_stream wasn't part of the toggle
-    // and ran with the radio sleeping. The "breathes during idle"
-    // benefit was theoretical; the streaming regression was real.
+    // PS_NONE: radio always on. PS_MIN_MODEM tanks HTTP MJPEG throughput
+    // (http_stream has no hook to wake the radio before sending).
     esp_wifi_set_ps(WIFI_PS_NONE);
     esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
 }
