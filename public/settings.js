@@ -20,7 +20,12 @@ export const settings = Object.assign(
   //   privacy; .claude/CLAUDE.md → Model discipline).
   // Keys + tokens in localStorage — browser-only, never leaves origin,
   // but treat like passwords (don't share your browser).
-  { pipBackend: "github", pipApiKey: "", pipOpenaiKey: "", githubAuth: null, pipLocalInstalled: false, pipVisionEnabled: false },
+  // arucoOverheadPhoneId / arucoOverheadLocalId: roomId of the phone, or
+  //   deviceId of the local videoinput, designated as the overhead
+  //   localizer. Mutually exclusive — only one is non-null at a time.
+  // arucoMarkerSizeMm: printed marker side length, used by POS.Posit for
+  //   metric pose. Defaults to the printable sheets' size (100 mm).
+  { pipBackend: "github", pipApiKey: "", pipOpenaiKey: "", githubAuth: null, pipLocalInstalled: false, pipVisionEnabled: false, arucoOverheadPhoneId: null, arucoOverheadLocalId: null, arucoMarkerSizeMm: 100 },
   (() => {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
     // Migration: pipGithubAuth → githubAuth (Identity + Pip share one OAuth

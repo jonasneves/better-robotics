@@ -18,6 +18,10 @@ export function persist() {
       // false when they clicked Disconnect. Unexpected drops leave it unchanged.
       autoReconnect: !!e.autoReconnect,
       lastConnectedAt: e.lastConnectedAt || 0,
+      // ArUco marker ID bound to this robot. Null = unbound; detection falls
+      // back to positional `entries[m.id]` so zero-config still works for
+      // single-robot use. Manual binding via window.bindArucoMarker — see DEV.md.
+      arucoMarkerId: typeof e.arucoMarkerId === "number" ? e.arucoMarkerId : null,
     });
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
@@ -28,7 +32,7 @@ export function loadKnown() {
   catch { return []; }
 }
 
-export function makeEntry(id, name, fwType = null, { autoReconnect = false, lastConnectedAt = 0 } = {}) {
+export function makeEntry(id, name, fwType = null, { autoReconnect = false, lastConnectedAt = 0, arucoMarkerId = null } = {}) {
   return {
     id, name,
     // Platform label shown as a badge on the card. Cached from fw-info.type
@@ -36,6 +40,12 @@ export function makeEntry(id, name, fwType = null, { autoReconnect = false, last
     fwType,
     autoReconnect,
     lastConnectedAt,
+    // ArUco marker assignment — see persist() comment. null = positional fallback.
+    arucoMarkerId,
+    // Latest overhead-camera pose. { x, y, headingDeg, markerSizeMm, updatedAt }
+    // or null when no detection yet. Consumers MUST check updatedAt for
+    // staleness before steering — producer never clears stale entries.
+    arucoPosition: null,
     device: null,
     // Set when a cached gatt.connect() failed (typically after a robot reboot:
     // Chrome keeps the BluetoothDevice handle, but the bonded GATT session

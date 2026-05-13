@@ -32,6 +32,7 @@ const MIME = {
   '.woff2': 'font/woff2',
   '.wasm':  'application/wasm',
   '.map':   'application/json',
+  '.pdf':   'application/pdf',
 };
 
 const server = http.createServer((req, res) => {

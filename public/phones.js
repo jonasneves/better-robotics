@@ -60,15 +60,6 @@ export function listPhones() {
   }));
 }
 
-// ArUco lock state from a robot's overhead-mounted phone, pushed to the
-// phone so the operator holding it can see detection is working without
-// looking at the dashboard. Throttled in the caller; we just relay.
-export function sendArucoStatus(phoneId, payload) {
-  const p = _phones.get(phoneId);
-  if (!p) return;
-  try { p.peer.send({ type: "aruco-status", ...payload }); } catch {}
-}
-
 // Push a VLM scene description to every paired phone. Separate channel from
 // notices/chat-replies so phones can render the stream of observations under
 // the camera label rather than clobbering Pip's last reply.

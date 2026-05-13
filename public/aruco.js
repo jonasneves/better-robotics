@@ -1,37 +1,61 @@
-// ArUco fiducial-marker detection for phone-as-overhead-camera. The phone's
-// WebRTC video lands on `entry.attachedCameraStream` (see helpers.js mount
-// flow); a marker taped on top of the robot gives sub-pixel ground-truth
-// pose at ~10-20 ms per frame. Pure JS via js-aruco2 (no WASM).
+// Headless overhead ArUco localization. Reads frames from a designated
+// <video> element (a phone helper's shared camera, or any other live
+// source), detects markers, writes metric robot positions to
+// entry.arucoPosition. No UI surface — the consumer (helpers.js) wires
+// the source via setOverheadSource(videoEl, { onResult }) and renders
+// the overlay against its own preview tile.
 //
-// Phase 1 surface: detect marker corners + center, render as a debug SVG
-// overlay on the robot card. No motors, no metric pose. Phase 3 will layer
-// `POS.Posit` for metric pose + a pure-pursuit follower; for now we just
-// want to SEE that detection is reliable before trusting it for control.
+// Marker → robot binding prefers explicit entry.arucoMarkerId; falls
+// back to positional ordering (entries[m.id]) so single-robot zero-config
+// still works. Multi-robot setups should bind explicitly (window.bindArucoMarker)
+// — see DEV.md.
 //
-// Marker recipe: print "Original ArUco" id 0 from https://chev.me/arucogen
-// (matches js-aruco2's default `ARUCO` dictionary). Tape on top of robot.
+// Staleness contract: a fresh updatedAt timestamp is written on every
+// detection. Consumers MUST gate trust on (Date.now() - updatedAt) before
+// steering — the producer can't distinguish "out of frame" from "lost
+// lock under motion blur," so it never clears stale entries.
 //
-// Source: https://github.com/damianofalcioni/js-aruco2 — UMD-style globals,
-// no ESM build, so we inject <script> tags lazily on first use. Detector +
-// dictionary are reusable across frames; instantiate once.
+// Library: js-aruco2 from jsDelivr, pure JS, ~50 KB. DICT_4X4_50 markers
+// (printable sheets in /assets). POS.Posit estimates metric pose from
+// settings.arucoMarkerSizeMm + a focal-length heuristic.
+
+import { state, persist } from "./state.js";
+import { settings } from "./settings.js";
 
 const CDN = "https://cdn.jsdelivr.net/gh/damianofalcioni/js-aruco2@master/src";
-const SCRIPTS = ["cv.js", "aruco.js"];  // svd.js + posit1.js only when phase 3 needs pose
-const DICTIONARY = "ARUCO";  // matches chev.me/arucogen "Original ArUco"
-const POLL_MS = 100;  // 10 Hz — plenty for phase 1 diagnostics
+// Load order matters: svd.js MUST precede posit1.js because posit1.js does
+// `var SVD = this.SVD || require('./svd').SVD;` — the require() branch is
+// CJS-only and throws in the browser. With svd.js loaded first, `this.SVD`
+// is defined and the require call never runs. Dictionary files live in a
+// separate dir and self-register on AR.DICTIONARIES[name]; aruco.js holds
+// none of them, so the chosen dict has to be loaded explicitly.
+const SCRIPTS = [
+  "cv.js",
+  "aruco.js",
+  "svd.js",
+  "posit1.js",
+  "dictionaries/aruco_4x4_1000.js",
+];
+// ARUCO_4X4_1000 is the 1000-code superset; the first 50 codes match
+// OpenCV's DICT_4X4_50, which is what the printable sheets are based on.
+const DICTIONARY = "ARUCO_4X4_1000";
+const SCAN_INTERVAL_MS = 1000;
 
 let _detector = null;
-let _loadPromise = null;
-const _canvasByDim = new Map();  // "wxh" → reusable OffscreenCanvas-style HTMLCanvas
+let _detectorPromise = null;
+let _sourceVideo = null;
+let _onResult = null;
+let _timer = null;
+let _frameCount = 0;
+let _canvas = null;  // reusable; resized to match source dims each tick
 
 function loadScript(url) {
   return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[data-aruco-src="${url}"]`);
-    if (existing) { existing.addEventListener("load", resolve); existing.addEventListener("error", reject); return; }
+    if (document.querySelector(`script[data-aruco-src="${url}"]`)) { resolve(); return; }
     const s = document.createElement("script");
     s.src = url;
     s.dataset.arucoSrc = url;
-    s.onload = () => resolve();
+    s.onload = resolve;
     s.onerror = () => reject(new Error(`failed to load ${url}`));
     document.head.appendChild(s);
   });
@@ -39,109 +63,117 @@ function loadScript(url) {
 
 async function ensureDetector() {
   if (_detector) return _detector;
-  if (_loadPromise) return _loadPromise;
-  _loadPromise = (async () => {
+  if (_detectorPromise) return _detectorPromise;
+  _detectorPromise = (async () => {
     for (const f of SCRIPTS) await loadScript(`${CDN}/${f}`);
-    if (!window.AR?.Detector) throw new Error("AR.Detector missing after load");
+    if (!window.AR?.Detector) throw new Error("AR.Detector not available after script load");
     _detector = new window.AR.Detector({ dictionaryName: DICTIONARY });
     return _detector;
   })();
-  try { return await _loadPromise; }
-  catch (err) { _loadPromise = null; throw err; }
+  try { return await _detectorPromise; }
+  catch (err) { _detectorPromise = null; throw err; }
 }
 
-function canvasFor(w, h) {
-  const key = `${w}x${h}`;
-  let c = _canvasByDim.get(key);
-  if (!c) {
-    c = document.createElement("canvas");
-    c.width = w; c.height = h;
-    _canvasByDim.set(key, c);
+function estimatePose(corners, w, h, markerSizeMm) {
+  if (!window.POS?.Posit) return null;
+  const cx = w / 2;
+  const cy = h / 2;
+  const centered = corners.map(c => ({ x: c.x - cx, y: -(c.y - cy) }));
+  const focalLength = Math.max(w, h) * 0.85;
+  try {
+    const posit = new window.POS.Posit(markerSizeMm, focalLength);
+    const pose = posit.pose(centered);
+    const [x, y, z] = pose.bestTranslation;
+    return { x: Math.round(x), y: Math.round(y), z: Math.round(z) };
+  } catch {
+    return null;
   }
-  return c;
 }
 
-// Detect markers in a single video / img frame. Returns
-//   [{ id, corners: [{x,y} x4 in image-pixel coords], cx, cy, headingRad }]
-// `headingRad` is computed from corner orientation (corner[0]→corner[1] is
-// the marker's "top edge"); good enough for phase 1's debug overlay. Full
-// pose estimation comes later via POS.Posit.
-async function detectFromSource(source) {
-  const detector = await ensureDetector();
-  const w = source.naturalWidth || source.videoWidth;
-  const h = source.naturalHeight || source.videoHeight;
-  if (!w || !h) return [];
-  const canvas = canvasFor(w, h);
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  try { ctx.drawImage(source, 0, 0, w, h); }
-  catch { return []; }  // tainted canvas (no CORS) — surface as "no markers"
-  let imageData;
-  try { imageData = ctx.getImageData(0, 0, w, h); }
-  catch { return []; }
-  const raw = detector.detect(imageData);
-  return raw.map(m => {
-    const c = m.corners;
-    const cx = (c[0].x + c[1].x + c[2].x + c[3].x) / 4;
-    const cy = (c[0].y + c[1].y + c[2].y + c[3].y) / 4;
-    const headingRad = Math.atan2(c[1].y - c[0].y, c[1].x - c[0].x);
-    return { id: m.id, corners: c, cx, cy, headingRad, frameW: w, frameH: h };
-  });
+// Map a detected marker to a robot entry. Explicit binding wins
+// (entry.arucoMarkerId === markerId). Otherwise fall back to positional
+// — entries[markerId] in iteration order — but only when no entry has
+// claimed the id explicitly, so a bound marker for an absent robot
+// doesn't shadow into positional.
+function resolveEntry(markerId) {
+  const all = [...state.devices.values()];
+  const explicit = all.find(e => e.arucoMarkerId === markerId);
+  if (explicit) return explicit;
+  const anyBound = all.some(e => e.arucoMarkerId === markerId);
+  if (anyBound) return null;
+  return all[markerId] || null;
 }
 
-const _loops = new Map();  // robotId → loop record
-
-const _debug = typeof location !== "undefined" && /\bdebug\b/.test(location.search + location.hash);
-function dbg(...args) { if (_debug) console.log("[aruco]", ...args); }
-
-// Start a polling loop against `sourceFn()` (returns the live <video> /
-// <img> each tick — re-resolved every iteration so a card re-render that
-// swaps the element doesn't break tracking).
-//
-// `onResult({markers, frameCount, error})` fires after each detect AND on
-// load-error; status:
-//   - markers: array (possibly empty) — drives the overlay
-//   - frameCount: monotonic — proves the loop is actually running, even
-//     when detection never finds anything (without this, "loading" /
-//     "scanning empty" / "broken" all look the same to the operator)
-//   - error: present on load-failure (script-load reject, missing
-//     window.AR, getImageData throwing). Surface verbatim — this is
-//     dashboard-side, fixes belong on the dashboard.
-export function startTracking(robotId, sourceFn, onResult) {
-  if (_loops.has(robotId)) return;
-  const loop = { stopped: false, timer: null, frameCount: 0 };
-  _loops.set(robotId, loop);
-  const tick = async () => {
-    if (loop.stopped) return;
-    const source = sourceFn();
-    if (source) {
-      try {
-        const markers = await detectFromSource(source);
-        loop.frameCount += 1;
-        if (markers.length) dbg("detected", markers.map(m => `id=${m.id}`).join(", "), `frame=${loop.frameCount}`);
-        if (!loop.stopped) {
-          try { onResult({ markers, frameCount: loop.frameCount }); }
-          catch (err) { console.warn("[aruco] onResult", err); }
-        }
-      } catch (err) {
-        const msg = err.message || String(err);
-        console.warn("[aruco] detect", msg);
-        if (!loop.stopped) {
-          try { onResult({ markers: [], frameCount: loop.frameCount, error: msg }); }
-          catch {}
-        }
-      }
+async function tick() {
+  if (!_sourceVideo) return;
+  try {
+    const detector = await ensureDetector();
+    const w = _sourceVideo.videoWidth;
+    const h = _sourceVideo.videoHeight;
+    if (!w || !h) {
+      _onResult?.({ markers: [], frameCount: _frameCount, error: "no frame yet" });
+      return;
     }
-    if (!loop.stopped) loop.timer = setTimeout(tick, POLL_MS);
-  };
+    if (!_canvas) _canvas = document.createElement("canvas");
+    if (_canvas.width !== w) _canvas.width = w;
+    if (_canvas.height !== h) _canvas.height = h;
+    const ctx = _canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(_sourceVideo, 0, 0, w, h);
+    const raw = detector.detect(ctx.getImageData(0, 0, w, h));
+    _frameCount += 1;
+
+    const markerSizeMm = Math.max(1, parseFloat(settings.arucoMarkerSizeMm) || 100);
+    const now = Date.now();
+    const markers = raw.map(m => {
+      const c = m.corners;
+      const cx = (c[0].x + c[1].x + c[2].x + c[3].x) / 4;
+      const cy = (c[0].y + c[1].y + c[2].y + c[3].y) / 4;
+      const headingRad = Math.atan2(c[1].y - c[0].y, c[1].x - c[0].x);
+      const pose = estimatePose(c, w, h, markerSizeMm);
+      const entry = resolveEntry(m.id);
+      if (entry && pose) {
+        entry.arucoPosition = {
+          x: pose.x, y: pose.y,
+          headingDeg: Math.round(headingRad * 180 / Math.PI),
+          markerSizeMm,
+          updatedAt: now,
+        };
+      }
+      return { id: m.id, cx, cy, headingRad, corners: c, pose, entry, frameW: w, frameH: h };
+    });
+
+    _onResult?.({ markers, frameCount: _frameCount });
+  } catch (err) {
+    _onResult?.({ markers: [], frameCount: _frameCount, error: err?.message || String(err) });
+  }
+}
+
+export function setOverheadSource(videoEl, { onResult } = {}) {
+  if (_sourceVideo === videoEl && _onResult === onResult) return;
+  clearOverheadSource();
+  _sourceVideo = videoEl;
+  _onResult = onResult || null;
+  _frameCount = 0;
+  // Kick once immediately so the overlay paints without waiting a full tick.
   tick();
+  _timer = setInterval(tick, SCAN_INTERVAL_MS);
 }
 
-export function stopTracking(robotId) {
-  const loop = _loops.get(robotId);
-  if (!loop) return;
-  loop.stopped = true;
-  if (loop.timer) clearTimeout(loop.timer);
-  _loops.delete(robotId);
+export function clearOverheadSource() {
+  if (_timer) { clearInterval(_timer); _timer = null; }
+  _sourceVideo = null;
+  _onResult = null;
+  _frameCount = 0;
 }
 
-export function isTracking(robotId) { return _loops.has(robotId); }
+// Manual marker→robot binding. Surfaced via window.bindArucoMarker for
+// DEV.md; UI selector deferred until two-robot use forces the question.
+export function bindArucoMarker(robotId, markerId) {
+  const entry = state.devices.get(robotId);
+  if (!entry) return { error: `no robot ${robotId}` };
+  entry.arucoMarkerId = typeof markerId === "number" ? markerId : null;
+  persist();
+  return { ok: true, robotId, markerId: entry.arucoMarkerId };
+}
+
+if (typeof window !== "undefined") window.bindArucoMarker = bindArucoMarker;

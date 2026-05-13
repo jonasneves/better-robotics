@@ -23,10 +23,13 @@ import { initMotorsKeyboard } from "./capabilities/runtime/signed-pair.js";
 import { initAuthUI, fingerprint as dashFingerprint, pubkeySsh, onKeyChange } from "./auth.js";
 import { initPasswordsUI } from "./passwords.js";
 import { initAssistant, emitPipEvent } from "./assistant.js";
-import { initPhones, broadcastTargetInfo, sendArucoStatus } from "./phones.js";
+import { initPhones, broadcastTargetInfo } from "./phones.js";
 // (local-llm imports moved to assistant.js where the /install slash lives)
 import { initHelpers, setHelpersRobotRenderer, renderHelpers } from "./helpers.js";
-import { startTracking as startArucoTracking, stopTracking as stopArucoTracking } from "./aruco.js";
+// aruco.js is wired through helpers.js — phone helpers can be designated
+// as the overhead camera; detection runs against the helper's existing
+// preview tile. No init call here.
+import "./aruco.js";
 import {
   setupServiceWorker, wireInstallMenuItem, wireCheckUpdatesMenuItem,
   wireHardRefresh, wireDiagnosticsMenuItem, setReportIssueLink, readSwVersion,
@@ -40,9 +43,7 @@ setExpectingReconnectHandler((id) => markExpectingReconnect(id));
 // A phone helper's camera mounted on this robot (phone-as-eye). The video
 // element is discoverable by perception.js's findCameraElement enumerator
 // via [data-attached-camera-id]. srcObject is bound by renderEntry after
-// innerHTML rebuild. The SVG sibling is the ArUco debug overlay — sized
-// to match the video's natural dims via patchArucoOverlay so corner
-// coords from aruco.js (image-pixel) don't need re-scaling per render.
+// innerHTML rebuild.
 function attachedCameraHtml(entry) {
   if (!entry.attachedCameraStream) return "";
   return `
@@ -53,87 +54,10 @@ function attachedCameraHtml(entry) {
       <div class="cap-body">
         <div class="attached-camera-frame">
           <video class="robot-camera" data-attached-camera-id="${escapeHtml(entry.id)}" autoplay playsinline muted></video>
-          <svg class="aruco-overlay" data-aruco-overlay-id="${escapeHtml(entry.id)}"></svg>
         </div>
-        <div class="meta aruco-help">
-          <a href="https://chev.me/arucogen/" target="_blank" rel="noopener">Print marker</a>
-          — "Original ArUco" dictionary, id 0, tape flat on top of the robot.
-        </div>
-        <div class="meta aruco-status" data-aruco-status-id="${escapeHtml(entry.id)}">Loading detector…</div>
       </div>
     </div>
   `;
-}
-
-// Surgical patcher for the ArUco debug overlay. Called from the tracker
-// each tick — mutates the SVG in place so a 10 Hz detection rhythm
-// doesn't trigger full-card re-renders that would destroy other
-// in-flight UI (perception prompt, hover state, etc).
-//
-// `frameCount` in the status is load-bearing diagnostic — without it,
-// "detector still loading", "loop running but nothing found", and
-// "loop wedged" all read identically to the operator.
-function patchArucoOverlay(entry, { markers, frameCount, error }) {
-  const node = entry.node;
-  if (!node) return;
-  const svg = node.querySelector(`svg[data-aruco-overlay-id="${entry.id}"]`);
-  if (!svg) return;
-  const status = node.querySelector(`[data-aruco-status-id="${entry.id}"]`);
-  if (error) {
-    if (svg) svg.innerHTML = "";
-    if (status) {
-      status.classList.remove("aruco-locked");
-      status.textContent = `Detector error: ${error}`;
-    }
-    return;
-  }
-  if (markers.length === 0) {
-    svg.innerHTML = "";
-    if (status) {
-      status.classList.remove("aruco-locked");
-      status.textContent = `Scanning · ${frameCount} frame${frameCount === 1 ? "" : "s"} · no marker yet`;
-    }
-    // Push to phone-as-eye holder so they see lock state without checking
-    // the dashboard. Only on lock-state transitions to keep the data
-    // channel quiet (10 Hz of no-marker pings would be churn for nothing).
-    if (entry.attachedFromPhoneId && entry.arucoLastLocked !== false) {
-      sendArucoStatus(entry.attachedFromPhoneId, { locked: false, detail: "Scanning for marker…" });
-      entry.arucoLastLocked = false;
-    }
-    return;
-  }
-  const { frameW, frameH } = markers[0];
-  svg.setAttribute("viewBox", `0 0 ${frameW} ${frameH}`);
-  // preserveAspectRatio default ("xMidYMid meet") matches how the video
-  // is letterboxed in its container — corners line up.
-  const pieces = [];
-  for (const m of markers) {
-    const pts = m.corners.map(c => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
-    // Heading line from center along the marker's "top edge" direction.
-    const len = Math.min(frameW, frameH) * 0.08;
-    const hx = m.cx + Math.cos(m.headingRad) * len;
-    const hy = m.cy + Math.sin(m.headingRad) * len;
-    pieces.push(`<polygon points="${pts}" />`);
-    pieces.push(`<line x1="${m.cx.toFixed(1)}" y1="${m.cy.toFixed(1)}" x2="${hx.toFixed(1)}" y2="${hy.toFixed(1)}" class="heading" />`);
-    pieces.push(`<text x="${m.cx.toFixed(1)}" y="${m.cy.toFixed(1)}" dy="-8">id ${m.id}</text>`);
-  }
-  svg.innerHTML = pieces.join("");
-  if (status) {
-    status.classList.add("aruco-locked");
-    const ids = markers.map(m => `id ${m.id}`).join(", ");
-    status.textContent = `Tracking ${ids} · frame ${frameCount}`;
-  }
-  // Phone-side lock indicator. Send on transition into locked AND on
-  // marker-id change while locked; suppress while still locked on the
-  // same id to avoid 10 Hz traffic.
-  if (entry.attachedFromPhoneId) {
-    const primaryId = markers[0].id;
-    if (entry.arucoLastLocked !== true || entry.arucoLastMarkerId !== primaryId) {
-      sendArucoStatus(entry.attachedFromPhoneId, { locked: true, markerId: primaryId });
-      entry.arucoLastLocked = true;
-      entry.arucoLastMarkerId = primaryId;
-    }
-  }
 }
 
 // The header meta line ("WiFi … · up …h · reset: …"). Reused by renderEntry
@@ -263,9 +187,9 @@ function gattConnectWithTimeout(device) {
 
 async function loadPaired() {
   // Restore remembered robots first — works even when getDevices() is missing.
-  for (const { id, name, fwType, autoReconnect, lastConnectedAt } of loadKnown()) {
+  for (const { id, name, fwType, autoReconnect, lastConnectedAt, arucoMarkerId } of loadKnown()) {
     if (!state.devices.has(id)) {
-      state.devices.set(id, makeEntry(id, name, fwType, { autoReconnect, lastConnectedAt }));
+      state.devices.set(id, makeEntry(id, name, fwType, { autoReconnect, lastConnectedAt, arucoMarkerId }));
     }
   }
   if (navigator.bluetooth.getDevices) {
@@ -1056,16 +980,6 @@ function renderEntry(entry) {
   if (entry.attachedCameraStream) {
     const v = entry.node.querySelector(`video[data-attached-camera-id="${entry.id}"]`);
     if (v) v.srcObject = entry.attachedCameraStream;
-    // Lazy-start ArUco tracking. The tracker is idempotent (returns if
-    // already running) — sourceFn re-resolves the <video> each tick so a
-    // re-render that swaps the element doesn't strand the loop.
-    startArucoTracking(
-      entry.id,
-      () => entry.node?.querySelector(`video[data-attached-camera-id="${entry.id}"]`),
-      (result) => patchArucoOverlay(entry, result),
-    );
-  } else {
-    stopArucoTracking(entry.id);
   }
   // Per-cap try/catch: one cap's wireActions throwing shouldn't silently
   // break wiring for every cap that comes after it. Surface the error so
