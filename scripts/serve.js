@@ -1,14 +1,10 @@
 #!/usr/bin/env node
 // Local dev server + cloudflared tunnel.
 //
-// History note: Python's http.server was the first attempt — it has quirks
-// with HTTP/1.1 keep-alive under Chrome's connection-pool reuse that
-// manifested as random modules stuck at (pending) in DevTools. Switched to
-// a minimal Node HTTP server that binds dual-stack (::) so neither Chrome
-// nor curl's IPv6-first resolution takes the 5-second IPv4-fallback path,
-// and lets Node's HTTP/1.1 keep-alive work normally — it handles
-// concurrent pool reuse correctly where Python's SimpleHTTPRequestHandler
-// does not.
+// Node HTTP (not python -m http.server): Python's HTTP/1.1 keep-alive
+// under Chrome's connection-pool reuse drops modules as (pending) in
+// DevTools. Binds dual-stack (::) so Chrome's IPv6-first resolution
+// doesn't take the 5 s IPv4-fallback path.
 const http    = require('http');
 const fs      = require('fs');
 const path    = require('path');

@@ -1,7 +1,6 @@
 // Routes updates: ESP32 → WebRTC OTA (seconds, P2P, no rendezvous)
 // with BLE-stream fallback (~30 s for 1.6 MB, works anywhere). Pi
-// follows its own bundle path. The legacy PNA-direct /ota POST was
-// retired in Phase 2.H along with the chip's HTTP server.
+// follows its own bundle path.
 import {
   OTA_DATA_CHAR_UUID, OTA_STATUS_CHAR_UUID,
   decodeJson, encodeJson,
@@ -209,22 +208,14 @@ async function streamOtaViaWebRTC(entry, bytes) {
 
 async function streamOtaBytes(entry, bytes) {
   const ch = entry.otaDataChar;
-  // All chunks WithResponse. The earlier WithoutResponse attempt looked
-  // like a clean speedup on paper (windowed flow control against an
-  // 8 KB chip-side notify cadence) but first contact with hardware
-  // showed two failures: (1) windowing requires the chip to *already*
-  // run new firmware with finer notify cadence — every fielded chip is
-  // on the OLD cadence, so the bootstrap OTA breaks, (2) Chrome's macOS
-  // BLE stack throws "GATT operation failed for unknown reason" under
-  // WithoutResponse blast, suggesting queue overrun or link drop.
-  // WithResponse is correct: each chunk's ATT_WRITE_RSP flows behind
-  // the chip's onWrite callback returning, so back-pressure is implicit
-  // and every chunk is acknowledged.
+  // All chunks WithResponse. Each chunk's ATT_WRITE_RSP flows behind the
+  // chip's onWrite callback returning, so back-pressure is implicit.
+  // WithoutResponse breaks bootstrap: pre-flow-control firmware can't
+  // signal back-pressure, and Chrome's macOS BLE stack throws "GATT
+  // operation failed" under sustained blast.
   //
-  // CHUNK 244 lands within the negotiated ATT MTU
-  // (CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256 → max payload 253; frame is
-  // chunk + 1-byte opcode). Bumped from the old conservative 180 —
-  // fewer round-trips at ~50 ms each = ~1.36× faster on the same wire.
+  // CHUNK 244 fits the negotiated ATT MTU (CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU
+  // = 256 → max payload 253; frame is chunk + 1-byte opcode).
   entry.otaSent = 0;
   patchOtaSection(entry);
   try { await ch.writeValueWithResponse(new Uint8Array([0x00])); } catch {}
@@ -354,8 +345,6 @@ export async function updateFirmware(id) {
     //      exposure. Firmware commits inline and restarts; "staged" reply
     //      then BLE link drops as chip reboots into new firmware.
     //   2. BLE-stream: slow (~30s for 1.6 MB) but works anywhere.
-    // PNA HTTP /ota retired with the chip's HTTP server (Phase 2.H) —
-    // brittle (PNA prompt, mixed content) and superseded by the pair above.
     let webrtcOk = false;
     try {
       await streamOtaViaWebRTC(entry, bytes);

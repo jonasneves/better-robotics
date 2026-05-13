@@ -30,10 +30,9 @@ export function activeModelForBackend(backend) {
   if (backend === "local") return "lfm2";
   return backend;
 }
-// Per-Claude-call ceiling. Tool-using conversations make several bridgeRequests
-// in series (one per tool round); 8s was fine for the no-tools notify path but
-// tight for tool loops and cold-start proxy latency. 20s covers typical
-// Anthropic response time with headroom for slow networks / first request.
+// Per-Claude-call ceiling. Tool-using conversations make several
+// bridgeRequests in series; 20s covers typical Anthropic response time
+// with headroom for slow networks and first-request cold-start.
 const TIMEOUT_MS = 20000;
 // Shorter ceiling for the auto-retry — if the first attempt hung for the full
 // 20s we're fairly sure the bridge is wedged, not just slow; a quick retry

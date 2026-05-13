@@ -45,8 +45,8 @@ void pin_config_load(pin_config_t *out) {
 // Lets the dashboard PATCH a single pin without re-sending the whole map.
 static const int PIN_ABSENT = -32768;
 
-// Tiny extractor — same logic as the .ino's extractIntKey, no JSON
-// library so we don't pay for cJSON on a one-off write surface.
+// Tiny extractor — no JSON library so we don't pay for cJSON on a
+// one-off write surface.
 static int extract_int_key(const char *json, size_t len, const char *key) {
     char needle[32];
     snprintf(needle, sizeof(needle), "\"%s\"", key);

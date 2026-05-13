@@ -22,6 +22,5 @@ export const RUNTIMES = {
 
 // All runtime caps share render-bus.js for the back-channel to the
 // dashboard's renderEntry. One setter, one binding — no per-module
-// plumbing fan-out (was setToggleRender / setLevelRender / etc., one
-// per cap, all calling the same fn with the same arg).
+// plumbing fan-out.
 export function setRuntimeRenderer(fn) { setBusRender(fn); }

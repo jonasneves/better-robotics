@@ -399,7 +399,7 @@ def _publish(char_uuid: str, value: bytearray) -> None:
     _server.update_value(SERVICE_UUID, char_uuid)
 
 
-# ── BLE-signaled WebRTC (Phase 2.F.1) ─────────────────────────────────────
+# ── BLE-signaled WebRTC ───────────────────────────────────────────────────
 #
 # Dashboard writes a chunked SDP offer to SIGNAL_CHAR_UUID. We reassemble,
 # forward to pi-robot-rtc.service over /run/pi-robot-rtc.sock, get a

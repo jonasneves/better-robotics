@@ -10,7 +10,7 @@ Two signaling transports run side-by-side:
      different networks) and as the fallback when the BLE path is
      unavailable.
 
-  2. Unix socket /run/pi-robot-rtc.sock — Phase 2.F.1. pi_robot.py
+  2. Unix socket /run/pi-robot-rtc.sock — local fallback. pi_robot.py
      receives BLE-signaled offers (chunked write to SIGNAL_CHAR_UUID),
      forwards them here over the local socket as one-shot RPC frames:
        request:  {"type": "offer", "sdp": "..."}\\n

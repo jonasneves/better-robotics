@@ -7,6 +7,8 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 
+#include "camera.h"
+
 static const char *TAG = "http_stream";
 
 #define BOUNDARY     "frame"
@@ -15,6 +17,10 @@ static const char *TAG = "http_stream";
 static httpd_handle_t s_httpd = NULL;
 
 static esp_err_t stream_handler(httpd_req_t *req) {
+    if (!camera_acquire()) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "camera unavailable");
+        return ESP_OK;
+    }
     httpd_resp_set_type(req, "multipart/x-mixed-replace;boundary=" BOUNDARY);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
@@ -38,6 +44,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
         frames++;
     }
     httpd_resp_send_chunk(req, NULL, 0);
+    camera_release();
     return ESP_OK;
 }
 

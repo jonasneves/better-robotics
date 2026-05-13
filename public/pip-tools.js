@@ -40,9 +40,8 @@ function trackSceneAsk(robotId) {
 }
 
 // Consecutive move_motor calls without an intervening scene observation.
-// The "3 pulses without a clear scene change" rule used to live in
-// PIP_SYSTEM prose; executor-enforcement turns guidance into mechanism.
-// Reset by any get_robot_scene / ask_robot_scene / get_robot_detections /
+// Executor-enforced so the planner can't bypass; reset by any
+// get_robot_scene / ask_robot_scene / get_robot_detections /
 // view_robot_frame call.
 const _pulseRun = new Map();
 const PULSE_RUN_LIMIT = 3;
@@ -415,9 +414,8 @@ async function dispatch(name, input) {
       const e = state.devices.get(input.id);
       if (!e) return { error: `no robot with id ${input.id}` };
       resetPulseRun(input.id);  // legitimate look-between-moves
-      // 640px is larger than the 320 ask_human uses — Claude's vision wants
-      // detail, phone thumbnails don't. Quality bumped too (0.85 vs 0.75)
-      // for the same reason. JPEG stays the format; PNG would bloat the
+      // 640px / 0.85 q is larger than ask_human's 320 / 0.75 — Claude's
+      // vision wants detail, phone thumbnails don't. PNG would bloat the
       // tool-result payload without a useful accuracy bump.
       const camera = String(input.camera || "primary").toLowerCase();
       const sources = listCameraSources(e);
@@ -501,10 +499,9 @@ async function dispatch(name, input) {
       }
     }
     case "move_motor": {
-      // Hard stop after 3 consecutive pulses without an intervening scene
-      // observation. The rule was prose in PIP_SYSTEM and the tool
-      // description; making it executor-enforced means the model can't
-      // violate what it can't reach. Look-between-moves resets the run.
+      // Executor-enforced stop after 3 consecutive pulses without an
+      // intervening scene observation — making the model unable to bypass
+      // what was previously prose. Look-between-moves resets the run.
       const run = bumpPulseRun(input.id);
       if (run > PULSE_RUN_LIMIT) {
         return {

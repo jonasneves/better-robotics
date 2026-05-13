@@ -34,7 +34,7 @@ static void send_error(const char *msg) {
 }
 
 static void task_fn(void *arg) {
-    if (!camera_ready()) {
+    if (!camera_acquire()) {
         ESP_LOGW(TAG, "no camera");
         send_error("no-camera");
         s_task = NULL;
@@ -54,6 +54,7 @@ static void task_fn(void *arg) {
     if (!fb) {
         ESP_LOGW(TAG, "fb-get-failed");
         send_error("fb-get-failed");
+        camera_release();
         s_task = NULL;
         vTaskDelete(NULL);
         return;
@@ -85,6 +86,7 @@ static void task_fn(void *arg) {
     gatt_svr_snapshot_send(commit, 1);
 
     esp_camera_fb_return(fb);
+    camera_release();
     ESP_LOGI(TAG, "sent %u bytes", (unsigned)sent);
     s_task = NULL;
     vTaskDelete(NULL);

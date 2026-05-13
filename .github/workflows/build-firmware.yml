@@ -58,18 +58,21 @@ jobs:
         # Incremental rebuilds: ninja recompiles only what changed when
         # we restore the previous build/ + managed_components/. Cache
         # key is content-hash of every input the build actually depends
-        # on; restore-keys lets a partial miss still hydrate from the
-        # most-recent successful build (so cache misses cost a few
-        # extra rebuilds, never a clean compile).
+        # on, namespaced by github.repository so a repo rename/transfer
+        # (which changes the runner workspace path) doesn't restore a
+        # build/ with CMake configuration pointing at the old absolute
+        # path (fails with "Build directory configured for project X not
+        # Y"). restore-keys lets a partial miss still hydrate from the
+        # most-recent successful build under the same repo path.
         if: steps.changes.outputs.esp_changed == 'true'
         uses: actions/cache@v4
         with:
           path: |
             firmware/esp32_robot_idf/build
             firmware/esp32_robot_idf/managed_components
-          key: idf-build-v5.5.4-${{ hashFiles('firmware/esp32_robot_idf/main/**', 'firmware/esp32_robot_idf/sdkconfig.defaults', 'firmware/esp32_robot_idf/CMakeLists.txt', 'firmware/esp32_robot_idf/main/idf_component.yml', 'firmware/esp32_robot_idf/patches/**') }}
+          key: idf-build-v5.5.4-${{ github.repository }}-${{ hashFiles('firmware/esp32_robot_idf/main/**', 'firmware/esp32_robot_idf/sdkconfig.defaults', 'firmware/esp32_robot_idf/CMakeLists.txt', 'firmware/esp32_robot_idf/main/idf_component.yml', 'firmware/esp32_robot_idf/patches/**') }}
           restore-keys: |
-            idf-build-v5.5.4-
+            idf-build-v5.5.4-${{ github.repository }}-
 
       - name: Build ESP32 firmware (ESP-IDF)
         if: steps.changes.outputs.esp_changed == 'true'
