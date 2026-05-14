@@ -170,9 +170,10 @@ onKeyChange(refreshMyFingerprint);
 // shouldn't blast the BT stack with timeout attempts on every page load.
 const AUTO_RECONNECT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 // gatt.connect() has no browser-exposed timeout; a wedged robot can leave the
-// amber "Connecting…" pulse on indefinitely. Hard cap so a failed attempt
-// resolves to an error state the user can see.
-const GATT_CONNECT_TIMEOUT_MS = 20000;
+// amber "Connecting…" pulse on indefinitely. Healthy connects complete in
+// under 2s — 6s is plenty of margin and fails fast enough that the user
+// gets a real "Re-pair" button instead of staring at a spinner.
+const GATT_CONNECT_TIMEOUT_MS = 6000;
 function gattConnectWithTimeout(device) {
   return Promise.race([
     device.gatt.connect(),
@@ -180,6 +181,32 @@ function gattConnectWithTimeout(device) {
       setTimeout(() => reject(new Error(`connect timeout after ${GATT_CONNECT_TIMEOUT_MS / 1000}s`)),
                  GATT_CONNECT_TIMEOUT_MS)),
   ]);
+}
+
+// Chrome serializes BLE choosers (one at a time) and silently delays the
+// second concurrent requestDevice() call. Without our own gate, a user who
+// clicks Re-pair on two robots quickly sees both buttons stuck on
+// "Connecting…" with no feedback on which chooser is actually live.
+// Reject the second click immediately so its status reverts to Re-pair.
+// Also wraps a hard timeout so a dismissed-but-not-cancelled chooser
+// doesn't keep the entry pinned in "Connecting…" forever.
+const CHOOSER_TIMEOUT_MS = 30000;
+let _chooserBusy = false;
+async function pickDeviceOrFail(options) {
+  if (_chooserBusy) {
+    throw new Error("Another robot's pairing dialog is already open — finish that one first");
+  }
+  _chooserBusy = true;
+  try {
+    return await Promise.race([
+      navigator.bluetooth.requestDevice(options),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("pairing dialog timed out — click Re-pair to try again")),
+                   CHOOSER_TIMEOUT_MS)),
+    ]);
+  } finally {
+    _chooserBusy = false;
+  }
 }
 
 async function loadPaired() {
@@ -209,14 +236,19 @@ async function loadPaired() {
 // a dead/out-of-range robot shouldn't keep hammering the BT stack. Counter
 // lives in-memory (not persisted) so a fresh page load gets one clean attempt.
 const AUTO_RECONNECT_MAX_FAILURES = 2;
-function autoReconnectKnown() {
+async function autoReconnectKnown() {
+  // Serialize per-robot attempts. Parallel auto-reconnect with a stale
+  // BT stack means every robot waits the full timeout in lockstep —
+  // sequential makes page-load failure surface in 6s × N instead of
+  // freezing the UI for 6s flat with all spinners pulsing.
   const cutoff = Date.now() - AUTO_RECONNECT_MAX_AGE_MS;
   for (const entry of state.devices.values()) {
     if (!entry.device) continue;
     if (!entry.autoReconnect) continue;
     if ((entry.lastConnectedAt || 0) < cutoff) continue;
     if ((entry.consecutiveFailures || 0) >= AUTO_RECONNECT_MAX_FAILURES) continue;
-    connect(entry.id).catch(() => { /* timeouts are expected; status-row shows it */ });
+    try { await connect(entry.id); }
+    catch { /* timeouts are expected; status-row shows it */ }
   }
 }
 
@@ -233,7 +265,7 @@ async function scanForNew() {
       ? [{ name: hintedName, services: [SERVICE_UUID] },
          { name: hintedName, services: [HEARTBEAT_SVC_UUID] }]
       : [{ services: [SERVICE_UUID] }, { services: [HEARTBEAT_SVC_UUID] }];
-    const device = await navigator.bluetooth.requestDevice({
+    const device = await pickDeviceOrFail({
       filters, optionalServices: [SERVICE_UUID, HEARTBEAT_SVC_UUID],
     });
     const name = device.name || device.id;
@@ -248,7 +280,7 @@ async function scanForNew() {
 
 async function restoreDevice(entry) {
   // Required on browsers without getDevices(): chooser filtered to the saved name.
-  const device = await navigator.bluetooth.requestDevice({
+  const device = await pickDeviceOrFail({
     filters: [{ name: entry.name, services: [SERVICE_UUID] },
               { name: entry.name, services: [HEARTBEAT_SVC_UUID] }],
     optionalServices: [SERVICE_UUID, HEARTBEAT_SVC_UUID],
