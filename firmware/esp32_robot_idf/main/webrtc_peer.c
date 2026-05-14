@@ -613,22 +613,23 @@ static void handle_offer(const char *sdp) {
         ESP_LOGW(TAG, "ice_servers: none — host candidates only");
     }
 
-    // Default-impl config — ipv6_support kept OFF deliberately. When
-    // enabled, the agent gathers IPv6 host candidates; ICE prefers them
-    // for host-host pairing because of higher priority. But on cellular
-    // IPv6 (e.g. T-Mobile 2607:FB90:...), the carrier allows short STUN
-    // binding packets through but drops sustained UDP / larger DTLS
-    // handshake flow. The result is the symptom seen on BR-A044:
-    //   "Connection OK [v6 addr]" → "Start DTLS role as 1" →
-    //   "PEER_DEF: agent_recv timeout" forever, while the parallel
-    //   IPv4 srflx pair shows healthy bidirectional binding traffic
-    //   that libpeer's binary lib never falls back to.
-    // Forcing IPv4-only lets ICE work through host (same LAN) → srflx →
-    // relay in order, all of which carry DTLS reliably on the networks
-    // we've observed. Cost: same-LAN IPv6 path is unused, but its
-    // latency advantage was hypothetical anyway.
+    // ipv6_support ON: required for same-LAN pairing on iOS 18 Personal
+    // Hotspot, which isolates clients at the IPv4 layer (per Apple dev
+    // forums, clients must use IPv6 link-local to talk to each other).
+    // With v6 gathering off, the chip and the laptop sit on the same
+    // SSID but can't pair.
+    //
+    // Known cost: cellular IPv6 (T-Mobile 2607:FB90:... observed on
+    // BR-A044) lets STUN binding through but drops sustained UDP /
+    // larger DTLS handshake flow. ICE locks onto the higher-priority
+    // v6 pair and libpeer's binary lib doesn't re-evaluate when DTLS
+    // stalls. Symptom: "Connection OK [v6]" → "Start DTLS role as 1"
+    // → "agent_recv timeout" forever, IPv4 srflx pair healthy in
+    // parallel but never selected. Use non-cellular wifi or TURN for
+    // now; principled fix is filtering global v6 (2000::/3) out of
+    // the offer while keeping link-local (fe80::/10).
     static esp_peer_default_cfg_t default_cfg = {
-        .ipv6_support = false,
+        .ipv6_support = true,
     };
 
     esp_peer_cfg_t cfg = {
