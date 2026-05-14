@@ -241,20 +241,28 @@ CAM_OP_STOP    = 0x04
 # so the user can SSH / re-install / pick a different image.
 _camera_available = False
 _camera_import_err = None
+_picamera2_available = False
 if CAMERA_ENABLED is not False:
     try:
-        from picamera2 import Picamera2  # type: ignore
         from aiortc import (  # type: ignore
             RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
             RTCConfiguration, RTCIceServer, MediaStreamTrack,
         )
         from aiortc.rtcrtpsender import RTCRtpSender  # type: ignore
+        from aiortc.contrib.media import MediaPlayer  # type: ignore
         import aiohttp  # type: ignore
         import av  # type: ignore
         import fractions
         _camera_available = True
     except Exception as _e:  # noqa: BLE001 — see comment above
         _camera_import_err = f"{type(_e).__name__}: {_e}"
+    # picamera2 is optional — only CSI cams need it. USB UVC cams use the
+    # V4L2 path via MediaPlayer below. Absence here is fine.
+    try:
+        from picamera2 import Picamera2  # type: ignore
+        _picamera2_available = True
+    except Exception:
+        pass
 
 logging.basicConfig(format="%(asctime)s %(message)s", level=logging.INFO)
 log = logging.getLogger("pi_robot")
@@ -892,23 +900,69 @@ def _set_cam_status(**fields) -> None:
     _cam_send({"t": "status", "d": _cam_status})
 
 
+def _detect_camera_source() -> "tuple[str, str] | None":
+    """Returns ('csi', '') for a libcamera-visible Pi Camera, ('usb', '/dev/videoN')
+    for a UVC webcam, or None if neither is present. CSI is preferred when both
+    exist — it's the canonical Pi camera and skips an encode round-trip."""
+    if _picamera2_available:
+        try:
+            if Picamera2.global_camera_info():
+                return ("csi", "")
+        except Exception:
+            pass
+    # V4L2 enumeration. The Pi exposes many /dev/video* nodes for hardware
+    # codec / ISP / decoder blocks; only UVC webcams are capture sources.
+    # Filter by the kernel driver name in sysfs.
+    try:
+        from pathlib import Path as _Path
+        for entry in sorted(_Path("/sys/class/video4linux").iterdir()):
+            name_file = entry / "name"
+            if not name_file.exists():
+                continue
+            name = name_file.read_text().strip().lower()
+            if any(s in name for s in ("codec", "isp", "hevc-dec", "bcm2835")):
+                continue
+            dev_path = f"/dev/{entry.name}"
+            if _Path(dev_path).exists():
+                return ("usb", dev_path)
+    except FileNotFoundError:
+        pass
+    return None
+
+
+def _open_camera_track():
+    """Returns a MediaStreamTrack for whatever camera is detected. Factory owns
+    the backend decision so callers stay agnostic."""
+    source = _detect_camera_source()
+    if source is None:
+        raise RuntimeError(
+            "no camera detected — picamera2 found no CSI cameras and no UVC "
+            "capture device under /dev/video*. Check ribbon seating + CAM port "
+            "for CSI, or `lsusb` + `v4l2-ctl --list-devices` for USB."
+        )
+    backend, path = source
+    if backend == "csi":
+        return _PiCameraTrack()
+    # V4L2 / UVC path. MJPG keeps CPU low on the Pi — the cam encodes in HW,
+    # libav decodes to raw frames for aiortc's VP8/H264 encoder.
+    player = MediaPlayer(path, format="v4l2", options={
+        "video_size": "640x480",
+        "framerate": "15",
+        "input_format": "mjpeg",
+    })
+    track = player.video
+    # Pin the player to the track so GC of the latter shuts the former down.
+    # Without this, MediaPlayer's reader thread can outlive teardown.
+    track._player = player  # type: ignore[attr-defined]
+    return track
+
+
 class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type: ignore
     """640x480 @ 15fps — CPU-reasonable on a Pi 4, bandwidth-safe for WebRTC over WiFi."""
     kind = "video"
 
     def __init__(self) -> None:
         super().__init__()
-        # Probe libcamera first — Picamera2() raises "list index out of range"
-        # deep inside if no camera is detected, which is unhelpful to the user.
-        # Surface a clear "no camera detected" instead so the actual cause
-        # (loose ribbon, wrong CAM port, libcamera not seeing hardware) gets
-        # reported rather than a cryptic internal error.
-        cams = Picamera2.global_camera_info()
-        if not cams:
-            raise RuntimeError(
-                "no camera detected by libcamera — check ribbon cable seating, "
-                "CAM port (Pi 5 has CAM0/CAM1), and `libcamera-hello --list-cameras`"
-            )
         self.camera = Picamera2()
         cfg = self.camera.create_video_configuration(
             main={"size": (640, 480), "format": "RGB888"},
@@ -1266,7 +1320,7 @@ async def _cam_handle_message(msg: dict) -> None:
                 await _cam_pc.close()
             ice_servers = await _cam_fetch_ice_servers()
             _cam_pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
-            _cam_track = _PiCameraTrack()
+            _cam_track = _open_camera_track()
             _cam_pc.addTrack(_cam_track)
 
             @_cam_pc.on("iceconnectionstatechange")
@@ -1593,9 +1647,11 @@ async def main() -> None:
             bytearray(),
             GATTAttributePermissions.readable,
         )
-        log.info("camera: %s (stack %s)",
+        _src = _detect_camera_source() if _camera_available else None
+        log.info("camera: %s (stack %s, hw %s)",
                  "ready" if _camera_available else "install-on-demand",
-                 "loaded" if _camera_available else "not installed")
+                 "loaded" if _camera_available else "not installed",
+                 f"{_src[0]}@{_src[1] or 'libcamera'}" if _src else "none")
     else:
         log.info("camera: disabled in pi-robot.conf")
 

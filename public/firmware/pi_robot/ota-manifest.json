@@ -92,5 +92,5 @@
     "/usr/local/bin/ensure-sudo-tty-nopasswd.sh"
   ],
   "reboot": true,
-  "commit": "977bb7f"
+  "commit": "3ab037a"
 }
