@@ -901,13 +901,15 @@ def _set_cam_status(**fields) -> None:
 
 
 def _detect_camera_source() -> "tuple[str, str] | None":
-    """Returns ('csi', '') for a libcamera-visible Pi Camera, ('usb', '/dev/videoN')
-    for a UVC webcam, or None if neither is present. CSI is preferred when both
-    exist — it's the canonical Pi camera and skips an encode round-trip."""
+    """Returns ('picamera2', '') when libcamera sees a camera (CSI ribbon or
+    UVC webcam on libcamera ≥ 0.7's uvcvideo pipeline handler), ('v4l2',
+    '/dev/videoN') for direct V4L2 fallback on older libcamera builds, or
+    None if neither is present. picamera2 is preferred — it handles both
+    hardware classes through one well-tested path."""
     if _picamera2_available:
         try:
             if Picamera2.global_camera_info():
-                return ("csi", "")
+                return ("picamera2", "")
         except Exception:
             pass
     # V4L2 enumeration. The Pi exposes many /dev/video* nodes for hardware
@@ -924,7 +926,7 @@ def _detect_camera_source() -> "tuple[str, str] | None":
                 continue
             dev_path = f"/dev/{entry.name}"
             if _Path(dev_path).exists():
-                return ("usb", dev_path)
+                return ("v4l2", dev_path)
     except FileNotFoundError:
         pass
     return None
@@ -941,7 +943,7 @@ def _open_camera_track():
             "for CSI, or `lsusb` + `v4l2-ctl --list-devices` for USB."
         )
     backend, path = source
-    if backend == "csi":
+    if backend == "picamera2":
         return _PiCameraTrack()
     # V4L2 / UVC path. MJPG keeps CPU low on the Pi — the cam encodes in HW,
     # libav decodes to raw frames for aiortc's VP8/H264 encoder.
