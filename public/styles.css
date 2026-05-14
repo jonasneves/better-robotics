@@ -1327,6 +1327,82 @@ details.tray.has-alert > summary::after {
 }
 .motor-sliders input[type="range"] { flex: 1; accent-color: var(--accent); }
 
+/* Motion cap — pose control card with mode tabs, pose fields, and wheel config. */
+.motion-mode-seg { margin: 12px 0 8px; }
+.motion-ctrl-seg { margin: 10px 0 6px; }
+.motion-pose-fields {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.motion-pose-fields label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.motion-pose-fields input {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--ink);
+}
+.motion-go-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.motion-status-pill {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--ink-muted);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+}
+.motion-wheel-config {
+  margin-top: 10px;
+  font-size: 13px;
+}
+.motion-wheel-config summary {
+  cursor: pointer;
+  color: var(--ink-muted);
+  padding: 4px 0;
+}
+.motion-wheel-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0 4px;
+}
+.motion-wheel-fields label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.motion-wheel-fields input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--ink);
+}
+.motion-cv-fix { margin-top: 8px; }
+.motion-cv-stale { opacity: 0.5; }
+
 /* Level slider — single-axis brightness control (flash LED today). Sits
    in the cap-section action slot, where toggle/signed-pair would put a
    button. Width keeps it compact in the right column. */

@@ -39,23 +39,20 @@ function gamepadTick() {
   }
   const id = pickGamepadTarget();
   if (id) {
-    const ly = pad.axes[1] ?? 0;  // left stick Y (down = +1)
-    const ry = pad.axes[3] ?? 0;  // right stick Y
-    const toMotor = (v) => {
-      const dz = Math.abs(v) < GAMEPAD_DEADZONE ? 0 : v;
-      return Math.round(-dz * 100);  // invert so stick-up = forward
-    };
-    const l = toMotor(ly);
-    const r = toMotor(ry);
+    const ly = pad.axes[1] ?? 0;  // left stick Y  (down = +1): forward
+    const rx = pad.axes[2] ?? 0;  // right stick X (right = +1): turn
+    const dz = (v) => Math.abs(v) < GAMEPAD_DEADZONE ? 0 : v;
+    const forward = Math.round(-dz(ly) * 100);  // up = +forward
+    const turn    = Math.round( dz(rx) * 100);  // right = +turn
     // Pi has a 500 ms motor watchdog — held-stick must keep refreshing it,
     // so only skip when both current and last frame are at-rest (0,0).
     // The transition to (0,0) still writes once so motors stop immediately
     // rather than waiting for the watchdog.
-    const atRest = l === 0 && r === 0 && _lastSent.l === 0 && _lastSent.r === 0
-      && id === _lastSent.id;
+    const atRest = forward === 0 && turn === 0
+      && _lastSent.l === 0 && _lastSent.r === 0 && id === _lastSent.id;
     if (!atRest) {
-      sendPairById(id, "motors", l, r);
-      _lastSent = { id, l, r };
+      sendPairById(id, "motors", forward, turn);
+      _lastSent = { id, l: forward, r: turn };
     }
   }
   renderGamepadBadge(id, pad.id);

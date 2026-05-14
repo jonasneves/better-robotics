@@ -10,6 +10,7 @@ import {
   CAMERA_SIGNAL_CHAR_UUID, CAMERA_STATUS_CHAR_UUID,
   OPS_CHAR_UUID,
   SNAPSHOT_REQUEST_CHAR_UUID, SNAPSHOT_DATA_CHAR_UUID,
+  MOTION_GOAL_CHAR_UUID, MOTION_POSE_CHAR_UUID, MOTION_STATUS_CHAR_UUID,
 } from "./uuids.js";
 
 // Chunked-frame protocol shared by OTA + camera signaling: begin carries
@@ -27,6 +28,7 @@ export const UUIDS_BY_CAP = {
   camera: { signal: CAMERA_SIGNAL_CHAR_UUID, status: CAMERA_STATUS_CHAR_UUID },
   ops:    OPS_CHAR_UUID,
   snapshot: { request: SNAPSHOT_REQUEST_CHAR_UUID, data: SNAPSHOT_DATA_CHAR_UUID },
+  motion: { goal: MOTION_GOAL_CHAR_UUID, pose: MOTION_POSE_CHAR_UUID, status: MOTION_STATUS_CHAR_UUID },
 };
 
 export const decodeJson = (dv) => {

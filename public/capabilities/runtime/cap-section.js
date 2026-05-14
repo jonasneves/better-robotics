@@ -12,7 +12,7 @@ import { escapeHtml } from "../../dom.js";
 // v3 — bumped when the default-open shape changed: motors now defaults
 // to open (it's the daily-driver verb); other caps stay collapsed.
 const STORE_KEY = "better-robotics:cap-open:v3";
-const DEFAULTS = { motors: true };
+const DEFAULTS = { motors: true, motion: true };
 
 let _state = null;
 function load() {
