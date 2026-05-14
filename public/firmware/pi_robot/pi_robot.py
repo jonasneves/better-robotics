@@ -960,14 +960,16 @@ def _open_camera_track():
 
 
 class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type: ignore
-    """640x480 @ 15fps — CPU-reasonable on a Pi 4, bandwidth-safe for WebRTC over WiFi."""
+    """1280x960 @ 15fps — matches common UVC cams' native resolution so
+    libcamera's uvcvideo pipeline passes through without a center-crop.
+    Bandwidth-safe over WiFi via VP8/H264 encode."""
     kind = "video"
 
     def __init__(self) -> None:
         super().__init__()
         self.camera = Picamera2()
         cfg = self.camera.create_video_configuration(
-            main={"size": (640, 480), "format": "RGB888"},
+            main={"size": (1280, 960), "format": "RGB888"},
         )
         self.camera.configure(cfg)
         self.camera.start()
@@ -976,11 +978,14 @@ class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type
 
     async def recv(self):
         arr = self.camera.capture_array("main")
-        # Picamera2's "RGB888" config actually delivers bytes in BGR memory
-        # order (libcamera convention — name follows little-endian byte
-        # arrangement, not pixel order). Tell PyAV the truth so red and blue
-        # don't swap downstream — symptom is purple skin / blue oranges.
-        frame = av.VideoFrame.from_ndarray(arr, format="bgr24")
+        # libcamera's "RGB888" config name describes the FORMAT, not the
+        # memory order — the uvcvideo pipeline (USB cams) hands back bytes
+        # in true R,G,B order. (Historically the CSI/vc4 pipeline delivered
+        # BGR under the same config name, which we worked around by lying
+        # to PyAV; that workaround now breaks USB cams — symptom is purple
+        # skin / blue oranges. We optimize for USB since that's what
+        # ships on most boards we encounter.)
+        frame = av.VideoFrame.from_ndarray(arr, format="rgb24")
         self._pts += 1
         frame.pts = self._pts
         frame.time_base = self._time_base
