@@ -92,7 +92,9 @@ Each transport has a distinct job:
 
 - **BLE** — control plane. Low latency, proximity-authenticated, lossy. Anything that sets motor speed, toggles an LED, commits state.
 - **Typed ops over BLE** — structured verbs on a single characteristic (`get-log`, `get-config`, `restart-service`, `wifi-scan`, `wifi-join`). Each verb is a deliberate, reviewable decision instead of a real-shell transport.
-- **WebRTC** — phone ↔ desktop. Pair-ceremony authenticated (Ed25519 pubkey + signed pair-request). Carries camera frames, ask-human responses, robot-command relays.
+- **WebRTC** — two distinct flows.
+  - *Phone ↔ desktop*: signaled via `wss://signal.neevs.io` (cross-network — operator may not be physically near the phone). Pair-ceremony authenticated (Ed25519 pubkey + signed pair-request). Carries camera frames, ask-human responses, robot-command relays.
+  - *Robot ↔ desktop* (Pi or ESP32): signaled over the BLE `SIGNAL` characteristic — no internet rendezvous, no Mixed-Content/PNA gate. ESP32 handles signaling in-firmware; Pi forwards the offer to a local aiortc daemon (`pi_robot_rtc.py`) over a Unix socket and chunks the answer back via BLE notify. BLE pair = signal = auth. Carries OTA bundles, log tail, PTY shell (Pi), and camera video (BLE-signaled `camera-signal` char on Pi).
 - **Wifi-presence** — Pi exposes `<name>.local:81/health` (pi_robot_health.py); dashboard probes it for the "on wifi" badge + service-crash detection. ESP32 retired its HTTP server in Phase 2.H — its presence shows up only when BLE-paired (wifi-status notify). No internet rendezvous for robot presence (signal.neevs.io stays for cross-network phone-pair only).
 - **USB-CDC** — recovery plane. Last-resort serial console, runs as its own systemd unit so a `pi-robot.service` crash doesn't take recovery with it. Bounded by physical access.
 
