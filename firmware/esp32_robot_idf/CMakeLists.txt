@@ -34,6 +34,12 @@ if(EXISTS "${MANAGED_COMPONENTS}" AND EXISTS "${PATCH_DIR}")
     endforeach()
 endif()
 
+list(APPEND EXTRA_COMPONENT_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/pid"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/sensors"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/complementary"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/kalman")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 project(esp32_robot)

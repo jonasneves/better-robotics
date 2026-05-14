@@ -22,6 +22,10 @@ export const SNAPSHOT_DATA_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da1";
 export const FLASH_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da3";
 export const PIN_CONFIG_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da4";
 export const SIGNAL_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da5";
+export const BALANCE_CMD_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da6";
+export const BALANCE_PID_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da7";
+export const BALANCE_STATE_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da8";
+export const BALANCE_TARGET_CHAR_UUID = "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da9";
 
 // heartbeat_service
 export const HEARTBEAT_SVC_UUID = "b6e8d5f3-2c9d-4bba-ae5e-6f9b8c7d5eb0";

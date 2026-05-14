@@ -23,6 +23,7 @@ idf_component_register(
         "telemetry.c"
         "webrtc_peer.c"
         "http_stream.c"
+        "balance.c"
     INCLUDE_DIRS
         "."
     PRIV_REQUIRES
@@ -47,4 +48,7 @@ idf_component_register(
         esp_timer
         # JSON parsing (cJSON via ESP-IDF's json component)
         json
+        # Balance bot packages
+        pid
+        sensors
 )

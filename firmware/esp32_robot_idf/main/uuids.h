@@ -23,6 +23,10 @@
 #define FLASH_CHAR_UUID                  "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da3"
 #define PIN_CONFIG_CHAR_UUID             "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da4"
 #define SIGNAL_CHAR_UUID                 "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da5"
+#define BALANCE_CMD_CHAR_UUID            "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da6"
+#define BALANCE_PID_CHAR_UUID            "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da7"
+#define BALANCE_STATE_CHAR_UUID          "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da8"
+#define BALANCE_TARGET_CHAR_UUID         "a5f7c4d2-1b8e-4b9a-9c3d-5e8a7b6c4da9"
 
 // heartbeat_service
 #define HEARTBEAT_SVC_UUID               "b6e8d5f3-2c9d-4bba-ae5e-6f9b8c7d5eb0"

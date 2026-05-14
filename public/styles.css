@@ -1351,6 +1351,59 @@ details.tray.has-alert > summary::after {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Balance bot — PID tuning + I-dump + goto sections inside the cap-body. */
+.balance-pid-section,
+.balance-goto-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-default);
+}
+.balance-pid-row,
+.balance-goto-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.balance-pid-row label,
+.balance-goto-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.balance-pid-input,
+.balance-goto-input {
+  width: 72px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--ink);
+  text-align: right;
+}
+.balance-pid-input:focus,
+.balance-goto-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.balance-idump-row {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--ink-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.balance-goto-section .meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
 /* Segmented control — Apple HIG's recommendation for 2–4 mutually
    exclusive options. Recessed track inside the surrounding --surface;
    the active segment rises to --surface with a subtle ring. macOS-

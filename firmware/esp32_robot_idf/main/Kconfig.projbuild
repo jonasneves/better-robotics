@@ -1,0 +1,43 @@
+menu "Balance Bot"
+
+    config BALANCE_BOT_ENABLED
+        bool "Enable balance bot (MPU6050 + PID)"
+        default n
+        help
+            Adds IMU polling task, balance PID loop, and four BLE
+            characteristics: BALANCE_CMD, BALANCE_PID, BALANCE_STATE,
+            BALANCE_TARGET. The MOTOR_CHAR remains for status reads but
+            the balance loop owns the actuators. Raw motor writes are
+            overridden immediately by the 100 Hz control task.
+
+    config BALANCE_BOT_I2C_PORT
+        int "I2C port number (0 or 1)"
+        depends on BALANCE_BOT_ENABLED
+        default 0
+
+    config BALANCE_BOT_I2C_SDA
+        int "MPU6050 SDA GPIO"
+        depends on BALANCE_BOT_ENABLED
+        default 21
+
+    config BALANCE_BOT_I2C_SCL
+        int "MPU6050 SCL GPIO"
+        depends on BALANCE_BOT_ENABLED
+        default 22
+
+    config BALANCE_BOT_IMU_ADDR
+        hex "MPU6050 I2C address"
+        depends on BALANCE_BOT_ENABLED
+        default 0x68
+        help
+            0x68 when AD0 pin is LOW (default). 0x69 when AD0 is HIGH.
+
+    config BALANCE_BOT_IMU_PITCH_INVERT
+        bool "Invert pitch sign"
+        depends on BALANCE_BOT_ENABLED
+        default n
+        help
+            Enable if the robot leans forward but the pitch angle reads
+            negative. Depends on how the MPU6050 is mounted on the frame.
+
+endmenu

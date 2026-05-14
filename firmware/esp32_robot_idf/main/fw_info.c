@@ -9,6 +9,9 @@
 #include "flash.h"
 #include "led.h"
 #include "motors.h"
+#if CONFIG_BALANCE_BOT_ENABLED
+#include "balance.h"
+#endif
 
 static const char *TAG = "fw_info";
 
@@ -43,6 +46,23 @@ void fw_info_init(const pin_config_t *pins) {
         "%s{\"name\":\"wifi\",\"type\":\"wifi-scan\"}", first ? "" : ",");
     first = false;
 
+#if CONFIG_BALANCE_BOT_ENABLED
+    if (balance_enabled()) {
+        // Balance bot: advertise "balance-bot" instead of raw motor access.
+        // The four BALANCE_* characteristics handle control; MOTOR_CHAR
+        // stays in the GATT table for status reads but isn't a user-facing cap.
+        o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,
+            ",{\"name\":\"balance-bot\",\"type\":\"balance-bot\"}");
+    } else if (motors_enabled()) {
+        // IMU init failed — degrade gracefully to plain motor control.
+        o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,
+            ",{\"name\":\"motors\",\"type\":\"signed-pair\",\"range\":[-100,100],"
+            "\"pins\":{\"left\":{\"forward\":%d,\"backward\":%d},"
+            "\"right\":{\"forward\":%d,\"backward\":%d}}}",
+            pins->motor_l_fwd, pins->motor_l_bwd,
+            pins->motor_r_fwd, pins->motor_r_bwd);
+    }
+#else
     if (motors_enabled()) {
         o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,
             ",{\"name\":\"motors\",\"type\":\"signed-pair\",\"range\":[-100,100],"
@@ -51,6 +71,7 @@ void fw_info_init(const pin_config_t *pins) {
             pins->motor_l_fwd, pins->motor_l_bwd,
             pins->motor_r_fwd, pins->motor_r_bwd);
     }
+#endif
     if (camera_present()) {
         o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,
             ",{\"name\":\"camera\",\"type\":\"mjpeg-stream\"}");

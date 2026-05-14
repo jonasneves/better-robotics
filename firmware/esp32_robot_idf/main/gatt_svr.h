@@ -22,6 +22,11 @@ void gatt_svr_notify_ota_status(void);
 void gatt_svr_notify_telemetry(void);
 void gatt_svr_notify_fw_info(void);
 
+#if CONFIG_BALANCE_BOT_ENABLED
+void gatt_svr_notify_balance_pid(void);
+void gatt_svr_notify_balance_state(void);
+#endif
+
 // Push a snapshot frame to the active central. Custom-payload notify
 // (not a stored-value notify) — wraps ble_gatts_notify_custom. No-op if
 // no central is connected. The snapshot task drives this directly with

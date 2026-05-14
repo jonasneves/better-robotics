@@ -4,6 +4,9 @@
 #include "esp_mac.h"
 #include "nvs_flash.h"
 
+#if CONFIG_BALANCE_BOT_ENABLED
+#include "balance.h"
+#endif
 #include "ble_host.h"
 #include "camera.h"
 #include "flash.h"
@@ -61,6 +64,11 @@ void app_main(void) {
     led_init(pins.led);
     flash_init(pins.flash);
     motors_init(&pins);
+
+#if CONFIG_BALANCE_BOT_ENABLED
+    // Must run before fw_info_init so balance_enabled() reflects IMU status.
+    balance_init();
+#endif
 
     // fw-info reflects the cap surface; built once after caps are up.
     // Changes (camera profile, pin config) reboot, so a fresh boot

@@ -34,6 +34,12 @@ main/
   telemetry.{c,h}   — uptime / heap / IP, every 10s
   webrtc_peer.{c,h} — wss signaling, esp_peer, ota + video + control data channels
   restart_util.{c,h} — deferred restart (used by pin/cam/ota commit paths)
+  balance.{c,h}      — 100 Hz FreeRTOS balance task (core 1); PID + lean/turn + I-dump timer
+  Kconfig.projbuild  — CONFIG_BALANCE_BOT_ENABLED + I2C pin / address / invert flags
+
+packages/ (EXTRA_COMPONENT_DIRS)
+  pid/               — generic discrete PID with anti-windup (no platform deps)
+  sensors/           — MPU6050 I2C driver, complementary filter → pitch angle
 ```
 
 ## Partition table

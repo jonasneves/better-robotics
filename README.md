@@ -81,6 +81,7 @@ Commit and push. CI rebuilds firmware artifacts on `firmware/**` changes and com
 ```
 firmware/esp32_robot_idf/   ESP32 firmware (ESP-IDF)
 firmware/pi_robot/          Raspberry Pi firmware (Python + bless)
+packages/                   Reusable ESP-IDF components (pid, sensors, filters)
 public/                     Dashboard — static ES modules, no build step
 tests/                      Pure-function unit tests · make smoke
 .claude/                    Agent + project context

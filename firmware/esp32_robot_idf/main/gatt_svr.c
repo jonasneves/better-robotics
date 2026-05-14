@@ -20,6 +20,9 @@
 #include "uuids.h"
 #include "webrtc_peer.h"
 #include "wifi_sta.h"
+#if CONFIG_BALANCE_BOT_ENABLED
+#include "balance.h"
+#endif
 
 static const char *TAG = "gatt_svr";
 
@@ -38,6 +41,14 @@ static ble_uuid128_t s_snapshot_data_uuid;
 static ble_uuid128_t s_telemetry_uuid;
 static ble_uuid128_t s_fw_info_uuid;
 static ble_uuid128_t s_signal_uuid;
+#if CONFIG_BALANCE_BOT_ENABLED
+static ble_uuid128_t s_balance_cmd_uuid;
+static ble_uuid128_t s_balance_pid_uuid;
+static ble_uuid128_t s_balance_state_uuid;
+static ble_uuid128_t s_balance_target_uuid;
+static uint16_t s_balance_pid_handle;
+static uint16_t s_balance_state_handle;
+#endif
 
 static uint16_t s_led_handle;
 static uint16_t s_flash_handle;
@@ -251,6 +262,59 @@ static int signal_access(uint16_t conn, uint16_t attr,
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+#if CONFIG_BALANCE_BOT_ENABLED
+static int balance_cmd_access(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint8_t buf[2] = {0};
+        uint16_t copied = 0;
+        ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &copied);
+        if (copied >= 2) balance_handle_cmd((int8_t)buf[0], (int8_t)buf[1]);
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static int balance_pid_access(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint8_t buf[128];
+        uint16_t copied = 0;
+        ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &copied);
+        if (copied > 0) balance_handle_pid_write(buf, copied);
+        return 0;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        const char *json = balance_pid_json();
+        return os_mbuf_append(ctxt->om, json, strlen(json)) == 0
+                   ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static int balance_state_access(uint16_t conn, uint16_t attr,
+                                struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        const char *json = balance_state_json();
+        return os_mbuf_append(ctxt->om, json, strlen(json)) == 0
+                   ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static int balance_target_access(uint16_t conn, uint16_t attr,
+                                 struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint8_t buf[128];
+        uint16_t copied = 0;
+        ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &copied);
+        if (copied > 0) balance_handle_target_write(buf, copied);
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+#endif
+
 static const struct ble_gatt_chr_def s_chars[] = {
     {
         .uuid = &s_led_uuid.u,
@@ -334,6 +398,30 @@ static const struct ble_gatt_chr_def s_chars[] = {
         .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
         .val_handle = &s_signal_handle,
     },
+#if CONFIG_BALANCE_BOT_ENABLED
+    {
+        .uuid      = &s_balance_cmd_uuid.u,
+        .access_cb = balance_cmd_access,
+        .flags     = BLE_GATT_CHR_F_WRITE,
+    },
+    {
+        .uuid       = &s_balance_pid_uuid.u,
+        .access_cb  = balance_pid_access,
+        .flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+        .val_handle = &s_balance_pid_handle,
+    },
+    {
+        .uuid       = &s_balance_state_uuid.u,
+        .access_cb  = balance_state_access,
+        .flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+        .val_handle = &s_balance_state_handle,
+    },
+    {
+        .uuid      = &s_balance_target_uuid.u,
+        .access_cb = balance_target_access,
+        .flags     = BLE_GATT_CHR_F_WRITE,
+    },
+#endif
     { 0 },
 };
 
@@ -362,6 +450,12 @@ void gatt_svr_init(void) {
     parse_uuid128(TELEMETRY_CHAR_UUID,        &s_telemetry_uuid);
     parse_uuid128(FW_INFO_CHAR_UUID,          &s_fw_info_uuid);
     parse_uuid128(SIGNAL_CHAR_UUID,           &s_signal_uuid);
+#if CONFIG_BALANCE_BOT_ENABLED
+    parse_uuid128(BALANCE_CMD_CHAR_UUID,    &s_balance_cmd_uuid);
+    parse_uuid128(BALANCE_PID_CHAR_UUID,    &s_balance_pid_uuid);
+    parse_uuid128(BALANCE_STATE_CHAR_UUID,  &s_balance_state_uuid);
+    parse_uuid128(BALANCE_TARGET_CHAR_UUID, &s_balance_target_uuid);
+#endif
 
     int rc = ble_gatts_count_cfg(s_svcs);
     if (rc != 0) { ESP_LOGE(TAG, "count_cfg rc=%d", rc); return; }
@@ -378,6 +472,11 @@ void gatt_svr_notify_wifi_status(void) { if (s_wifi_status_handle) ble_gatts_chr
 void gatt_svr_notify_ota_status(void)  { if (s_ota_status_handle)  ble_gatts_chr_updated(s_ota_status_handle); }
 void gatt_svr_notify_telemetry(void)   { if (s_telemetry_handle)   ble_gatts_chr_updated(s_telemetry_handle); }
 void gatt_svr_notify_fw_info(void)     { if (s_fw_info_handle)     ble_gatts_chr_updated(s_fw_info_handle); }
+
+#if CONFIG_BALANCE_BOT_ENABLED
+void gatt_svr_notify_balance_pid(void)   { if (s_balance_pid_handle)   ble_gatts_chr_updated(s_balance_pid_handle); }
+void gatt_svr_notify_balance_state(void) { if (s_balance_state_handle) ble_gatts_chr_updated(s_balance_state_handle); }
+#endif
 
 void gatt_svr_snapshot_send(const uint8_t *buf, size_t len) {
     uint16_t conn = ble_host_active_conn();

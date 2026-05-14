@@ -1,0 +1,57 @@
+menu "IMU filter"
+    depends on BALANCE_BOT_ENABLED
+
+    choice BALANCE_BOT_IMU_FILTER
+        prompt "Pitch filter"
+        default BALANCE_BOT_IMU_FILTER_COMPLEMENTARY
+
+        config BALANCE_BOT_IMU_FILTER_COMPLEMENTARY
+            bool "Complementary filter"
+            help
+                Fixed-ratio blend of gyro integration and accel-derived angle.
+                Simple, zero-startup-cost, no tuning required.
+
+        config BALANCE_BOT_IMU_FILTER_KALMAN
+            bool "Kalman filter"
+            help
+                2-state discrete Kalman filter (angle + gyro-bias).
+                Lower phase lag and online bias correction vs complementary.
+                Requires tuning Q and R to match your hardware noise.
+    endchoice
+
+    config BALANCE_BOT_IMU_COMPLEMENTARY_ALPHA_PCT
+        int "Alpha (x100, e.g. 98 = 0.98)"
+        default 98
+        range 90 99
+        depends on BALANCE_BOT_IMU_FILTER_COMPLEMENTARY
+        help
+            Gyro trust ratio. At 100 Hz, 98 means accel corrects ~2% per tick.
+            Lower values follow the accel faster but pass more accel noise.
+
+    config BALANCE_BOT_IMU_KALMAN_Q_ANGLE_MILLI
+        int "Q_angle (x1000, e.g. 1 = 0.001)"
+        default 1
+        range 1 1000
+        depends on BALANCE_BOT_IMU_FILTER_KALMAN
+        help
+            Process noise for angle. Lower = smoother but slower to track
+            true angle changes.
+
+    config BALANCE_BOT_IMU_KALMAN_Q_BIAS_MILLI
+        int "Q_bias (x1000, e.g. 3 = 0.003)"
+        default 3
+        range 1 100
+        depends on BALANCE_BOT_IMU_FILTER_KALMAN
+        help
+            Process noise for gyro bias. Keep small — bias drifts slowly.
+
+    config BALANCE_BOT_IMU_KALMAN_R_MEASURE_MILLI
+        int "R_measure (x1000, e.g. 30 = 0.030)"
+        default 30
+        range 1 1000
+        depends on BALANCE_BOT_IMU_FILTER_KALMAN
+        help
+            Measurement noise variance for accel angle. Increase if your
+            accel is noisy or the bot vibrates significantly.
+
+endmenu

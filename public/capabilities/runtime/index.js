@@ -7,6 +7,7 @@ import { makeWifiScanCap          } from "./wifi-scan.js";
 import { makeWebrtcInstallableCap } from "./webrtc-installable.js";
 import { makeMjpegStreamCap       } from "./mjpeg-stream.js";
 import { makeBleSnapshotCap       } from "./ble-snapshot.js";
+import { makeBalanceBotCap        } from "./balance-bot.js";
 import { setRender as setBusRender } from "./render-bus.js";
 
 export const RUNTIMES = {
@@ -18,6 +19,7 @@ export const RUNTIMES = {
   "webrtc-installable":  makeWebrtcInstallableCap,
   "mjpeg-stream":        makeMjpegStreamCap,
   "ble-snapshot":        makeBleSnapshotCap,
+  "balance-bot":         makeBalanceBotCap,
 };
 
 // All runtime caps share render-bus.js for the back-channel to the

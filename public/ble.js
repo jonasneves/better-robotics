@@ -10,6 +10,8 @@ import {
   CAMERA_SIGNAL_CHAR_UUID, CAMERA_STATUS_CHAR_UUID,
   OPS_CHAR_UUID,
   SNAPSHOT_REQUEST_CHAR_UUID, SNAPSHOT_DATA_CHAR_UUID,
+  BALANCE_CMD_CHAR_UUID, BALANCE_PID_CHAR_UUID,
+  BALANCE_STATE_CHAR_UUID, BALANCE_TARGET_CHAR_UUID,
 } from "./uuids.js";
 
 // Chunked-frame protocol shared by OTA + camera signaling: begin carries
@@ -27,6 +29,12 @@ export const UUIDS_BY_CAP = {
   camera: { signal: CAMERA_SIGNAL_CHAR_UUID, status: CAMERA_STATUS_CHAR_UUID },
   ops:    OPS_CHAR_UUID,
   snapshot: { request: SNAPSHOT_REQUEST_CHAR_UUID, data: SNAPSHOT_DATA_CHAR_UUID },
+  "balance-bot": {
+    cmd:    BALANCE_CMD_CHAR_UUID,
+    pid:    BALANCE_PID_CHAR_UUID,
+    state:  BALANCE_STATE_CHAR_UUID,
+    target: BALANCE_TARGET_CHAR_UUID,
+  },
 };
 
 export const decodeJson = (dv) => {
