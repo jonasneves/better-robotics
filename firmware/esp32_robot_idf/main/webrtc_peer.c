@@ -465,17 +465,26 @@ static int on_peer_data(esp_peer_data_frame_t *frame, void *ctx) {
 
 // ── peer connection lifecycle ────────────────────────────────────────────
 
-// Strip TCP and IPv6 candidates from the offer SDP. Two reasons, one shape:
-//   - TCP: esp_peer's ICE agent is UDP-only; TCP candidates trip its parser.
-//   - IPv6 host: libpeer (binary lib) locks on the first STUN-OK pair and
-//     never falls back when DTLS dies. On iPhone hotspot + T-Mobile, both
-//     sides get a global v6 from the carrier's SLAAC; the v6 host↔host pair
-//     binds (Connection OK [2607:FB90:...]) and DTLS immediately times out
-//     (carrier drops sustained UDP), bricking the session. Same trap on any
-//     network where global v6 binding succeeds but DTLS doesn't. Restored
-//     from 3228975 (Apr 30) — lost when 3fa05ce narrowed this to TCP-only.
-//     Chrome doesn't emit fe80:: link-local in offers (privacy default) so
-//     "drop all v6" and "drop only global v6" are equivalent in practice.
+// Strip TCP, IPv6, and srflx candidates from the offer SDP. All three feed
+// the same failure mode: libpeer (esp_peer's binary lib) locks on the first
+// STUN-OK pair and never falls back when DTLS dies. Anything that binds-OK
+// but can't carry DTLS bricks the session.
+//   - TCP: esp_peer's ICE agent is UDP-only; TCP candidates also trip its
+//     parser (LoadProhibited crash observed pre-3228975).
+//   - IPv6 host: cellular IPv6 (T-Mobile 2607:FB90:... observed) binds but
+//     drops sustained DTLS. Original v6 filter from 3228975 (Apr 30); lost
+//     when 3fa05ce narrowed the filter to TCP-only during the libpeer →
+//     esp_peer migration. Chrome doesn't emit fe80:: link-local in offers
+//     by default, so "drop all v6" and "drop global v6" are equivalent.
+//   - srflx: chip-srflx ↔ peer-srflx pair traverses both peers' carrier NATs.
+//     On T-Mobile cellular hotspot the binding completes but DTLS doesn't
+//     (same trap as v6, just over v4). Cost: loses the srflx hole-punch
+//     fast path on cross-network non-cellular pairs — they fall to relay.
+//     Worth the relay tax for the reliability win against any cellular link.
+//
+// What's left: UDP IPv4 host (works on same LAN) and relay (works
+// everywhere via TURN). libpeer can't lock on a trap pair if we don't
+// hand it one.
 static char *filter_sdp_for_chip(const char *sdp) {
     size_t in_len = strlen(sdp);
     char *out = malloc(in_len + 1);
@@ -488,7 +497,7 @@ static char *filter_sdp_for_chip(const char *sdp) {
         size_t line_len = eol ? (size_t)(eol - p + 1) : strlen(p);
         bool drop = false;
         if (strncmp(p, "a=candidate:", 12) == 0) {
-            // a=candidate:<foundation> <component> <proto> <pri> <addr> <port> ...
+            // a=candidate:<foundation> <component> <proto> <pri> <addr> <port> typ <type> ...
             const char *q = p + 12;
             int tok = 0;
             while (q < p + line_len && tok < 2) {
@@ -514,6 +523,23 @@ static char *filter_sdp_for_chip(const char *sdp) {
                 // IPv4 dotted-quad never has ':'; IPv6 always does.
                 if (memchr(q, ':', (size_t)(addr_end - q)) != NULL) {
                     drop = true;
+                } else {
+                    // Walk addr → port → "typ" → type value (3 more fields).
+                    const char *r = addr_end;
+                    for (int i = 0; i < 3; i++) {
+                        while (r < p + line_len && *r == ' ') r++;
+                        while (r < p + line_len && *r != ' ') r++;
+                    }
+                    while (r < p + line_len && *r == ' ') r++;
+                    // r at type value (host / srflx / prflx / relay).
+                    if (r + 5 <= p + line_len
+                        && (r[0] == 's' || r[0] == 'S')
+                        && (r[1] == 'r' || r[1] == 'R')
+                        && (r[2] == 'f' || r[2] == 'F')
+                        && (r[3] == 'l' || r[3] == 'L')
+                        && (r[4] == 'x' || r[4] == 'X')) {
+                        drop = true;
+                    }
                 }
             }
         }
@@ -523,7 +549,7 @@ static char *filter_sdp_for_chip(const char *sdp) {
         p = eol + 1;
     }
     out[o] = 0;
-    if (dropped) ESP_LOGI(TAG, "filtered SDP: dropped %d TCP/IPv6 candidate(s)", dropped);
+    if (dropped) ESP_LOGI(TAG, "filtered SDP: dropped %d TCP/IPv6/srflx candidate(s)", dropped);
     return out;
 }
 
