@@ -1,29 +1,22 @@
 #!/usr/bin/env python3
 """
-pi-robot-rtc — WebRTC peer for one Pi.
+pi-robot-rtc — local aiortc daemon for one Pi.
 
-Two signaling transports run side-by-side:
+Listens on /run/pi-robot-rtc.sock for offers forwarded by pi_robot.py.
+The dashboard writes a chunked SDP offer to the BLE SIGNAL char;
+pi_robot.py (root, owns the GATT server) reassembles and RPCs us
+non-trickle over the Unix socket:
 
-  1. wss://signal.neevs.io/<roomId>/ws — the original. Long-lived
-     WebSocket, room=`pi-rtc-<robotId>`. Survives transient drops via
-     ICE restart. Used for cross-network access (operator + Pi on
-     different networks) and as the fallback when the BLE path is
-     unavailable.
+  request:  {"type": "offer", "sdp": "..."}\\n
+  response: {"type": "answer", "sdp": "..."}\\n   (all candidates inline)
 
-  2. Unix socket /run/pi-robot-rtc.sock — local fallback. pi_robot.py
-     receives BLE-signaled offers (chunked write to SIGNAL_CHAR_UUID),
-     forwards them here over the local socket as one-shot RPC frames:
-       request:  {"type": "offer", "sdp": "..."}\\n
-       response: {"type": "answer", "sdp": "..."}\\n   (non-trickle)
-     pi_robot.py then notifies the answer back to the dashboard over
-     BLE. The dashboard's WebRTC ICE then runs P2P over LAN — no
-     internet rendezvous, no Mixed-Content / PNA exposure.
+pi_robot.py then notifies the answer back over BLE; the dashboard's
+WebRTC ICE then runs P2P over LAN — no internet rendezvous, no
+Mixed-Content / PNA exposure. BLE pair is the auth substrate.
 
-Protocol parity:
-  Wire format matches pairing.js (the phone-pair flow). The Pi plays the
-  "desktop" role (host, answerer); the dashboard plays the "phone" role
-  (offerer). roomId is deterministic — `pi-rtc-<robotId>` — so the
-  dashboard knows where to find each robot without separate signaling.
+This daemon runs as the non-root `robot` user; pi_robot.py runs as
+root and handles filesystem + systemctl. Keeping the aiortc peer at
+user privs is the privilege boundary, not the signaling transport.
 """
 
 import asyncio
@@ -33,7 +26,6 @@ import json
 import logging
 import os
 import pty
-import re
 import signal
 import struct
 import sys
@@ -42,15 +34,13 @@ import termios
 try:
     import aiohttp
     from aiortc import (
-        RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
+        RTCPeerConnection, RTCSessionDescription,
         RTCConfiguration, RTCIceServer,
     )
-    from aiortc.contrib.signaling import object_from_string, object_to_string
 except ImportError as e:
     sys.stderr.write(f"[rtc] missing dependency: {e}. Run `pip install aiortc aiohttp`.\n")
     sys.exit(2)
 
-SIGNAL_WS_URL = "wss://signal.neevs.io"
 LOCAL_SOCK_PATH = "/run/pi-robot-rtc.sock"
 TURN_ENDPOINT = "https://proxy.neevs.io/cloudflare/turn"
 STUN_FALLBACK = [
@@ -84,28 +74,6 @@ async def fetch_ice_servers() -> list:
     except Exception as e:
         LOG.info("turn fetch failed, STUN-only: %s", e)
         return list(STUN_FALLBACK)
-
-
-def device_name() -> str:
-    """BR-XXXX from /proc/cpuinfo serial. Mirrors pi_robot_health."""
-    suffix = None
-    try:
-        with open("/proc/cpuinfo") as f:
-            for line in f:
-                if line.startswith("Serial"):
-                    suffix = line.split(":")[1].strip()[-4:].upper()
-                    break
-    except OSError:
-        pass
-    if not suffix:
-        import socket
-        suffix = socket.gethostname()[-4:].upper().ljust(4, "0")
-    return f"BR-{suffix}"
-
-
-def make_peer_id(role: str) -> str:
-    """`<role>-<6 hex>`. Mirrors pairing.js's makePeerId."""
-    return f"{role}-{os.urandom(3).hex()}"
 
 
 # ── PTY bridge ────────────────────────────────────────────────────────────
@@ -400,119 +368,6 @@ def _wire_logs(channel, bridges):
         bridges.pop(channel.label, None)
 
 
-# ── wss signaling ─────────────────────────────────────────────────────────
-
-class Session:
-    """One peer connection over wss. Recreated on each new dashboard offer
-    (single-peer-at-a-time). ICE trickled back over the same WS."""
-
-    def __init__(self, ws, my_peer_id, room_id):
-        self.ws = ws
-        self.my_peer_id = my_peer_id
-        self.room_id = room_id
-        self.pc = None
-        self.bridges = {}
-
-    async def handle_signal(self, peer_id: str, data: dict):
-        if peer_id == self.my_peer_id:
-            return
-        if not peer_id.startswith("dashboard-") and not peer_id.startswith("phone-"):
-            return
-        if data.get("offer"):
-            await self._on_offer(data["offer"])
-        if data.get("ice"):
-            await self._on_ice(data["ice"])
-
-    async def _on_offer(self, offer_data):
-        if self.pc:
-            await self.pc.close()
-            for b in self.bridges.values():
-                b.dispose()
-            self.bridges.clear()
-        ice_servers = await fetch_ice_servers()
-        self.pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
-
-        @self.pc.on("datachannel")
-        def on_dc(channel):
-            wire_channel(channel, self.bridges)
-
-        @self.pc.on("connectionstatechange")
-        async def on_state():
-            LOG.info("pc state: %s", self.pc.connectionState)
-            if self.pc.connectionState in ("failed", "closed", "disconnected"):
-                for b in self.bridges.values():
-                    b.dispose()
-
-        @self.pc.on("icecandidate")
-        async def on_candidate(candidate):
-            if candidate is None:
-                return
-            ice_dict = {
-                "candidate": candidate.to_sdp() if hasattr(candidate, "to_sdp") else "",
-                "sdpMid": candidate.sdpMid,
-                "sdpMLineIndex": candidate.sdpMLineIndex,
-            }
-            await self._send({"ice": ice_dict})
-
-        await self.pc.setRemoteDescription(
-            RTCSessionDescription(sdp=offer_data["sdp"], type=offer_data["type"])
-        )
-        answer = await self.pc.createAnswer()
-        await self.pc.setLocalDescription(answer)
-        await self._send({"answer": {
-            "sdp": self.pc.localDescription.sdp,
-            "type": self.pc.localDescription.type,
-        }})
-
-    async def _on_ice(self, ice):
-        if not self.pc:
-            return
-        try:
-            cand = parse_candidate(ice.get("candidate", ""))
-            if cand is None:
-                return
-            cand.sdpMid = ice.get("sdpMid")
-            cand.sdpMLineIndex = ice.get("sdpMLineIndex")
-            await self.pc.addIceCandidate(cand)
-        except Exception:
-            LOG.exception("addIceCandidate")
-
-    async def _send(self, data):
-        await self.ws.send_str(json.dumps({
-            "type": "signal",
-            "peer": self.my_peer_id,
-            "data": data,
-        }))
-
-
-_CAND_RE = re.compile(
-    r"candidate:(?P<foundation>\S+) (?P<component>\d+) (?P<protocol>\S+) "
-    r"(?P<priority>\d+) (?P<ip>\S+) (?P<port>\d+) typ (?P<type>\S+)"
-)
-
-
-def parse_candidate(line: str):
-    if not line:
-        return None
-    if line.startswith("candidate:"):
-        s = line
-    else:
-        s = "candidate:" + line.split("candidate:", 1)[-1]
-    m = _CAND_RE.match(s)
-    if not m:
-        return None
-    g = m.groupdict()
-    return RTCIceCandidate(
-        component=int(g["component"]),
-        foundation=g["foundation"],
-        ip=g["ip"],
-        port=int(g["port"]),
-        priority=int(g["priority"]),
-        protocol=g["protocol"],
-        type=g["type"],
-    )
-
-
 # Unix socket signaling. pi_robot.py (root, owns BLE GATT) forwards
 # BLE-signaled offers here as JSON-over-Unix-socket RPC. We answer
 # non-trickle (all candidates inline; aiortc's setLocalDescription waits
@@ -619,60 +474,7 @@ async def run_unix_server():
         await server.serve_forever()
 
 
-# ── wss main loop ────────────────────────────────────────────────────────
-
-async def run_wss():
-    robot_id = device_name()
-    room_id = f"pi-rtc-{robot_id}"
-    my_peer_id = make_peer_id("desktop")
-    url = f"{SIGNAL_WS_URL}/{room_id}/ws"
-    LOG.info("wss: connecting to %s as %s (room %s)", SIGNAL_WS_URL, my_peer_id, room_id)
-
-    backoff = 1
-    async with aiohttp.ClientSession() as http:
-        while True:
-            try:
-                async with http.ws_connect(url, heartbeat=20) as ws:
-                    LOG.info("wss connected")
-                    backoff = 1
-                    session = Session(ws, my_peer_id, room_id)
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            try:
-                                payload = json.loads(msg.data)
-                            except json.JSONDecodeError:
-                                continue
-                            if payload.get("type") == "signal":
-                                await session.handle_signal(
-                                    payload.get("peer", ""),
-                                    payload.get("data", {}),
-                                )
-                            elif payload.get("type") == "state":
-                                # Cached signaling for late-joining peers.
-                                peers = payload.get("peers", {}) or {}
-                                for peer_id, data in peers.items():
-                                    if peer_id == my_peer_id:
-                                        continue
-                                    if not data:
-                                        continue
-                                    if data.get("offer") or data.get("answer"):
-                                        await session.handle_signal(peer_id, data)
-                        elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
-                            break
-                    LOG.info("wss closed")
-            except Exception:
-                LOG.exception("wss session failed")
-            await asyncio.sleep(min(backoff, 30))
-            backoff = min(backoff * 2, 30)
-
-
 # ── entry point ──────────────────────────────────────────────────────────
-
-async def run():
-    # wss has its own reconnect loop so a flapping signal server doesn't
-    # hammer; the Unix server is start-once.
-    await asyncio.gather(run_wss(), run_unix_server())
-
 
 def main():
     logging.basicConfig(
@@ -680,7 +482,7 @@ def main():
         format="%(asctime)s [%(name)s] %(message)s",
     )
     try:
-        asyncio.run(run())
+        asyncio.run(run_unix_server())
     except KeyboardInterrupt:
         pass
 

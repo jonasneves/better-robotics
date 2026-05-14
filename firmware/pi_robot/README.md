@@ -25,7 +25,7 @@ Three services run alongside `pi-robot.service`, each independently restartable:
 
 - **`pi-robot-heartbeat.service`** — minimal always-on BLE advertiser (`heartbeat.py`). Keeps the robot observable when `pi-robot.service` is down: dashboard shows a "firmware-down" banner with the LAN IP and a recovery button. The connection-first invariant — connectivity outlives capabilities.
 - **`pi-robot-health.service`** — stdlib HTTP server on `:81` exposing `GET /health` returning `{ok, type:"pi", robotId, ip, uptime_s, pi_robot_service}`. Pulled by the dashboard's mDNS + cached-IP probe (every 30 s per paired robot). Same recovery convention as heartbeat — its own unit, zero dependency on `pi_robot.py`. avahi-daemon publishes `<hostname>._http._tcp.local` so the probe can resolve `<name>.local` without an internet rendezvous (`/etc/avahi/services/betterrobot.service`).
-- **`pi-robot-rtc.service`** — WebRTC peer (`pi_robot_rtc.py`) signaled via `wss://signal.neevs.io/pi-rtc-<robotId>/ws`. Independent of the BLE-signaled camera path: the BLE path streams Pi Camera frames once paired in-LAN; this service exposes the recovery-tier shell channel reachable across networks. Either path can be used in isolation; they don't share state.
+- **`pi-robot-rtc.service`** — local aiortc daemon (`pi_robot_rtc.py`). Listens on `/run/pi-robot-rtc.sock` for offers forwarded by `pi_robot.py` after the dashboard writes a chunked SDP to the BLE `SIGNAL` characteristic. Runs as non-root `robot`; pi_robot.py (root) shuttles SDP between BLE and the local socket. Owns OTA staging, log tail, and PTY (shell) data channels. No internet rendezvous — BLE pair is the signal substrate.
 
 ## SD-card first boot
 
