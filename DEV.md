@@ -22,6 +22,7 @@ Live on both desktop and phone while `pairing.js` is loaded.
 - `window.lastPairDiagnostic()` — **async**, returns a Promise. Local + remote ICE candidates from this side's most recent pair attempt, plus role/roomId/iceServers, **plus a live `pc.getStats()` snapshot** (candidate-pair states, transport, certificates, dataChannel) and the four pc state strings. Same data `chrome://webrtc-internals/` shows, no privileged-page hop. Resets on each new `hostPairingRoom`/`joinPairingRoom` call. DevTools console auto-awaits the Promise — `await window.lastPairDiagnostic()` from elsewhere.
 - `window.probeNetwork({ timeoutMs })` — runs a unilateral STUN probe on demand and returns `{stunReachable, candidateTypes, publicIp, mdnsObfuscated, candidates, durationMs}`. Stashes the result in `window.lastNetProbe()`.
 - `window.lastNetProbe()` — last `probeNetwork()` result, or `null` if never run.
+- `window.probeIceReachability(iceServers, { timeoutMs })` — per-server reachability + first-hit latency. Returns `[{urls, reachable, latencyMs, types}]`. Pass the array `fetchIceServers()` returns to test the TURN-enabled config a real pair uses.
 
 ## What gets recorded in replay
 

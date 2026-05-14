@@ -93,10 +93,52 @@ export async function probeNetwork({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
 let _last = null;
 export function lastNetProbe() { return _last; }
 
+// Per-server reachability + latency. Runs one short probe per iceServers
+// entry so per-server outcome is attributable — answers "I can reach Google
+// STUN but Cloudflare's TURN is unreachable" vs the aggregate yes/no that
+// probeNetwork() returns. Latency = time from setLocalDescription to the
+// first non-host candidate (srflx for STUN, relay for TURN), the moment
+// the server's role is functionally fulfilled.
+export async function probeIceReachability(iceServers, { timeoutMs = 2500 } = {}) {
+  const out = [];
+  for (const server of iceServers || []) {
+    const ts = performance.now();
+    const pc = new RTCPeerConnection({ iceServers: [server] });
+    pc.createDataChannel("probe");
+    const candidates = [];
+    let firstHitMs = null;
+    const done = new Promise((resolve) => {
+      pc.addEventListener("icecandidate", (e) => {
+        if (!e.candidate) return resolve();
+        const p = parseCandidate(e.candidate);
+        if (!p) return;
+        candidates.push(p);
+        if (firstHitMs === null && (p.type === "srflx" || p.type === "relay")) {
+          firstHitMs = Math.round(performance.now() - ts);
+        }
+      });
+    });
+    try {
+      await pc.setLocalDescription(await pc.createOffer());
+      await Promise.race([done, new Promise((r) => setTimeout(r, timeoutMs))]);
+    } catch { /* gather failure is captured below as reachable=false */ }
+    try { pc.close(); } catch {}
+    const types = [...new Set(candidates.map((c) => c.type).filter(Boolean))];
+    out.push({
+      urls: server.urls,
+      reachable: firstHitMs !== null,
+      latencyMs: firstHitMs,
+      types,
+    });
+  }
+  return out;
+}
+
 if (typeof window !== "undefined") {
   window.probeNetwork = async (opts) => {
     _last = await probeNetwork(opts);
     return _last;
   };
   window.lastNetProbe = lastNetProbe;
+  window.probeIceReachability = probeIceReachability;
 }
