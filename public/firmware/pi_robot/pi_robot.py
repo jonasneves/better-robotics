@@ -1055,7 +1055,11 @@ async def _cam_install() -> None:
         # is unmanaged, so packages install cleanly.
         rc, tail = await _run_install_cmd(
             "pip install",
-            [sys.executable, "-m", "pip", "install", "aiortc", "av"],
+            # aiohttp is used by _cam_fetch_ice_servers for TURN creds —
+            # firstrun installs it, but if firstrun predates that line the
+            # camera path silently won't import. Listing it here makes the
+            # camera-install button self-sufficient.
+            [sys.executable, "-m", "pip", "install", "aiortc", "av", "aiohttp"],
         )
         if rc != 0:
             fail("pip install", rc, tail); return
