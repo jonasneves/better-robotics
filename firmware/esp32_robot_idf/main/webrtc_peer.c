@@ -465,9 +465,17 @@ static int on_peer_data(esp_peer_data_frame_t *frame, void *ctx) {
 
 // ── peer connection lifecycle ────────────────────────────────────────────
 
-// Strip TCP candidates from the offer SDP — chip can only use UDP for ICE.
-// IPv6 stays: lwIP IPv6 is enabled, and v6 host↔host is the fast path on
-// apartment networks where the v4 path goes through a slow centralized NAT.
+// Strip TCP and IPv6 candidates from the offer SDP. Two reasons, one shape:
+//   - TCP: esp_peer's ICE agent is UDP-only; TCP candidates trip its parser.
+//   - IPv6 host: libpeer (binary lib) locks on the first STUN-OK pair and
+//     never falls back when DTLS dies. On iPhone hotspot + T-Mobile, both
+//     sides get a global v6 from the carrier's SLAAC; the v6 host↔host pair
+//     binds (Connection OK [2607:FB90:...]) and DTLS immediately times out
+//     (carrier drops sustained UDP), bricking the session. Same trap on any
+//     network where global v6 binding succeeds but DTLS doesn't. Restored
+//     from 3228975 (Apr 30) — lost when 3fa05ce narrowed this to TCP-only.
+//     Chrome doesn't emit fe80:: link-local in offers (privacy default) so
+//     "drop all v6" and "drop only global v6" are equivalent in practice.
 static char *filter_sdp_for_chip(const char *sdp) {
     size_t in_len = strlen(sdp);
     char *out = malloc(in_len + 1);
@@ -480,6 +488,7 @@ static char *filter_sdp_for_chip(const char *sdp) {
         size_t line_len = eol ? (size_t)(eol - p + 1) : strlen(p);
         bool drop = false;
         if (strncmp(p, "a=candidate:", 12) == 0) {
+            // a=candidate:<foundation> <component> <proto> <pri> <addr> <port> ...
             const char *q = p + 12;
             int tok = 0;
             while (q < p + line_len && tok < 2) {
@@ -487,10 +496,25 @@ static char *filter_sdp_for_chip(const char *sdp) {
                 while (q < p + line_len && *q == ' ') q++;
                 tok++;
             }
+            // q at proto.
             if (q < p + line_len && (q[0] == 't' || q[0] == 'T')
                                   && (q[1] == 'c' || q[1] == 'C')
                                   && (q[2] == 'p' || q[2] == 'P')) {
                 drop = true;
+            } else {
+                // Advance 2 fields (priority, then we land at addr).
+                int adv = 0;
+                while (q < p + line_len && adv < 2) {
+                    while (q < p + line_len && *q != ' ') q++;
+                    while (q < p + line_len && *q == ' ') q++;
+                    adv++;
+                }
+                const char *addr_end = q;
+                while (addr_end < p + line_len && *addr_end != ' ') addr_end++;
+                // IPv4 dotted-quad never has ':'; IPv6 always does.
+                if (memchr(q, ':', (size_t)(addr_end - q)) != NULL) {
+                    drop = true;
+                }
             }
         }
         if (drop) dropped++;
@@ -499,7 +523,7 @@ static char *filter_sdp_for_chip(const char *sdp) {
         p = eol + 1;
     }
     out[o] = 0;
-    if (dropped) ESP_LOGI(TAG, "filtered SDP: dropped %d TCP candidate(s)", dropped);
+    if (dropped) ESP_LOGI(TAG, "filtered SDP: dropped %d TCP/IPv6 candidate(s)", dropped);
     return out;
 }
 
@@ -613,23 +637,15 @@ static void handle_offer(const char *sdp) {
         ESP_LOGW(TAG, "ice_servers: none — host candidates only");
     }
 
-    // ipv6_support ON: required for same-LAN pairing on iOS 18 Personal
-    // Hotspot, which isolates clients at the IPv4 layer (per Apple dev
-    // forums, clients must use IPv6 link-local to talk to each other).
-    // With v6 gathering off, the chip and the laptop sit on the same
-    // SSID but can't pair.
-    //
-    // Known cost: cellular IPv6 (T-Mobile 2607:FB90:... observed on
-    // BR-A044) lets STUN binding through but drops sustained UDP /
-    // larger DTLS handshake flow. ICE locks onto the higher-priority
-    // v6 pair and libpeer's binary lib doesn't re-evaluate when DTLS
-    // stalls. Symptom: "Connection OK [v6]" → "Start DTLS role as 1"
-    // → "agent_recv timeout" forever, IPv4 srflx pair healthy in
-    // parallel but never selected. Use non-cellular wifi or TURN for
-    // now; principled fix is filtering global v6 (2000::/3) out of
-    // the offer while keeping link-local (fe80::/10).
+    // ipv6_support OFF — paired with filter_sdp_for_chip dropping IPv6
+    // candidates from the remote offer. Gathering local v6 would put a
+    // useless v6 host candidate into the answer that no peer can pair
+    // against once the offer's v6 is filtered. Cellular IPv6 (T-Mobile
+    // observed on BR-A044) lets STUN binding through but drops sustained
+    // UDP / larger DTLS — and libpeer's binary lib locks on the first
+    // STUN-OK pair without DTLS fallback, so a v6 trap bricks the session.
     static esp_peer_default_cfg_t default_cfg = {
-        .ipv6_support = true,
+        .ipv6_support = false,
     };
 
     esp_peer_cfg_t cfg = {
