@@ -12,7 +12,10 @@ import {
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
 import { RUNTIMES } from "./capabilities/runtime/index.js";
 import { setOpen as capSetOpen } from "./capabilities/runtime/cap-section.js";
-import { formatUptime, formatWifi, formatResetReason } from "./format.js";
+import {
+  formatUptime, formatWifi, formatWifiShort, formatResetReason,
+  formatRssi, rssiSeverity, tempSeverity,
+} from "./format.js";
 import { updateFirmware, updateFromFile, setExpectingReconnectHandler } from "./capabilities/ota.js";
 import { restartService, rebootRobot, enrollKey, getLog, getConfig } from "./capabilities/runtime/command.js";
 import { initGamepad } from "./gamepad.js";
@@ -59,25 +62,57 @@ function attachedCameraHtml(entry) {
   `;
 }
 
-// The header meta line ("WiFi … · up …h · reset: …"). Reused by renderEntry
-// (full render) and patchSecondaryRow (telemetry-driven updates that would
-// otherwise flash the whole card every 10 s). Composes pure formatters
-// from format.js (smoke-tested) so the display logic isn't duplicated.
+// The primary-row meta line. Kept short — width is precious in the list,
+// and detail (IP, mem, temp, RSSI, etc.) lives in the system line inside
+// the expanded card body, not here. Only "abnormal reset" stays because
+// it's a discoverability signal you want to see without expanding.
 function metaText(entry) {
   const connected = entry.status === "connected" || entry.status === "firmware-down";
   if (!connected) return "";
   const t = entry.telemetry;
   const parts = [
-    formatWifi(entry.wifiStatus),
+    formatWifiShort(entry.wifiStatus),
     formatUptime(t),
     formatResetReason(t?.reset_reason),
   ];
-  // One canonical status row at the top — free RAM + temp join the
-  // WiFi/uptime line so the body doesn't need a separate telemetry row.
+  return parts.filter(Boolean).join(" · ");
+}
+
+// The system line — full diagnostic detail (IP, mem, temp, RSSI), shown
+// inside the expanded card body. Card-open is the user's implicit "show
+// me more" gesture, so this line has all the precise numbers the primary
+// row deliberately omits.
+function systemLine(entry) {
+  const connected = entry.status === "connected" || entry.status === "firmware-down";
+  if (!connected) return "";
+  const t = entry.telemetry;
+  const w = entry.wifiStatus;
+  const parts = [];
+  if (w?.st === "joined" && w.ip) parts.push(w.ip);
   if (typeof t?.mem_free_mb === "number") parts.push(`${t.mem_free_mb} MB free`);
   else if (typeof t?.free_heap === "number") parts.push(`${Math.floor(t.free_heap / 1024)} KB free`);
   if (typeof t?.temp_c === "number") parts.push(`${t.temp_c.toFixed(1)}°C`);
-  return parts.filter(Boolean).join(" · ");
+  const rssi = formatRssi(t?.rssi_dbm);
+  if (rssi) parts.push(rssi);
+  return parts.join(" · ");
+}
+
+// Warning chips for the primary row — only render when something is
+// degraded enough that the user should notice at a glance. Empty when
+// everything is healthy, so the row stays visually quiet.
+function warningChips(entry) {
+  const connected = entry.status === "connected" || entry.status === "firmware-down";
+  if (!connected) return "";
+  const t = entry.telemetry;
+  const chips = [];
+  const tempSev = tempSeverity(t?.temp_c);
+  if (tempSev) chips.push({ sev: tempSev, text: `${t.temp_c.toFixed(1)}°C` });
+  const rssiSev = rssiSeverity(t?.rssi_dbm);
+  if (rssiSev) chips.push({ sev: rssiSev, text: `${t.rssi_dbm} dBm` });
+  if (!chips.length) return "";
+  return `<div class="robot-warnings">${chips.map(c =>
+    `<span class="warning-chip warning-${c.sev}">${escapeHtml(c.text)}</span>`,
+  ).join("")}</div>`;
 }
 
 // Surgical patcher for the secondary row + body telemetry line. Avoids a
@@ -93,6 +128,12 @@ function patchSecondaryRow(entry) {
     meta.textContent = t;
     meta.title = t;
   }
+  const sys = node.querySelector(".robot-system");
+  if (sys) sys.textContent = systemLine(entry);
+  // Warnings replace in place to avoid a flash. innerHTML swap is fine —
+  // chip count is tiny, no event listeners attached.
+  const warnSlot = node.querySelector(".robot-warnings-slot");
+  if (warnSlot) warnSlot.innerHTML = warningChips(entry);
 }
 
 // Same idea for robot-status notify (rebooting / installing / ready). Lower
@@ -170,9 +211,10 @@ onKeyChange(refreshMyFingerprint);
 // shouldn't blast the BT stack with timeout attempts on every page load.
 const AUTO_RECONNECT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 // gatt.connect() has no browser-exposed timeout; a wedged robot can leave the
-// amber "Connecting…" pulse on indefinitely. Hard cap so a failed attempt
-// resolves to an error state the user can see.
-const GATT_CONNECT_TIMEOUT_MS = 20000;
+// amber "Connecting…" pulse on indefinitely. Healthy connects complete in
+// under 2s — 6s is plenty of margin and fails fast enough that the user
+// gets a real "Re-pair" button instead of staring at a spinner.
+const GATT_CONNECT_TIMEOUT_MS = 6000;
 function gattConnectWithTimeout(device) {
   return Promise.race([
     device.gatt.connect(),
@@ -180,6 +222,32 @@ function gattConnectWithTimeout(device) {
       setTimeout(() => reject(new Error(`connect timeout after ${GATT_CONNECT_TIMEOUT_MS / 1000}s`)),
                  GATT_CONNECT_TIMEOUT_MS)),
   ]);
+}
+
+// Chrome serializes BLE choosers (one at a time) and silently delays the
+// second concurrent requestDevice() call. Without our own gate, a user who
+// clicks Re-pair on two robots quickly sees both buttons stuck on
+// "Connecting…" with no feedback on which chooser is actually live.
+// Reject the second click immediately so its status reverts to Re-pair.
+// Also wraps a hard timeout so a dismissed-but-not-cancelled chooser
+// doesn't keep the entry pinned in "Connecting…" forever.
+const CHOOSER_TIMEOUT_MS = 30000;
+let _chooserBusy = false;
+async function pickDeviceOrFail(options) {
+  if (_chooserBusy) {
+    throw new Error("Another robot's pairing dialog is already open — finish that one first");
+  }
+  _chooserBusy = true;
+  try {
+    return await Promise.race([
+      navigator.bluetooth.requestDevice(options),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("pairing dialog timed out — click Re-pair to try again")),
+                   CHOOSER_TIMEOUT_MS)),
+    ]);
+  } finally {
+    _chooserBusy = false;
+  }
 }
 
 async function loadPaired() {
@@ -209,14 +277,19 @@ async function loadPaired() {
 // a dead/out-of-range robot shouldn't keep hammering the BT stack. Counter
 // lives in-memory (not persisted) so a fresh page load gets one clean attempt.
 const AUTO_RECONNECT_MAX_FAILURES = 2;
-function autoReconnectKnown() {
+async function autoReconnectKnown() {
+  // Serialize per-robot attempts. Parallel auto-reconnect with a stale
+  // BT stack means every robot waits the full timeout in lockstep —
+  // sequential makes page-load failure surface in 6s × N instead of
+  // freezing the UI for 6s flat with all spinners pulsing.
   const cutoff = Date.now() - AUTO_RECONNECT_MAX_AGE_MS;
   for (const entry of state.devices.values()) {
     if (!entry.device) continue;
     if (!entry.autoReconnect) continue;
     if ((entry.lastConnectedAt || 0) < cutoff) continue;
     if ((entry.consecutiveFailures || 0) >= AUTO_RECONNECT_MAX_FAILURES) continue;
-    connect(entry.id).catch(() => { /* timeouts are expected; status-row shows it */ });
+    try { await connect(entry.id); }
+    catch { /* timeouts are expected; status-row shows it */ }
   }
 }
 
@@ -233,7 +306,7 @@ async function scanForNew() {
       ? [{ name: hintedName, services: [SERVICE_UUID] },
          { name: hintedName, services: [HEARTBEAT_SVC_UUID] }]
       : [{ services: [SERVICE_UUID] }, { services: [HEARTBEAT_SVC_UUID] }];
-    const device = await navigator.bluetooth.requestDevice({
+    const device = await pickDeviceOrFail({
       filters, optionalServices: [SERVICE_UUID, HEARTBEAT_SVC_UUID],
     });
     const name = device.name || device.id;
@@ -248,7 +321,7 @@ async function scanForNew() {
 
 async function restoreDevice(entry) {
   // Required on browsers without getDevices(): chooser filtered to the saved name.
-  const device = await navigator.bluetooth.requestDevice({
+  const device = await pickDeviceOrFail({
     filters: [{ name: entry.name, services: [SERVICE_UUID] },
               { name: entry.name, services: [HEARTBEAT_SVC_UUID] }],
     optionalServices: [SERVICE_UUID, HEARTBEAT_SVC_UUID],
@@ -292,6 +365,14 @@ async function connect(id) {
   }
   entry.status = "connecting";
   renderEntry(entry);
+  // Defensive disconnect-before-connect. Chrome's gatt.connect() is meant
+  // to be idempotent, but in practice a cached "connected" state (or a
+  // previous attempt that left internal state dirty) can hang the next
+  // connect indefinitely. An explicit disconnect resets Chrome's
+  // bookkeeping and is a no-op on the wire when actually disconnected.
+  if (entry.device.gatt.connected) {
+    try { entry.device.gatt.disconnect(); } catch {}
+  }
   let server;
   try {
     server = await gattConnectWithTimeout(entry.device);
@@ -846,14 +927,18 @@ function renderEntry(entry) {
         escapeHtml(entry.fwType === "esp32" ? "ESP32" : entry.fwType.toUpperCase())
       }</span>`
     : "";
-  // metaText() composes the WiFi/uptime/reset/RAM/temp row from format.js
-  // helpers; reused by patchSecondaryRow on the high-frequency telemetry
-  // notify path, so the display logic stays in one place. Always emit the
+  // metaText() composes the slim primary-row meta (WiFi state + uptime,
+  // plus any abnormal reset reason). Full diagnostic detail — IP, RAM,
+  // temp, RSSI — lives in the system line inside the expanded body.
+  // Reused by patchSecondaryRow on the high-frequency telemetry notify
+  // path so the display logic stays in one place. Always emit the
   // wrapper (even empty) so the patcher can fill it without a full
-  // re-render. CSS :empty hides it. title carries the full text so a
-  // truncated row stays hover-discoverable.
+  // re-render. CSS :empty hides it.
   const metaJoined = metaText(entry);
   const metaRow = `<div class="robot-meta" title="${escapeHtml(metaJoined)}">${escapeHtml(metaJoined)}</div>`;
+  const sysLine = systemLine(entry);
+  const sysRow = `<div class="robot-system">${escapeHtml(sysLine)}</div>`;
+  const warningsSlot = `<div class="robot-warnings-slot">${warningChips(entry)}</div>`;
 
   // Active-ops chips: at-a-glance "what's happening right now" without
   // having to expand each capability section.
@@ -927,6 +1012,7 @@ function renderEntry(entry) {
     </div>
     <div class="robot-secondary">
       ${metaRow}
+      ${warningsSlot}
       ${opsRow}
     </div>
     ${entry.staleHandle && !connected && !connecting ? `
@@ -947,6 +1033,7 @@ function renderEntry(entry) {
     ` : ""}
     ${expanded && !firmwareDown ? `
       <div class="robot-body">
+        ${sysRow}
         ${enrollHtml}
         ${sections}
         ${attachedCameraHtml(entry)}
@@ -1230,6 +1317,21 @@ function wireRecoveryMenu() {
   });
   wireHardRefresh({ onBeforeOpen: () => appMenu.hidePopover() });
 }
+
+// Clean GATT teardown on tab close / refresh / app-switch (mobile PWA).
+// Without this, the Pi-side bluez keeps the HCI link in some intermediate
+// state until the supervision timeout fires (~5-20s), and a fresh dashboard
+// load hits a desynced state where Chrome thinks it's disconnected while
+// the Pi still holds the link. Pagehide is fire-and-forget — disconnect()
+// returns synchronously and the link-layer teardown completes in the
+// ~100ms before the page is killed.
+window.addEventListener("pagehide", () => {
+  for (const entry of state.devices.values()) {
+    if (entry.device?.gatt?.connected) {
+      try { entry.device.gatt.disconnect(); } catch {}
+    }
+  }
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   // Wire the recovery menu FIRST and in isolation. Anything throwing in

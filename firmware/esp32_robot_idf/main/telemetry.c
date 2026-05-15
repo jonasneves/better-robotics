@@ -9,6 +9,9 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 
+#include "host/ble_hs.h"
+
+#include "ble_host.h"
 #include "gatt_svr.h"
 #include "webrtc_peer.h"
 
@@ -70,6 +73,13 @@ static void on_tick(void *arg) {
         reset_reason_label(esp_reset_reason()),
         esp_app_get_description()->version);
     if (ip[0]) o += snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o, ",\"ip\":\"%s\"", ip);
+    // RSSI of the currently-bonded central. Dashboard's primary-row chip
+    // surfaces a "Weak signal" warning when this dips below -75 dBm.
+    uint16_t conn = ble_host_active_conn();
+    int8_t rssi;
+    if (conn != BLE_HS_CONN_HANDLE_NONE && ble_gap_conn_rssi(conn, &rssi) == 0) {
+        o += snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o, ",\"rssi_dbm\":%d", (int)rssi);
+    }
     snprintf(s_buf + o, TELEMETRY_BUF_SIZE - o, "}");
     gatt_svr_notify_telemetry();
 }

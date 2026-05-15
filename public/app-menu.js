@@ -331,6 +331,61 @@ export function wireDiagnosticsMenuItem({ getTelemetrySources, onBeforeOpen } = 
       result.netProbe = { error: "probeNetwork() not loaded" };
     }
 
+    // Web Bluetooth surface — answers "can this browser/profile do BLE at
+    // all" before a Scan click. Safari has no Web BLE; Chromium-on-Linux
+    // sometimes reports unavailable; permission can be denied at the OS
+    // level on macOS without the page knowing.
+    result.ble = await (async () => {
+      if (!navigator.bluetooth) {
+        return { supported: false, available: false, permission: null };
+      }
+      let available = null, permission = null;
+      try { available = await navigator.bluetooth.getAvailability(); } catch {}
+      try {
+        const p = await navigator.permissions.query({ name: "bluetooth" });
+        permission = p.state;
+      } catch {}
+      return { supported: true, available, permission };
+    })();
+
+    // Per-server ICE reachability — the TURN-enabled config a real pair
+    // would use, broken out per server with first-hit latency. Reveals
+    // "STUN works but TURN unreachable" (the WhiteSky-class fallback gap)
+    // distinct from "all blocked" (full ICE failure).
+    try {
+      const { fetchIceServers } = await import("./pairing.js");
+      const iceServers = await fetchIceServers();
+      result.iceReachability = typeof window.probeIceReachability === "function"
+        ? await window.probeIceReachability(iceServers, { timeoutMs: 2500 })
+        : { error: "probeIceReachability() not loaded" };
+    } catch (err) {
+      result.iceReachability = { error: err.message || String(err) };
+    }
+
+    // Robot /health reachability — answers "robot is on the LAN" cleanly
+    // separate from "WebRTC data path works." A robot whose /health responds
+    // but whose camera/pair never completes points at WebRTC/ICE, not the
+    // LAN.
+    {
+      const sources = (typeof getTelemetrySources === "function" ? getTelemetrySources() : []) || [];
+      const targets = sources.filter((s) => s && s.wifiStatus?.ip);
+      if (targets.length === 0) {
+        result.robotHealth = { note: "no robots with WiFi IP — connect over BLE first" };
+      } else {
+        result.robotHealth = await Promise.all(targets.map(async (s) => {
+          const ip = s.wifiStatus.ip;
+          const ts = performance.now();
+          try {
+            const r = await fetch(`http://${ip}:81/health`, { signal: AbortSignal.timeout(2000) });
+            const body = r.ok ? await r.json() : null;
+            return { name: s.name || s.id, ip, ok: r.ok, status: r.status, latencyMs: Math.round(performance.now() - ts), body };
+          } catch (err) {
+            return { name: s.name || s.id, ip, ok: false, error: err.name === "TimeoutError" ? "timeout" : (err.message || String(err)) };
+          }
+        }));
+      }
+    }
+
     if (typeof window.lastPairDiagnostic === "function") {
       try {
         const snap = await window.lastPairDiagnostic();

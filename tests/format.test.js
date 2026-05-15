@@ -7,7 +7,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   shorten, labelTool, summarizeTool,
-  formatUptime, formatWifi, formatResetReason,
+  formatUptime, formatWifi, formatWifiShort, formatResetReason,
+  formatRssi, rssiSeverity, tempSeverity,
 } from "../public/format.js";
 
 test("shorten: leaves short strings alone", () => {
@@ -107,4 +108,38 @@ test("formatResetReason: suppresses routine reasons, surfaces abnormal", () => {
   assert.equal(formatResetReason("brownout"), "reset: brownout");
   assert.equal(formatResetReason(null), null);
   assert.equal(formatResetReason(""), null);
+});
+
+test("formatWifiShort: drops IP for tight primary-row use", () => {
+  assert.equal(formatWifiShort({ st: "joined", ip: "10.0.0.5" }), "WiFi");
+  assert.equal(formatWifiShort({ st: "joining" }), "WiFi joining…");
+  assert.equal(formatWifiShort({ st: "failed" }), "WiFi failed");
+  assert.equal(formatWifiShort({ st: "idle" }), null);
+  assert.equal(formatWifiShort(null), null);
+});
+
+test("formatRssi: dBm or null", () => {
+  assert.equal(formatRssi(-52), "-52 dBm");
+  assert.equal(formatRssi(-90), "-90 dBm");
+  assert.equal(formatRssi(null), null);
+  assert.equal(formatRssi(undefined), null);
+});
+
+test("rssiSeverity: thresholds match the primary-row warning policy", () => {
+  assert.equal(rssiSeverity(-40), null);     // strong
+  assert.equal(rssiSeverity(-70), null);     // healthy
+  assert.equal(rssiSeverity(-75), "weak");   // boundary
+  assert.equal(rssiSeverity(-80), "weak");
+  assert.equal(rssiSeverity(-85), "bad");    // boundary
+  assert.equal(rssiSeverity(-95), "bad");
+  assert.equal(rssiSeverity(null), null);
+});
+
+test("tempSeverity: Pi SoC thresholds", () => {
+  assert.equal(tempSeverity(40), null);
+  assert.equal(tempSeverity(64.9), null);
+  assert.equal(tempSeverity(65), "warm");
+  assert.equal(tempSeverity(75), "warm");
+  assert.equal(tempSeverity(80), "bad");
+  assert.equal(tempSeverity(null), null);
 });

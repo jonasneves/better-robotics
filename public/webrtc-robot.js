@@ -1,6 +1,8 @@
-// ESP32 has no fallback signaling path — BLE pair is the precondition
-// for using the dashboard at all, so signaling rides BLE only. (Pi
-// uses wss because aiortc handles WebSocket trivially.)
+// All robot WebRTC signaling rides BLE — chunked SDP on the SIGNAL char.
+// ESP32 handles signaling in-firmware; Pi forwards the offer to a local
+// aiortc daemon over a Unix socket and notifies the answer back. Either
+// way, no internet rendezvous — pair = signal. Matches the "fork-and-run,
+// no backend" wedge.
 //
 // Wire format on the SIGNAL char (both directions, mirrors OTA/snapshot):
 //   0x01 [u16 BE total]   begin
@@ -8,8 +10,7 @@
 //   0x03                  commit
 //   0xFF [utf8 msg]       error (notify-only)
 
-import { fetchIceServers, makePeerId } from "./pairing.js";
-import { SIGNAL_WS } from "./endpoints.js";
+import { fetchIceServers } from "./pairing.js";
 
 // 90s. ESP32 + libpeer's ICE pairing is sequential — each candidate pair
 // tested with STUN connectivity checks + retries, no parallelism. With
@@ -21,11 +22,8 @@ import { SIGNAL_WS } from "./endpoints.js";
 const ICE_TIMEOUT_MS = 90000;
 const BLE_SIG_CHUNK  = 100;
 
-// wss-path peer-id prefixes. Pi rtc daemon presents as "desktop-<id>".
-const PI_WSS_CONFIG = { roomPrefix: "pi-rtc-", accept: "desktop-" };
-
 // Per-robot peer connections, lazy-built. Keyed by robot id.
-const _peers = new Map();  // robotId → { pc, ws?, channels: Map<label, ch> }
+const _peers = new Map();  // robotId → { pc, channels: Map<label, ch> }
 
 // PCs owned by other modules (e.g. webrtc-installable's Pi camera path)
 // that want to appear in lastRobotWebRTCDiagnostic alongside the channels
@@ -43,26 +41,27 @@ export function unregisterExternalPc(robotId, label) {
 // per robot — opening a second time tears the prior peer down.
 //
 // opts:
-//   robotType:   "pi" | "esp32"   — picks the signaling path
-//   signalChar:  BluetoothRemoteGATTCharacteristic — required for ESP32
+//   robotType:   "pi" | "esp32"   — only used to skip the ICE-servers
+//                                   push (ESP32 needs it; Pi resolves
+//                                   its own servers in pi_robot_rtc.py)
+//   signalChar:  BluetoothRemoteGATTCharacteristic — required
 //   onStatus:    (msg) => void    — progress messages for UI
 //
-// Selector by robot type: ESP32 uses BLE-signaling (signalChar required);
-// Pi uses wss. No fallback — if BLE fails on ESP32, surface it directly
-// so the operator knows the BLE link is the problem, not signaling.
+// BLE pair = signal. If signalChar is missing, the robot's firmware is
+// too old to support this — surface that directly rather than falling
+// back to a backend the user may not even have access to.
 export async function openChannel(robotId, robotName, label, opts = {}) {
-  const { signalChar, robotType } = opts;
-  if (robotType === "esp32") {
-    if (!signalChar) throw new Error("ESP32 needs a BLE signal char — pair the robot first");
-    return openChannelViaBLE(robotId, label, signalChar, opts);
+  const { signalChar } = opts;
+  if (!signalChar) {
+    throw new Error("WebRTC signaling needs a BLE signal characteristic — pair the robot first, or update its firmware");
   }
-  return openChannelViaWss(robotId, robotName, label, opts);
+  return openChannelViaBLE(robotId, label, signalChar, opts);
 }
 
 // ── BLE signaling path ──────────────────────────────────────────────────
 
 async function openChannelViaBLE(robotId, label, signalChar, opts) {
-  const { onStatus = () => {} } = opts;
+  const { onStatus = () => {}, robotType } = opts;
   closePeer(robotId);
 
   onStatus("Opening peer over BLE…");
@@ -133,14 +132,17 @@ async function openChannelViaBLE(robotId, label, signalChar, opts) {
     // hang, we ship what we have after 3 s rather than stalling forever.
     await waitForIceGathering(pc, 3000);
 
-    // Browser-as-brain: resolve hostnames + flatten the ICE-server list
-    // and push it to the chip before the offer. Chip skips DNS + HTTPS
-    // entirely — saved ~6 s of "Fail to resolve server address" stalls
-    // on iCloud-Private-Relay-style networks.
-    onStatus("Sending ICE servers…");
-    const chipIce = await iceServersForChip(iceServers);
-    const iceBytes = new TextEncoder().encode(JSON.stringify({ ice: chipIce }));
-    await sendChunkedOp(signalChar, iceBytes, 0x04, 0x05, 0x06);
+    // ESP32 needs the ICE-server list pushed in (browser-as-brain: resolve
+    // hostnames + flatten before sending — chip skips DNS + HTTPS entirely,
+    // saved ~6 s of "Fail to resolve server address" stalls on
+    // iCloud-Private-Relay-style networks). Pi fetches its own ICE servers
+    // in pi_robot_rtc.py and accepts only opcodes 0x01-0x03 on this char.
+    if (robotType === "esp32") {
+      onStatus("Sending ICE servers…");
+      const chipIce = await iceServersForChip(iceServers);
+      const iceBytes = new TextEncoder().encode(JSON.stringify({ ice: chipIce }));
+      await sendChunkedOp(signalChar, iceBytes, 0x04, 0x05, 0x06);
+    }
 
     onStatus("Writing offer over BLE…");
     const sdpBytes = new TextEncoder().encode(pc.localDescription.sdp);
@@ -279,123 +281,11 @@ function openWhenReady(channel, robotId) {
   });
 }
 
-// ── wss://signal.neevs.io path (Pi only) ────────────────────────────────
-
-async function openChannelViaWss(robotId, robotName, label, opts) {
-  const { onStatus = () => {} } = opts;
-  closePeer(robotId);
-
-  const myPeerId = makePeerId("dashboard");
-  const cfg = PI_WSS_CONFIG;
-  const roomId = `${cfg.roomPrefix}${robotName}`;
-  onStatus("Opening signal channel…");
-  const iceServers = await fetchIceServers();
-  const pc = new RTCPeerConnection({ iceServers });
-  const ws = new WebSocket(`${SIGNAL_WS}/${roomId}/ws`);
-  const entry = { pc, ws, channels: new Map() };
-  _peers.set(robotId, entry);
-
-  // Trickle ICE — every local candidate goes through the WS as it arrives.
-  pc.addEventListener("icecandidate", (e) => {
-    if (!e.candidate) return;
-    if (ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({
-      type: "signal",
-      peer: myPeerId,
-      data: {
-        ice: {
-          candidate: e.candidate.candidate,
-          sdpMid: e.candidate.sdpMid,
-          sdpMLineIndex: e.candidate.sdpMLineIndex,
-        },
-      },
-    }));
-  });
-
-  pc.addEventListener("iceconnectionstatechange", () => {
-    const s = pc.iceConnectionState;
-    if (s === "checking") onStatus("Finding network path…");
-    else if (s === "connected" || s === "completed") onStatus("Path ready, opening channel…");
-    else if (s === "failed" || s === "disconnected" || s === "closed") closePeer(robotId);
-  });
-
-  // Unreliable + unordered — video frames are independent; a lost chunk
-  // means the chip's next frame supersedes it anyway. Ordered/reliable
-  // channels stall the whole stream waiting for retransmits we'd throw
-  // away. The chip's reassembly already drops partial frames whose
-  // frame_id is older than a newer one in flight.
-  const channel = pc.createDataChannel(label, { ordered: false, maxRetransmits: 0 });
-  entry.channels.set(label, channel);
-
-  return new Promise((resolve, reject) => {
-    let resolved = false;
-    const fail = (err) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timer);
-      closePeer(robotId);
-      reject(err);
-    };
-    const timer = setTimeout(() => {
-      fail(new Error("Couldn't reach the robot's WebRTC peer within 90 s. Is pi-robot-rtc.service running?"));
-    }, ICE_TIMEOUT_MS);
-
-    channel.addEventListener("open", () => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timer);
-      resolve(channel);
-    });
-    channel.addEventListener("error", (e) => fail(new Error(e.message || "channel error")));
-
-    const pendingIce = [];
-    const applySignal = async (data) => {
-      if (!data) return;
-      if (data.answer) {
-        await pc.setRemoteDescription({ type: data.answer.type, sdp: data.answer.sdp });
-        for (const c of pendingIce) { try { await pc.addIceCandidate(c); } catch {} }
-        pendingIce.length = 0;
-      }
-      if (data.ice) {
-        if (pc.remoteDescription) { try { await pc.addIceCandidate(data.ice); } catch {} }
-        else pendingIce.push(data.ice);
-      }
-    };
-
-    ws.addEventListener("open", async () => {
-      onStatus("Signal channel open. Creating offer…");
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        ws.send(JSON.stringify({
-          type: "signal",
-          peer: myPeerId,
-          data: { offer: { type: offer.type, sdp: offer.sdp } },
-        }));
-        onStatus("Offer sent. Waiting for robot…");
-      } catch (err) { fail(err); }
-    });
-    ws.addEventListener("message", async (e) => {
-      let msg;
-      try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.type !== "signal") return;
-      if (msg.peer === myPeerId) return;
-      if (!String(msg.peer || "").startsWith(cfg.accept)) return;
-      try { await applySignal(msg.data); } catch (err) { fail(err); }
-    });
-    ws.addEventListener("error", () => fail(new Error("Signal channel error")));
-    ws.addEventListener("close", () => {
-      if (!resolved) fail(new Error("Signal channel closed before peer connected"));
-    });
-  });
-}
-
 export function closePeer(robotId) {
   const entry = _peers.get(robotId);
   if (!entry) return;
   for (const ch of entry.channels.values()) try { ch.close(); } catch {}
   try { entry.pc?.close(); } catch {}
-  try { entry.ws?.close(); } catch {}
   _peers.delete(robotId);
 }
 

@@ -1,7 +1,7 @@
 // Schema: { name: "camera", type: "mjpeg-stream" }
 // ESP32 path uses BLE-signaled WebRTC by default and exposes an HTTP
-// MJPEG fallback on :81/stream (transport toggle below). Pi path uses
-// wss-signaled WebRTC.
+// MJPEG fallback on :81/stream (transport toggle below). Pi path also
+// uses BLE-signaled WebRTC, via pi_robot_rtc.py over a local Unix socket.
 import { logFor } from "../../log.js";
 import {
   stopWatching as visionStop,

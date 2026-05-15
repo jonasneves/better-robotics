@@ -52,7 +52,7 @@ export function makeSignedPairCap(schema) {
   const actionLeft = `${name}-left`;
   const actionRight = `${name}-right`;
   const actionStop = `${name}-stop`;
-  const label = name.length <= 3 ? name.toUpperCase()
+  const staticLabel = name.length <= 3 ? name.toUpperCase()
     : name[0].toUpperCase() + name.slice(1);
   const isMotors = name === "motors";
 
@@ -115,6 +115,7 @@ export function makeSignedPairCap(schema) {
              <label>${escapeHtml(labels.left)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[leftField]}" data-action="${actionLeft}"></label>
              <label>${escapeHtml(labels.right)} <input type="range" min="${range[0]}" max="${range[1]}" value="${entry[rightField]}" data-action="${actionRight}"></label>
            </div>`;
+      const label = isMotors ? motorsLabel(entry) : staticLabel;
       return capSection({ name, label, state: stateText, action, body, transport: "ble" });
     },
 
@@ -124,6 +125,13 @@ export function makeSignedPairCap(schema) {
         const pad = node.querySelector(".joypad");
         const knob = pad?.querySelector(".joypad-knob");
         if (pad && knob) resetJoypad = wireJoypad(entry, pad, knob);
+        // Click anywhere on the motors section → make this robot the active
+        // keyboard-driver. Mouse/touch users get a natural way to switch
+        // targets without learning the number-key shortcuts. Pointerdown
+        // (not click) so the activation lands before the joypad's drag
+        // starts pumping motor values.
+        const sec = node.querySelector(`.cap-section[data-cap-name="${name}"]`);
+        sec?.addEventListener("pointerdown", () => setActiveMotorsRobot(entry.id));
       }
       const stop = node.querySelector(`[data-action="${actionStop}"]`);
       if (stop) stop.addEventListener("click", () => {
@@ -198,15 +206,62 @@ const _heldKeys = new Set();
 let _keyHoldTimer = null;
 let _keyboardWired = false;
 
+// Returns the robot currently designated as keyboard-driver. Auto-picks
+// when only one robot is connected; explicit when more than one (set via
+// setActiveMotorsRobot below). Stays a function so renderers can call it
+// freely without subscribing.
 export function pickMotorsTarget() {
-  // Map.values() insertion order on ties — first-paired wins. Fine with
-  // one robot; a footgun with multiple (phone joypad + WASD silently
-  // drive whichever was paired first). When multi-robot lands, surface
-  // an explicit "active robot" picker or require a target argument.
-  for (const e of state.devices.values()) {
-    if (e.motorsChar && e.status === "connected") return e;
+  const connected = connectedMotorsRobots();
+  if (connected.length === 0) {
+    state.activeMotorsRobotId = null;
+    return null;
   }
-  return null;
+  // Active still connected? Use it.
+  const active = state.activeMotorsRobotId
+    ? connected.find(e => e.id === state.activeMotorsRobotId)
+    : null;
+  if (active) return active;
+  // Auto-pick first available; persist the choice so subsequent renders
+  // and key events agree on the target.
+  state.activeMotorsRobotId = connected[0].id;
+  return connected[0];
+}
+
+export function connectedMotorsRobots() {
+  const out = [];
+  for (const e of state.devices.values()) {
+    if (e.motorsChar && e.status === "connected") out.push(e);
+  }
+  return out;
+}
+
+// Switch the keyboard-driver target. Re-renders the affected motors
+// sections so the "Driving" indicator follows. No-op if the requested
+// robot isn't connected or already active.
+export function setActiveMotorsRobot(robotId) {
+  if (state.activeMotorsRobotId === robotId) return;
+  const candidate = state.devices.get(robotId);
+  if (!candidate || candidate.status !== "connected" || !candidate.motorsChar) return;
+  const prevId = state.activeMotorsRobotId;
+  state.activeMotorsRobotId = robotId;
+  // Patch the cap-label on the previous + new active so the "Driving"
+  // flair updates without a full card re-render (joypad mid-drag would
+  // shed its bindings otherwise).
+  for (const id of [prevId, robotId]) {
+    const e = state.devices.get(id);
+    if (!e?.node) continue;
+    const label = e.node.querySelector(`.cap-section[data-cap-name="motors"] .cap-label`);
+    if (label) label.textContent = motorsLabel(e);
+  }
+}
+
+// "Motors" plain when there's nothing to disambiguate, "Motors · Driving"
+// when this is the active robot AND there's >1 robot to pick between.
+// Solo dev never sees the suffix.
+export function motorsLabel(entry) {
+  const multi = connectedMotorsRobots().length > 1;
+  const active = state.activeMotorsRobotId === entry.id;
+  return multi && active ? "Motors · Driving" : "Motors";
 }
 
 function keyboardTick() {
@@ -238,6 +293,22 @@ export function initMotorsKeyboard() {
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key.toLowerCase();
+    // 1-9 switches the active keyboard-driver to the Nth connected robot.
+    // Only fires when >1 robot is connected — pressing 1 with a single
+    // robot is a no-op (it's already the only target). Stop in-flight
+    // motion on the old target first so it doesn't keep driving.
+    if (/^[1-9]$/.test(k)) {
+      const connected = connectedMotorsRobots();
+      if (connected.length <= 1) return;
+      const idx = parseInt(k, 10) - 1;
+      if (idx >= connected.length) return;
+      e.preventDefault();
+      stopKeyboardMotors();
+      _heldKeys.clear();
+      if (_keyHoldTimer) { clearInterval(_keyHoldTimer); _keyHoldTimer = null; }
+      setActiveMotorsRobot(connected[idx].id);
+      return;
+    }
     if (!(k in KEY_MAP)) return;
     e.preventDefault();
     if (_heldKeys.has(k)) return;  // ignore OS auto-repeat

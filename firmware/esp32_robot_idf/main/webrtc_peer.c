@@ -465,9 +465,14 @@ static int on_peer_data(esp_peer_data_frame_t *frame, void *ctx) {
 
 // ── peer connection lifecycle ────────────────────────────────────────────
 
-// Strip TCP candidates from the offer SDP — chip can only use UDP for ICE.
-// IPv6 stays: lwIP IPv6 is enabled, and v6 host↔host is the fast path on
-// apartment networks where the v4 path goes through a slow centralized NAT.
+// Strip TCP candidates from the offer SDP — esp_peer's ICE agent is UDP-only
+// and TCP candidates trip its parser (LoadProhibited crash observed pre-3228975).
+// IPv6 and srflx pass through unchanged. The Pi running aiortc on the same
+// hotspot just did 12+ MB of DTLS-protected video over T-Mobile cellular
+// IPv6 host-host, so the v6/srflx "trap" attribution from 658eb90 was wrong:
+// the failure was libpeer-on-ESP32 specific, not network-shaped. Restoring
+// the pre-misanalysis filter so we can actually observe what libpeer does
+// when offered every candidate type on the same network the Pi succeeds on.
 static char *filter_sdp_for_chip(const char *sdp) {
     size_t in_len = strlen(sdp);
     char *out = malloc(in_len + 1);
@@ -613,22 +618,16 @@ static void handle_offer(const char *sdp) {
         ESP_LOGW(TAG, "ice_servers: none — host candidates only");
     }
 
-    // Default-impl config — ipv6_support kept OFF deliberately. When
-    // enabled, the agent gathers IPv6 host candidates; ICE prefers them
-    // for host-host pairing because of higher priority. But on cellular
-    // IPv6 (e.g. T-Mobile 2607:FB90:...), the carrier allows short STUN
-    // binding packets through but drops sustained UDP / larger DTLS
-    // handshake flow. The result is the symptom seen on BR-A044:
-    //   "Connection OK [v6 addr]" → "Start DTLS role as 1" →
-    //   "PEER_DEF: agent_recv timeout" forever, while the parallel
-    //   IPv4 srflx pair shows healthy bidirectional binding traffic
-    //   that libpeer's binary lib never falls back to.
-    // Forcing IPv4-only lets ICE work through host (same LAN) → srflx →
-    // relay in order, all of which carry DTLS reliably on the networks
-    // we've observed. Cost: same-LAN IPv6 path is unused, but its
-    // latency advantage was hypothetical anyway.
+    // ipv6_support ON — gather IPv6 host candidates alongside IPv4. The
+    // Pi (aiortc) just did sustained DTLS-protected video over T-Mobile
+    // cellular v6 host-host on this same hotspot, so v6 is a real path
+    // when both peers have it. Earlier disable in 658eb90 attributed
+    // libpeer-on-ESP32 DTLS timeouts to "cellular v6 traps DTLS"; that
+    // attribution was wrong (Pi proves the network is fine). If libpeer
+    // still locks up here, the bug is in libpeer, not the network — and
+    // the right fix is upstream, not more SDP filtering.
     static esp_peer_default_cfg_t default_cfg = {
-        .ipv6_support = false,
+        .ipv6_support = true,
     };
 
     esp_peer_cfg_t cfg = {

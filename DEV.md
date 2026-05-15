@@ -11,6 +11,21 @@ Cheat sheet for diagnostic flags, console handles, debug paths. User-facing → 
 ### Phone (`phone.html`)
 - `#pair=<uuid>` — the pairing room id, normally injected by the QR. Required for the phone to find the room. Implementation: `mobile.js`.
 
+## Keyboard control
+
+WASD / arrow keys drive the **active motors target** — one robot at a time,
+mutually exclusive. With a single connected robot, it's the auto-pick.
+With two or more, the active card's Motors section shows `Motors · Driving`.
+Switch via:
+
+- Click anywhere on a card's **Motors section** → that robot becomes active.
+- Number keys **`1`–`9`** → activate the Nth connected robot (in `state.devices`
+  insertion order — same as the card list).
+
+Active disconnects → auto-pick re-runs on the next key/joypad event.
+Implementation: `public/capabilities/runtime/signed-pair.js`. State key:
+`state.activeMotorsRobotId` (session-only, not persisted).
+
 ## Window handles (DevTools console)
 
 Live on both desktop and phone while `pairing.js` is loaded.
@@ -22,6 +37,7 @@ Live on both desktop and phone while `pairing.js` is loaded.
 - `window.lastPairDiagnostic()` — **async**, returns a Promise. Local + remote ICE candidates from this side's most recent pair attempt, plus role/roomId/iceServers, **plus a live `pc.getStats()` snapshot** (candidate-pair states, transport, certificates, dataChannel) and the four pc state strings. Same data `chrome://webrtc-internals/` shows, no privileged-page hop. Resets on each new `hostPairingRoom`/`joinPairingRoom` call. DevTools console auto-awaits the Promise — `await window.lastPairDiagnostic()` from elsewhere.
 - `window.probeNetwork({ timeoutMs })` — runs a unilateral STUN probe on demand and returns `{stunReachable, candidateTypes, publicIp, mdnsObfuscated, candidates, durationMs}`. Stashes the result in `window.lastNetProbe()`.
 - `window.lastNetProbe()` — last `probeNetwork()` result, or `null` if never run.
+- `window.probeIceReachability(iceServers, { timeoutMs })` — per-server reachability + first-hit latency. Returns `[{urls, reachable, latencyMs, types}]`. Pass the array `fetchIceServers()` returns to test the TURN-enabled config a real pair uses.
 
 ## What gets recorded in replay
 
@@ -34,9 +50,7 @@ Every Pip tool call is persisted to IndexedDB automatically. Record shape:
 ## Robot endpoints
 
 - `:81/health` (per-Pi HTTP) — wifi-presence probe. JSON `{ok, type, robotId, ip, uptime_s, pi_robot_service}`. Implementation: `firmware/pi_robot/pi_robot_health.py`. PNA preflight supported.
-- **WebRTC peer** (per-Pi, signaling via `wss://signal.neevs.io/pi-rtc-<robotId>/ws`). Used by `public/webrtc-robot.js` for the Shell dialog + future channels (OTA, logs, telemetry). Implementation: `firmware/pi_robot/pi_robot_rtc.py` (aiortc). The Pi presents as `desktop-<id>` in the existing pairing protocol; the dashboard joins as `dashboard-<id>` and sends the offer.
-
-Why signaling via signal.neevs.io and not a per-Pi HTTP endpoint: browser Mixed Content blocks HTTPS dashboard → HTTP private-IP fetches before PNA preflight runs. WebSocket over wss:// avoids the gate.
+- **WebRTC peer** (per-Pi). The dashboard writes a chunked SDP offer to the BLE `SIGNAL` characteristic; `pi_robot.py` (root) reassembles and forwards to a local aiortc daemon (`pi_robot_rtc.py`, non-root) over `/run/pi-robot-rtc.sock`. The daemon answers non-trickle (all candidates inline); pi_robot.py chunks the answer back via BLE notify. Used by `public/webrtc-robot.js` for the Shell dialog, OTA bundle staging, and log tail. No internet rendezvous — BLE pair is the signal substrate.
 
 ## Chrome internal pages
 

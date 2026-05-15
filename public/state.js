@@ -2,6 +2,12 @@ const STORAGE_KEY = "better-robotics:known";
 
 export const state = {
   devices: new Map(),
+  // Single-active-target for the keyboard motors driver. Mutually exclusive:
+  // pressing WASD / arrows / number keys drives whichever robot is active.
+  // Auto-picked when exactly one connected robot has motors; explicit when
+  // multiple — clicking a card's Motors section or pressing 1-9 switches.
+  // Session-only — not persisted; a fresh page load auto-picks again.
+  activeMotorsRobotId: null,
 };
 
 // app.js registers its onDisconnected here. Late-bound to keep state.js

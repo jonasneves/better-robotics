@@ -241,20 +241,28 @@ CAM_OP_STOP    = 0x04
 # so the user can SSH / re-install / pick a different image.
 _camera_available = False
 _camera_import_err = None
+_picamera2_available = False
 if CAMERA_ENABLED is not False:
     try:
-        from picamera2 import Picamera2  # type: ignore
         from aiortc import (  # type: ignore
             RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
             RTCConfiguration, RTCIceServer, MediaStreamTrack,
         )
         from aiortc.rtcrtpsender import RTCRtpSender  # type: ignore
+        from aiortc.contrib.media import MediaPlayer  # type: ignore
         import aiohttp  # type: ignore
         import av  # type: ignore
         import fractions
         _camera_available = True
     except Exception as _e:  # noqa: BLE001 — see comment above
         _camera_import_err = f"{type(_e).__name__}: {_e}"
+    # picamera2 is optional — only CSI cams need it. USB UVC cams use the
+    # V4L2 path via MediaPlayer below. Absence here is fine.
+    try:
+        from picamera2 import Picamera2  # type: ignore
+        _picamera2_available = True
+    except Exception:
+        pass
 
 logging.basicConfig(format="%(asctime)s %(message)s", level=logging.INFO)
 log = logging.getLogger("pi_robot")
@@ -892,23 +900,73 @@ def _set_cam_status(**fields) -> None:
     _cam_send({"t": "status", "d": _cam_status})
 
 
+def _detect_camera_source() -> "tuple[str, str] | None":
+    """Returns ('picamera2', '') when libcamera sees a camera (CSI ribbon or
+    UVC webcam on libcamera ≥ 0.7's uvcvideo pipeline handler), ('v4l2',
+    '/dev/videoN') for direct V4L2 fallback on older libcamera builds, or
+    None if neither is present. picamera2 is preferred — it handles both
+    hardware classes through one well-tested path."""
+    if _picamera2_available:
+        try:
+            if Picamera2.global_camera_info():
+                return ("picamera2", "")
+        except Exception:
+            pass
+    # V4L2 enumeration. The Pi exposes many /dev/video* nodes for hardware
+    # codec / ISP / decoder blocks; only UVC webcams are capture sources.
+    # Filter by the kernel driver name in sysfs.
+    try:
+        from pathlib import Path as _Path
+        for entry in sorted(_Path("/sys/class/video4linux").iterdir()):
+            name_file = entry / "name"
+            if not name_file.exists():
+                continue
+            name = name_file.read_text().strip().lower()
+            if any(s in name for s in ("codec", "isp", "hevc-dec", "bcm2835")):
+                continue
+            dev_path = f"/dev/{entry.name}"
+            if _Path(dev_path).exists():
+                return ("v4l2", dev_path)
+    except FileNotFoundError:
+        pass
+    return None
+
+
+def _open_camera_track():
+    """Returns a MediaStreamTrack for whatever camera is detected. Factory owns
+    the backend decision so callers stay agnostic."""
+    source = _detect_camera_source()
+    if source is None:
+        raise RuntimeError(
+            "no camera detected — picamera2 found no CSI cameras and no UVC "
+            "capture device under /dev/video*. Check ribbon seating + CAM port "
+            "for CSI, or `lsusb` + `v4l2-ctl --list-devices` for USB."
+        )
+    backend, path = source
+    if backend == "picamera2":
+        return _PiCameraTrack()
+    # V4L2 / UVC path. MJPG keeps CPU low on the Pi — the cam encodes in HW,
+    # libav decodes to raw frames for aiortc's VP8/H264 encoder.
+    player = MediaPlayer(path, format="v4l2", options={
+        "video_size": "640x480",
+        "framerate": "15",
+        "input_format": "mjpeg",
+    })
+    track = player.video
+    # Pin the player to the track so GC of the latter shuts the former down.
+    # Without this, MediaPlayer's reader thread can outlive teardown.
+    track._player = player  # type: ignore[attr-defined]
+    return track
+
+
 class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type: ignore
-    """640x480 @ 15fps — CPU-reasonable on a Pi 4, bandwidth-safe for WebRTC over WiFi."""
+    """640x480 @ 15fps — CPU-reasonable on a Pi 4, bandwidth-safe for WebRTC
+    over WiFi. UVC cams may center-crop this from their native sensor size;
+    revisit when full-FOV becomes a priority worth burning CPU on."""
     kind = "video"
 
     def __init__(self) -> None:
         super().__init__()
-        # Probe libcamera first — Picamera2() raises "list index out of range"
-        # deep inside if no camera is detected, which is unhelpful to the user.
-        # Surface a clear "no camera detected" instead so the actual cause
-        # (loose ribbon, wrong CAM port, libcamera not seeing hardware) gets
-        # reported rather than a cryptic internal error.
-        cams = Picamera2.global_camera_info()
-        if not cams:
-            raise RuntimeError(
-                "no camera detected by libcamera — check ribbon cable seating, "
-                "CAM port (Pi 5 has CAM0/CAM1), and `libcamera-hello --list-cameras`"
-            )
         self.camera = Picamera2()
         cfg = self.camera.create_video_configuration(
             main={"size": (640, 480), "format": "RGB888"},
@@ -920,11 +978,14 @@ class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type
 
     async def recv(self):
         arr = self.camera.capture_array("main")
-        # Picamera2's "RGB888" config actually delivers bytes in BGR memory
-        # order (libcamera convention — name follows little-endian byte
-        # arrangement, not pixel order). Tell PyAV the truth so red and blue
-        # don't swap downstream — symptom is purple skin / blue oranges.
-        frame = av.VideoFrame.from_ndarray(arr, format="bgr24")
+        # libcamera's "RGB888" config name describes the FORMAT, not the
+        # memory order — the uvcvideo pipeline (USB cams) hands back bytes
+        # in true R,G,B order. (Historically the CSI/vc4 pipeline delivered
+        # BGR under the same config name, which we worked around by lying
+        # to PyAV; that workaround now breaks USB cams — symptom is purple
+        # skin / blue oranges. We optimize for USB since that's what
+        # ships on most boards we encounter.)
+        frame = av.VideoFrame.from_ndarray(arr, format="rgb24")
         self._pts += 1
         frame.pts = self._pts
         frame.time_base = self._time_base
@@ -1001,7 +1062,11 @@ async def _cam_install() -> None:
         # is unmanaged, so packages install cleanly.
         rc, tail = await _run_install_cmd(
             "pip install",
-            [sys.executable, "-m", "pip", "install", "aiortc", "av"],
+            # aiohttp is used by _cam_fetch_ice_servers for TURN creds —
+            # firstrun installs it, but if firstrun predates that line the
+            # camera path silently won't import. Listing it here makes the
+            # camera-install button self-sufficient.
+            [sys.executable, "-m", "pip", "install", "aiortc", "av", "aiohttp"],
         )
         if rc != 0:
             fail("pip install", rc, tail); return
@@ -1085,6 +1150,91 @@ def _read_soc_temp_c() -> float | None:
         return None
 
 
+def _list_connected_centrals() -> list[str]:
+    """MAC addresses of currently-connected BLE centrals, per bluetoothctl.
+    Empty list if nothing is connected or bluetoothctl is unavailable."""
+    try:
+        out = subprocess.run(
+            ["bluetoothctl", "devices", "Connected"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
+    macs = []
+    for line in out.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0] == "Device":
+            macs.append(parts[1])
+    return macs
+
+
+def _read_ble_rssi() -> int | None:
+    """RSSI of the first connected central. Reported through telemetry so
+    the dashboard can render a "Weak signal" warning when the link is
+    degrading. Returns None when no central is connected or bluetoothctl
+    doesn't return an RSSI line (BR/EDR cached entries sometimes don't)."""
+    macs = _list_connected_centrals()
+    if not macs:
+        return None
+    try:
+        out = subprocess.run(
+            ["bluetoothctl", "info", macs[0]],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("RSSI:"):
+            try:
+                return int(line.split(":", 1)[1].strip())
+            except ValueError:
+                return None
+    return None
+
+
+# Per-central bookkeeping for the idle watchdog. A central that opens a GATT
+# link but never writes within IDLE_DISCONNECT_S almost always means Chrome
+# timed out mid-discovery and never came back — the kind of stuck link that
+# blocks subsequent connect attempts until the supervision timeout fires.
+# Force-disconnect those so the slot is free for the next try.
+_ble_first_seen_at: dict[str, float] = {}
+_last_ble_write_at: float = 0.0
+IDLE_DISCONNECT_S = 60.0
+
+
+async def _ble_idle_watchdog_task() -> None:
+    """Polls connected centrals every 10s; disconnects any that have been
+    linked > IDLE_DISCONNECT_S with no GATT writes received since they
+    first appeared. Self-cleans stuck links without dashboard or SSH."""
+    while True:
+        try:
+            now = time.time()
+            current = set(_list_connected_centrals())
+            # Garbage-collect entries for centrals that disconnected on their own.
+            for mac in list(_ble_first_seen_at.keys()):
+                if mac not in current:
+                    _ble_first_seen_at.pop(mac, None)
+            for mac in current:
+                if mac not in _ble_first_seen_at:
+                    _ble_first_seen_at[mac] = now
+                connected_for = now - _ble_first_seen_at[mac]
+                # Any write received since this central appeared counts as
+                # liveness — the link is being used, leave it alone.
+                writes_since_seen = _last_ble_write_at >= _ble_first_seen_at[mac]
+                if connected_for > IDLE_DISCONNECT_S and not writes_since_seen:
+                    log.info("idle-disconnect: %s after %.0fs, no GATT writes", mac, connected_for)
+                    await asyncio.create_subprocess_exec(
+                        "bluetoothctl", "disconnect", mac,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    _ble_first_seen_at.pop(mac, None)
+        except Exception as e:
+            log.warning("ble watchdog: %s", e)
+        await asyncio.sleep(10)
+
+
 async def _telemetry_task() -> None:
     """Periodic vitals notify. 6s cadence catches spikes without saturating
     BLE. Payload < ~60 B fits one ATT."""
@@ -1097,6 +1247,9 @@ async def _telemetry_task() -> None:
             temp = _read_soc_temp_c()
             if temp is not None:
                 t["temp_c"] = round(temp, 1)
+            rssi = _read_ble_rssi()
+            if rssi is not None:
+                t["rssi_dbm"] = rssi
             _publish(TELEMETRY_CHAR_UUID, _json_bytes(t))
         except Exception as e:
             log.warning("telemetry: %s", e)
@@ -1266,7 +1419,7 @@ async def _cam_handle_message(msg: dict) -> None:
                 await _cam_pc.close()
             ice_servers = await _cam_fetch_ice_servers()
             _cam_pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
-            _cam_track = _PiCameraTrack()
+            _cam_track = _open_camera_track()
             _cam_pc.addTrack(_cam_track)
 
             @_cam_pc.on("iceconnectionstatechange")
@@ -1427,6 +1580,9 @@ def on_read(characteristic: BlessGATTCharacteristic, **_) -> bytearray:
         temp = _read_soc_temp_c()
         if temp is not None:
             t["temp_c"] = round(temp, 1)
+        rssi = _read_ble_rssi()
+        if rssi is not None:
+            t["rssi_dbm"] = rssi
         return _json_bytes(t)
     if uuid == MOTOR_CHAR_UUID:
         return bytearray([_motor_left & 0xff, _motor_right & 0xff])
@@ -1438,7 +1594,11 @@ def on_read(characteristic: BlessGATTCharacteristic, **_) -> bytearray:
 
 
 def on_write(characteristic: BlessGATTCharacteristic, value: bytearray, **_) -> None:
-    global _led_state
+    global _led_state, _last_ble_write_at
+    # Any GATT write counts as liveness for the idle watchdog. A stuck link
+    # (Chrome timed out, never wrote) never reaches this callback, so its
+    # _last_ble_write_at stays older than its first-seen timestamp.
+    _last_ble_write_at = time.time()
     uuid = characteristic.uuid.lower()
     if uuid == LED_CHAR_UUID:
         if len(value) == 0 or led is None:
@@ -1593,9 +1753,11 @@ async def main() -> None:
             bytearray(),
             GATTAttributePermissions.readable,
         )
-        log.info("camera: %s (stack %s)",
+        _src = _detect_camera_source() if _camera_available else None
+        log.info("camera: %s (stack %s, hw %s)",
                  "ready" if _camera_available else "install-on-demand",
-                 "loaded" if _camera_available else "not installed")
+                 "loaded" if _camera_available else "not installed",
+                 f"{_src[0]}@{_src[1] or 'libcamera'}" if _src else "none")
     else:
         log.info("camera: disabled in pi-robot.conf")
 
@@ -1629,6 +1791,7 @@ async def main() -> None:
     log.info("Ctrl+C to stop.")
     asyncio.create_task(_check_current_wifi())
     asyncio.create_task(_telemetry_task())
+    asyncio.create_task(_ble_idle_watchdog_task())
     if MOTORS_ENABLED:
         asyncio.create_task(_motor_watchdog_task())
     log.info("capabilities: led=%s motors=%s camera=%s", LED_ENABLED, MOTORS_ENABLED, _camera_available)
