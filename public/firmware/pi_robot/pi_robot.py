@@ -1150,6 +1150,91 @@ def _read_soc_temp_c() -> float | None:
         return None
 
 
+def _list_connected_centrals() -> list[str]:
+    """MAC addresses of currently-connected BLE centrals, per bluetoothctl.
+    Empty list if nothing is connected or bluetoothctl is unavailable."""
+    try:
+        out = subprocess.run(
+            ["bluetoothctl", "devices", "Connected"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
+    macs = []
+    for line in out.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0] == "Device":
+            macs.append(parts[1])
+    return macs
+
+
+def _read_ble_rssi() -> int | None:
+    """RSSI of the first connected central. Reported through telemetry so
+    the dashboard can render a "Weak signal" warning when the link is
+    degrading. Returns None when no central is connected or bluetoothctl
+    doesn't return an RSSI line (BR/EDR cached entries sometimes don't)."""
+    macs = _list_connected_centrals()
+    if not macs:
+        return None
+    try:
+        out = subprocess.run(
+            ["bluetoothctl", "info", macs[0]],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("RSSI:"):
+            try:
+                return int(line.split(":", 1)[1].strip())
+            except ValueError:
+                return None
+    return None
+
+
+# Per-central bookkeeping for the idle watchdog. A central that opens a GATT
+# link but never writes within IDLE_DISCONNECT_S almost always means Chrome
+# timed out mid-discovery and never came back — the kind of stuck link that
+# blocks subsequent connect attempts until the supervision timeout fires.
+# Force-disconnect those so the slot is free for the next try.
+_ble_first_seen_at: dict[str, float] = {}
+_last_ble_write_at: float = 0.0
+IDLE_DISCONNECT_S = 60.0
+
+
+async def _ble_idle_watchdog_task() -> None:
+    """Polls connected centrals every 10s; disconnects any that have been
+    linked > IDLE_DISCONNECT_S with no GATT writes received since they
+    first appeared. Self-cleans stuck links without dashboard or SSH."""
+    while True:
+        try:
+            now = time.time()
+            current = set(_list_connected_centrals())
+            # Garbage-collect entries for centrals that disconnected on their own.
+            for mac in list(_ble_first_seen_at.keys()):
+                if mac not in current:
+                    _ble_first_seen_at.pop(mac, None)
+            for mac in current:
+                if mac not in _ble_first_seen_at:
+                    _ble_first_seen_at[mac] = now
+                connected_for = now - _ble_first_seen_at[mac]
+                # Any write received since this central appeared counts as
+                # liveness — the link is being used, leave it alone.
+                writes_since_seen = _last_ble_write_at >= _ble_first_seen_at[mac]
+                if connected_for > IDLE_DISCONNECT_S and not writes_since_seen:
+                    log.info("idle-disconnect: %s after %.0fs, no GATT writes", mac, connected_for)
+                    await asyncio.create_subprocess_exec(
+                        "bluetoothctl", "disconnect", mac,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    _ble_first_seen_at.pop(mac, None)
+        except Exception as e:
+            log.warning("ble watchdog: %s", e)
+        await asyncio.sleep(10)
+
+
 async def _telemetry_task() -> None:
     """Periodic vitals notify. 6s cadence catches spikes without saturating
     BLE. Payload < ~60 B fits one ATT."""
@@ -1162,6 +1247,9 @@ async def _telemetry_task() -> None:
             temp = _read_soc_temp_c()
             if temp is not None:
                 t["temp_c"] = round(temp, 1)
+            rssi = _read_ble_rssi()
+            if rssi is not None:
+                t["rssi_dbm"] = rssi
             _publish(TELEMETRY_CHAR_UUID, _json_bytes(t))
         except Exception as e:
             log.warning("telemetry: %s", e)
@@ -1492,6 +1580,9 @@ def on_read(characteristic: BlessGATTCharacteristic, **_) -> bytearray:
         temp = _read_soc_temp_c()
         if temp is not None:
             t["temp_c"] = round(temp, 1)
+        rssi = _read_ble_rssi()
+        if rssi is not None:
+            t["rssi_dbm"] = rssi
         return _json_bytes(t)
     if uuid == MOTOR_CHAR_UUID:
         return bytearray([_motor_left & 0xff, _motor_right & 0xff])
@@ -1503,7 +1594,11 @@ def on_read(characteristic: BlessGATTCharacteristic, **_) -> bytearray:
 
 
 def on_write(characteristic: BlessGATTCharacteristic, value: bytearray, **_) -> None:
-    global _led_state
+    global _led_state, _last_ble_write_at
+    # Any GATT write counts as liveness for the idle watchdog. A stuck link
+    # (Chrome timed out, never wrote) never reaches this callback, so its
+    # _last_ble_write_at stays older than its first-seen timestamp.
+    _last_ble_write_at = time.time()
     uuid = characteristic.uuid.lower()
     if uuid == LED_CHAR_UUID:
         if len(value) == 0 or led is None:
@@ -1696,6 +1791,7 @@ async def main() -> None:
     log.info("Ctrl+C to stop.")
     asyncio.create_task(_check_current_wifi())
     asyncio.create_task(_telemetry_task())
+    asyncio.create_task(_ble_idle_watchdog_task())
     if MOTORS_ENABLED:
         asyncio.create_task(_motor_watchdog_task())
     log.info("capabilities: led=%s motors=%s camera=%s", LED_ENABLED, MOTORS_ENABLED, _camera_available)
