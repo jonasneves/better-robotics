@@ -324,6 +324,14 @@ async function connect(id) {
   }
   entry.status = "connecting";
   renderEntry(entry);
+  // Defensive disconnect-before-connect. Chrome's gatt.connect() is meant
+  // to be idempotent, but in practice a cached "connected" state (or a
+  // previous attempt that left internal state dirty) can hang the next
+  // connect indefinitely. An explicit disconnect resets Chrome's
+  // bookkeeping and is a no-op on the wire when actually disconnected.
+  if (entry.device.gatt.connected) {
+    try { entry.device.gatt.disconnect(); } catch {}
+  }
   let server;
   try {
     server = await gattConnectWithTimeout(entry.device);
@@ -1262,6 +1270,21 @@ function wireRecoveryMenu() {
   });
   wireHardRefresh({ onBeforeOpen: () => appMenu.hidePopover() });
 }
+
+// Clean GATT teardown on tab close / refresh / app-switch (mobile PWA).
+// Without this, the Pi-side bluez keeps the HCI link in some intermediate
+// state until the supervision timeout fires (~5-20s), and a fresh dashboard
+// load hits a desynced state where Chrome thinks it's disconnected while
+// the Pi still holds the link. Pagehide is fire-and-forget — disconnect()
+// returns synchronously and the link-layer teardown completes in the
+// ~100ms before the page is killed.
+window.addEventListener("pagehide", () => {
+  for (const entry of state.devices.values()) {
+    if (entry.device?.gatt?.connected) {
+      try { entry.device.gatt.disconnect(); } catch {}
+    }
+  }
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   // Wire the recovery menu FIRST and in isolation. Anything throwing in
