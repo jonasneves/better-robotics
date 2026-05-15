@@ -258,7 +258,7 @@ static uint16_t s_video_frame_id = 0;
 static int     s_video_frame_count = 0;
 
 static void video_pump_tick(void) {
-    if (!s_video_active || !camera_ready() || !s_peer || !s_video_sid_known) return;
+    if (!s_video_active || !camera_present() || !s_peer || !s_video_sid_known) return;
     int64_t now = esp_timer_get_time();
     int64_t period_us = (int64_t)1000000 / (s_video_fps > 0 ? s_video_fps : 10);
     if (now - s_video_last_frame_us < period_us) return;
