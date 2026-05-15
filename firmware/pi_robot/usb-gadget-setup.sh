@@ -19,9 +19,15 @@ echo 0x0200 > bcdUSB
 
 mkdir -p strings/0x409
 SN=$(awk '/Serial/ { print $NF; exit }' /proc/cpuinfo 2>/dev/null || echo "0000000000")
+# Per-chip product string so two Pis plugged into the same host can be
+# told apart in System Information / lsusb. Derivation matches the BLE
+# name (pi_robot.py device_name, pi_robot_health._device_name): last 4
+# hex of /proc/cpuinfo Serial, uppercased.
+SUFFIX=$(echo "$SN" | tail -c 5 | tr '[:lower:]' '[:upper:]')
+[ -z "$SUFFIX" ] && SUFFIX="0000"
 echo "$SN" > strings/0x409/serialnumber
 echo "Better Robotics" > strings/0x409/manufacturer
-echo "BetterPi" > strings/0x409/product
+echo "BR-$SUFFIX" > strings/0x409/product
 
 mkdir -p configs/c.1/strings/0x409
 echo "ECM + ACM" > configs/c.1/strings/0x409/configuration
