@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "cJSON.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -259,9 +258,7 @@ static uint16_t s_video_frame_id = 0;
 static int     s_video_frame_count = 0;
 
 static void video_pump_tick(void) {
-    // s_video_active is set true by start_video_streaming AFTER a
-    // successful camera_acquire, so the camera is guaranteed live here.
-    if (!s_video_active || !s_peer || !s_video_sid_known) return;
+    if (!s_video_active || !camera_ready() || !s_peer || !s_video_sid_known) return;
     int64_t now = esp_timer_get_time();
     int64_t period_us = (int64_t)1000000 / (s_video_fps > 0 ? s_video_fps : 10);
     if (now - s_video_last_frame_us < period_us) return;
@@ -303,6 +300,9 @@ static void video_pump_tick(void) {
             rc = esp_peer_send_data(s_peer, &df);
         }
         if (rc != ESP_PEER_ERR_NONE) full_send = false;
+        // 2 ms inter-chunk pacing — was 5 ms when WIFI_PS_MIN_MODEM was the
+        // default and the radio needed wake-up time. With PS_NONE restored,
+        // most of that delay is dead weight.
         if (chunk + 1 < total_chunks) vTaskDelay(pdMS_TO_TICKS(2));
     }
 
@@ -318,11 +318,6 @@ static void video_pump_tick(void) {
 bool webrtc_peer_video_active(void) { return s_video_active; }
 
 static void start_video_streaming(int fps) {
-    if (s_video_active) return;  // already streaming; ignore duplicate start
-    if (!camera_acquire()) {
-        ESP_LOGW(TAG, "video stream start: camera_acquire failed");
-        return;
-    }
     s_video_fps = (fps > 0 && fps <= 30) ? fps : 10;
     s_video_active = true;
     s_video_last_frame_us = 0;
@@ -330,10 +325,8 @@ static void start_video_streaming(int fps) {
 }
 
 static void stop_video_streaming(void) {
-    if (!s_video_active) return;
+    if (s_video_active) ESP_LOGI(TAG, "video stream stopped");
     s_video_active = false;
-    camera_release();
-    ESP_LOGI(TAG, "video stream stopped");
 }
 
 // Set in handle_video_dc when the dashboard says "stop". The loop task
@@ -383,16 +376,13 @@ static int on_peer_state(esp_peer_state_t state, void *ctx) {
 // We ship SDP back over BLE; ignore trickle candidates because the
 // answer SDP includes them all by the time esp_peer emits it (with the
 // default impl, anyway).
-// Log m=, a=group:, a=mid:, and a=candidate: lines from an SDP. The
-// m=/group:/mid: lines diagnose Chrome's strict m-line and MID ordering
-// (Chrome rejects answers with mismatched MIDs). The a=candidate: lines
-// surface what ICE will actually pair against — load-bearing when one
-// side is policy-restricted (relay-only) and we need to confirm the
-// other side's candidate set includes a compatible type.
+// Log m=, a=group:, a=mid: lines from an SDP for diagnosing m-line and
+// MID mismatch between offer and answer (Chrome rejects answers whose
+// m-lines or MIDs don't match the offer's order).
 static void log_sdp_mlines(const char *tag, const char *sdp) {
     const char *p = sdp;
     int n = 0;
-    const char *prefixes[] = { "\nm=", "\na=group:", "\na=mid:", "\na=candidate:" };
+    const char *prefixes[] = { "\nm=", "\na=group:", "\na=mid:" };
     while (*p) {
         const char *next = NULL;
         for (size_t i = 0; i < sizeof(prefixes)/sizeof(prefixes[0]); i++) {
@@ -404,7 +394,7 @@ static void log_sdp_mlines(const char *tag, const char *sdp) {
         const char *eol = strchr(p, '\r');
         if (!eol) eol = strchr(p, '\n');
         size_t len = eol ? (size_t)(eol - p) : strlen(p);
-        if (len > 140) len = 140;  // candidate lines run long
+        if (len > 100) len = 100;
         ESP_LOGI(TAG, "  %s[%d]: %.*s", tag, n++, (int)len, p);
         p = eol ? eol : p + len;
     }
@@ -465,14 +455,9 @@ static int on_peer_data(esp_peer_data_frame_t *frame, void *ctx) {
 
 // ── peer connection lifecycle ────────────────────────────────────────────
 
-// Strip TCP candidates from the offer SDP — esp_peer's ICE agent is UDP-only
-// and TCP candidates trip its parser (LoadProhibited crash observed pre-3228975).
-// IPv6 and srflx pass through unchanged. The Pi running aiortc on the same
-// hotspot just did 12+ MB of DTLS-protected video over T-Mobile cellular
-// IPv6 host-host, so the v6/srflx "trap" attribution from 658eb90 was wrong:
-// the failure was libpeer-on-ESP32 specific, not network-shaped. Restoring
-// the pre-misanalysis filter so we can actually observe what libpeer does
-// when offered every candidate type on the same network the Pi succeeds on.
+// Strip TCP candidates from the offer SDP — chip can only use UDP for ICE.
+// IPv6 stays: lwIP IPv6 is enabled, and v6 host↔host is the fast path on
+// apartment networks where the v4 path goes through a slow centralized NAT.
 static char *filter_sdp_for_chip(const char *sdp) {
     size_t in_len = strlen(sdp);
     char *out = malloc(in_len + 1);
@@ -618,14 +603,10 @@ static void handle_offer(const char *sdp) {
         ESP_LOGW(TAG, "ice_servers: none — host candidates only");
     }
 
-    // ipv6_support ON — gather IPv6 host candidates alongside IPv4. The
-    // Pi (aiortc) just did sustained DTLS-protected video over T-Mobile
-    // cellular v6 host-host on this same hotspot, so v6 is a real path
-    // when both peers have it. Earlier disable in 658eb90 attributed
-    // libpeer-on-ESP32 DTLS timeouts to "cellular v6 traps DTLS"; that
-    // attribution was wrong (Pi proves the network is fine). If libpeer
-    // still locks up here, the bug is in libpeer, not the network — and
-    // the right fix is upstream, not more SDP filtering.
+    // Default-impl config — ipv6_support tells the agent to gather IPv6
+    // host candidates alongside IPv4. Without this flag esp_peer 1.3.0
+    // only binds AF_INET sockets, so the dashboard's IPv6 host can't
+    // pair and ICE falls back to the slow IPv4 path.
     static esp_peer_default_cfg_t default_cfg = {
         .ipv6_support = true,
     };
@@ -656,29 +637,10 @@ static void handle_offer(const char *sdp) {
         .on_channel_close    = on_peer_channel_close,
     };
 
-    // libpeer needs ~50-80 KB of contiguous internal RAM for DTLS + agent
-    // + SRTP/SCTP allocations; PSRAM is irrelevant (crypto can't run from
-    // it). The camera DMA buffer (~32 KB, internal-only on classic ESP32)
-    // used to be the bottleneck — it was kept allocated at boot regardless
-    // of consumer activity, leaving ~21 KB contiguous and tripping
-    // esp_peer_open with NO_MEM (-2). Now camera_probe()/acquire()/release()
-    // bound the camera lifecycle to consumers (this file's video pump,
-    // http_stream, snapshot), so by the time we get here the camera is
-    // off and contiguous heap is plentiful. Heap log kept as a diagnostic
-    // anchor for future regressions.
-    ESP_LOGI(TAG, "pre-open heap: internal_free=%u largest=%u",
-             (unsigned)esp_get_free_internal_heap_size(),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-
     int rc = esp_peer_open(&cfg, esp_peer_get_default_impl(), &s_peer);
-
     if (rc != ESP_PEER_ERR_NONE || !s_peer) {
         ESP_LOGE(TAG, "esp_peer_open failed: %d", rc);
-        // Surface rc to the dashboard. esp_peer_types.h: -1 INVALID_ARG,
-        // -2 NO_MEM, -3 WRONG_STATE, -4 NOT_SUPPORT, -6 FAIL.
-        char err_buf[48];
-        snprintf(err_buf, sizeof(err_buf), "esp_peer_open failed: %d", rc);
-        send_ble_signal_error(err_buf);
+        send_ble_signal_error("esp_peer_open failed");
         return;
     }
 
