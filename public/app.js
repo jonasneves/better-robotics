@@ -12,7 +12,10 @@ import {
 import { ALL as CAPABILITIES, setCapabilityRenderer } from "./capabilities/index.js";
 import { RUNTIMES } from "./capabilities/runtime/index.js";
 import { setOpen as capSetOpen } from "./capabilities/runtime/cap-section.js";
-import { formatUptime, formatWifi, formatResetReason } from "./format.js";
+import {
+  formatUptime, formatWifi, formatWifiShort, formatResetReason,
+  formatRssi, rssiSeverity, tempSeverity,
+} from "./format.js";
 import { updateFirmware, updateFromFile, setExpectingReconnectHandler } from "./capabilities/ota.js";
 import { restartService, rebootRobot, enrollKey, getLog, getConfig } from "./capabilities/runtime/command.js";
 import { initGamepad } from "./gamepad.js";
@@ -59,25 +62,57 @@ function attachedCameraHtml(entry) {
   `;
 }
 
-// The header meta line ("WiFi … · up …h · reset: …"). Reused by renderEntry
-// (full render) and patchSecondaryRow (telemetry-driven updates that would
-// otherwise flash the whole card every 10 s). Composes pure formatters
-// from format.js (smoke-tested) so the display logic isn't duplicated.
+// The primary-row meta line. Kept short — width is precious in the list,
+// and detail (IP, mem, temp, RSSI, etc.) lives in the system line inside
+// the expanded card body, not here. Only "abnormal reset" stays because
+// it's a discoverability signal you want to see without expanding.
 function metaText(entry) {
   const connected = entry.status === "connected" || entry.status === "firmware-down";
   if (!connected) return "";
   const t = entry.telemetry;
   const parts = [
-    formatWifi(entry.wifiStatus),
+    formatWifiShort(entry.wifiStatus),
     formatUptime(t),
     formatResetReason(t?.reset_reason),
   ];
-  // One canonical status row at the top — free RAM + temp join the
-  // WiFi/uptime line so the body doesn't need a separate telemetry row.
+  return parts.filter(Boolean).join(" · ");
+}
+
+// The system line — full diagnostic detail (IP, mem, temp, RSSI), shown
+// inside the expanded card body. Card-open is the user's implicit "show
+// me more" gesture, so this line has all the precise numbers the primary
+// row deliberately omits.
+function systemLine(entry) {
+  const connected = entry.status === "connected" || entry.status === "firmware-down";
+  if (!connected) return "";
+  const t = entry.telemetry;
+  const w = entry.wifiStatus;
+  const parts = [];
+  if (w?.st === "joined" && w.ip) parts.push(w.ip);
   if (typeof t?.mem_free_mb === "number") parts.push(`${t.mem_free_mb} MB free`);
   else if (typeof t?.free_heap === "number") parts.push(`${Math.floor(t.free_heap / 1024)} KB free`);
   if (typeof t?.temp_c === "number") parts.push(`${t.temp_c.toFixed(1)}°C`);
-  return parts.filter(Boolean).join(" · ");
+  const rssi = formatRssi(t?.rssi_dbm);
+  if (rssi) parts.push(rssi);
+  return parts.join(" · ");
+}
+
+// Warning chips for the primary row — only render when something is
+// degraded enough that the user should notice at a glance. Empty when
+// everything is healthy, so the row stays visually quiet.
+function warningChips(entry) {
+  const connected = entry.status === "connected" || entry.status === "firmware-down";
+  if (!connected) return "";
+  const t = entry.telemetry;
+  const chips = [];
+  const tempSev = tempSeverity(t?.temp_c);
+  if (tempSev) chips.push({ sev: tempSev, text: `${t.temp_c.toFixed(1)}°C` });
+  const rssiSev = rssiSeverity(t?.rssi_dbm);
+  if (rssiSev) chips.push({ sev: rssiSev, text: `${t.rssi_dbm} dBm` });
+  if (!chips.length) return "";
+  return `<div class="robot-warnings">${chips.map(c =>
+    `<span class="warning-chip warning-${c.sev}">${escapeHtml(c.text)}</span>`,
+  ).join("")}</div>`;
 }
 
 // Surgical patcher for the secondary row + body telemetry line. Avoids a
@@ -93,6 +128,12 @@ function patchSecondaryRow(entry) {
     meta.textContent = t;
     meta.title = t;
   }
+  const sys = node.querySelector(".robot-system");
+  if (sys) sys.textContent = systemLine(entry);
+  // Warnings replace in place to avoid a flash. innerHTML swap is fine —
+  // chip count is tiny, no event listeners attached.
+  const warnSlot = node.querySelector(".robot-warnings-slot");
+  if (warnSlot) warnSlot.innerHTML = warningChips(entry);
 }
 
 // Same idea for robot-status notify (rebooting / installing / ready). Lower
@@ -886,14 +927,18 @@ function renderEntry(entry) {
         escapeHtml(entry.fwType === "esp32" ? "ESP32" : entry.fwType.toUpperCase())
       }</span>`
     : "";
-  // metaText() composes the WiFi/uptime/reset/RAM/temp row from format.js
-  // helpers; reused by patchSecondaryRow on the high-frequency telemetry
-  // notify path, so the display logic stays in one place. Always emit the
+  // metaText() composes the slim primary-row meta (WiFi state + uptime,
+  // plus any abnormal reset reason). Full diagnostic detail — IP, RAM,
+  // temp, RSSI — lives in the system line inside the expanded body.
+  // Reused by patchSecondaryRow on the high-frequency telemetry notify
+  // path so the display logic stays in one place. Always emit the
   // wrapper (even empty) so the patcher can fill it without a full
-  // re-render. CSS :empty hides it. title carries the full text so a
-  // truncated row stays hover-discoverable.
+  // re-render. CSS :empty hides it.
   const metaJoined = metaText(entry);
   const metaRow = `<div class="robot-meta" title="${escapeHtml(metaJoined)}">${escapeHtml(metaJoined)}</div>`;
+  const sysLine = systemLine(entry);
+  const sysRow = `<div class="robot-system">${escapeHtml(sysLine)}</div>`;
+  const warningsSlot = `<div class="robot-warnings-slot">${warningChips(entry)}</div>`;
 
   // Active-ops chips: at-a-glance "what's happening right now" without
   // having to expand each capability section.
@@ -967,6 +1012,7 @@ function renderEntry(entry) {
     </div>
     <div class="robot-secondary">
       ${metaRow}
+      ${warningsSlot}
       ${opsRow}
     </div>
     ${entry.staleHandle && !connected && !connecting ? `
@@ -987,6 +1033,7 @@ function renderEntry(entry) {
     ` : ""}
     ${expanded && !firmwareDown ? `
       <div class="robot-body">
+        ${sysRow}
         ${enrollHtml}
         ${sections}
         ${attachedCameraHtml(entry)}

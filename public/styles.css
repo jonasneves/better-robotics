@@ -449,6 +449,35 @@ a.menu-item { text-decoration: none; }
    space when there's no data yet. */
 .robot-meta:empty { display: none; }
 
+/* System line inside the expanded card body. Holds the precise diagnostic
+   numbers (IP, RAM, temp, RSSI) that the primary-row meta deliberately
+   omits to keep the list view glanceable. The body is the user's implicit
+   "show me more" surface, so this row has room to be specific. Wraps
+   instead of truncating — no width pressure here. */
+.robot-system {
+  margin: 8px 0 12px 26px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.robot-system:empty { display: none; }
+
+/* Warning chips appear in the secondary row only when something is
+   degraded (hot SoC, weak BLE link). The slot is always emitted; the
+   patcher fills it. Empty slot collapses. */
+.robot-warnings-slot:empty { display: none; }
+.robot-warnings { display: inline-flex; gap: 6px; margin-left: 8px; }
+.warning-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid currentColor;
+}
+.warning-chip.warning-warm { color: #d4a44a; }
+.warning-chip.warning-weak { color: #d4a44a; }
+.warning-chip.warning-bad  { color: #d97a5a; }
+
 /* Stale-handle hint — appears under the Re-pair button when Chrome's
    per-origin permission for this device has expired. Sets the user's
    expectation that the next click opens the OS chooser, and that the

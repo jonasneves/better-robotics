@@ -84,6 +84,48 @@ export function formatWifi(wifiStatus) {
   return null;  // idle / unknown — caller renders nothing
 }
 
+// Terser WiFi for the primary row, where width is precious — drops the IP
+// (which lives in the system line / WiFi section). "WiFi" / "WiFi joining…" /
+// "WiFi failed". Stays null for idle so an offline robot's row doesn't carry
+// an empty label.
+export function formatWifiShort(wifiStatus) {
+  const w = wifiStatus;
+  if (!w) return null;
+  if (w.st === "joined") return "WiFi";
+  if (w.st === "joining") return "WiFi joining…";
+  if (w.st === "scanning") return "WiFi scanning";
+  if (w.st === "failed")   return "WiFi failed";
+  return null;
+}
+
+// "-52 dBm" or null. Negative dBm — closer to zero is stronger. Caller
+// decides what to do with weak values; this formatter is just rendering.
+export function formatRssi(rssi) {
+  if (typeof rssi !== "number") return null;
+  return `${rssi} dBm`;
+}
+
+// dBm thresholds for the warning chip on the primary row. -75 is "noticeably
+// weak"; below that, range is the explanation for flaky behavior so we want
+// the user to see it at a glance. Above, the link is healthy enough to stay
+// invisible.
+export function rssiSeverity(rssi) {
+  if (typeof rssi !== "number") return null;
+  if (rssi <= -85) return "bad";
+  if (rssi <= -75) return "weak";
+  return null;
+}
+
+// Pi SoC thermal warning. Pi 4/5 throttle at ~80°C; surfacing at 65°C lets
+// the user notice before throttling kicks in. Below this, the value lives
+// in the system line and not on the primary row.
+export function tempSeverity(c) {
+  if (typeof c !== "number") return null;
+  if (c >= 80) return "bad";
+  if (c >= 65) return "warm";
+  return null;
+}
+
 // "reset: panic" — only for ABNORMAL reasons. poweron / sw / ext are normal
 // and noisy; suppressing them is part of the smart-safety / signal-to-noise
 // discipline (don't surface routine info that competes with real signals).
