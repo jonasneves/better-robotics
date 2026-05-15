@@ -76,16 +76,14 @@ jobs:
 
       - name: Build ESP32 firmware (ESP-IDF)
         if: steps.changes.outputs.esp_changed == 'true'
-        # esp-idf-ci-action handles the IDF install + export.sh + idf.py call.
-        # Pinned to v5.5.4 to match local dev (`make setup`); the IDF action
-        # caches the toolchain so repeat runs are fast. CWD inside the
-        # action is path:, hence the bare `idf.py build`.
+        # TEST: fullclean to bust the cache and ensure app_desc + every .o
+        # reflects current source. Restore later.
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.5.4
           target: esp32
           path: 'firmware/esp32_robot_idf'
-          command: idf.py build
+          command: idf.py fullclean && idf.py build
 
       - name: Static DRAM budget check
         # The classic ESP32-CAM has ~125 KB DRAM. Camera+BLE+WiFi+lwIP all
