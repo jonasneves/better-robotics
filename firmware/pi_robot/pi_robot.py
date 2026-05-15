@@ -960,16 +960,16 @@ def _open_camera_track():
 
 
 class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type: ignore
-    """1280x960 @ 15fps — matches common UVC cams' native resolution so
-    libcamera's uvcvideo pipeline passes through without a center-crop.
-    Bandwidth-safe over WiFi via VP8/H264 encode."""
+    """640x480 @ 15fps — CPU-reasonable on a Pi 4, bandwidth-safe for WebRTC
+    over WiFi. UVC cams may center-crop this from their native sensor size;
+    revisit when full-FOV becomes a priority worth burning CPU on."""
     kind = "video"
 
     def __init__(self) -> None:
         super().__init__()
         self.camera = Picamera2()
         cfg = self.camera.create_video_configuration(
-            main={"size": (1280, 960), "format": "RGB888"},
+            main={"size": (640, 480), "format": "RGB888"},
         )
         self.camera.configure(cfg)
         self.camera.start()
