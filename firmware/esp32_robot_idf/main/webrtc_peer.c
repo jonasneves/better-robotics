@@ -465,26 +465,14 @@ static int on_peer_data(esp_peer_data_frame_t *frame, void *ctx) {
 
 // ── peer connection lifecycle ────────────────────────────────────────────
 
-// Strip TCP, IPv6, and srflx candidates from the offer SDP. All three feed
-// the same failure mode: libpeer (esp_peer's binary lib) locks on the first
-// STUN-OK pair and never falls back when DTLS dies. Anything that binds-OK
-// but can't carry DTLS bricks the session.
-//   - TCP: esp_peer's ICE agent is UDP-only; TCP candidates also trip its
-//     parser (LoadProhibited crash observed pre-3228975).
-//   - IPv6 host: cellular IPv6 (T-Mobile 2607:FB90:... observed) binds but
-//     drops sustained DTLS. Original v6 filter from 3228975 (Apr 30); lost
-//     when 3fa05ce narrowed the filter to TCP-only during the libpeer →
-//     esp_peer migration. Chrome doesn't emit fe80:: link-local in offers
-//     by default, so "drop all v6" and "drop global v6" are equivalent.
-//   - srflx: chip-srflx ↔ peer-srflx pair traverses both peers' carrier NATs.
-//     On T-Mobile cellular hotspot the binding completes but DTLS doesn't
-//     (same trap as v6, just over v4). Cost: loses the srflx hole-punch
-//     fast path on cross-network non-cellular pairs — they fall to relay.
-//     Worth the relay tax for the reliability win against any cellular link.
-//
-// What's left: UDP IPv4 host (works on same LAN) and relay (works
-// everywhere via TURN). libpeer can't lock on a trap pair if we don't
-// hand it one.
+// Strip TCP candidates from the offer SDP — esp_peer's ICE agent is UDP-only
+// and TCP candidates trip its parser (LoadProhibited crash observed pre-3228975).
+// IPv6 and srflx pass through unchanged. The Pi running aiortc on the same
+// hotspot just did 12+ MB of DTLS-protected video over T-Mobile cellular
+// IPv6 host-host, so the v6/srflx "trap" attribution from 658eb90 was wrong:
+// the failure was libpeer-on-ESP32 specific, not network-shaped. Restoring
+// the pre-misanalysis filter so we can actually observe what libpeer does
+// when offered every candidate type on the same network the Pi succeeds on.
 static char *filter_sdp_for_chip(const char *sdp) {
     size_t in_len = strlen(sdp);
     char *out = malloc(in_len + 1);
@@ -497,7 +485,6 @@ static char *filter_sdp_for_chip(const char *sdp) {
         size_t line_len = eol ? (size_t)(eol - p + 1) : strlen(p);
         bool drop = false;
         if (strncmp(p, "a=candidate:", 12) == 0) {
-            // a=candidate:<foundation> <component> <proto> <pri> <addr> <port> typ <type> ...
             const char *q = p + 12;
             int tok = 0;
             while (q < p + line_len && tok < 2) {
@@ -505,42 +492,10 @@ static char *filter_sdp_for_chip(const char *sdp) {
                 while (q < p + line_len && *q == ' ') q++;
                 tok++;
             }
-            // q at proto.
             if (q < p + line_len && (q[0] == 't' || q[0] == 'T')
                                   && (q[1] == 'c' || q[1] == 'C')
                                   && (q[2] == 'p' || q[2] == 'P')) {
                 drop = true;
-            } else {
-                // Advance 2 fields (priority, then we land at addr).
-                int adv = 0;
-                while (q < p + line_len && adv < 2) {
-                    while (q < p + line_len && *q != ' ') q++;
-                    while (q < p + line_len && *q == ' ') q++;
-                    adv++;
-                }
-                const char *addr_end = q;
-                while (addr_end < p + line_len && *addr_end != ' ') addr_end++;
-                // IPv4 dotted-quad never has ':'; IPv6 always does.
-                if (memchr(q, ':', (size_t)(addr_end - q)) != NULL) {
-                    drop = true;
-                } else {
-                    // Walk addr → port → "typ" → type value (3 more fields).
-                    const char *r = addr_end;
-                    for (int i = 0; i < 3; i++) {
-                        while (r < p + line_len && *r == ' ') r++;
-                        while (r < p + line_len && *r != ' ') r++;
-                    }
-                    while (r < p + line_len && *r == ' ') r++;
-                    // r at type value (host / srflx / prflx / relay).
-                    if (r + 5 <= p + line_len
-                        && (r[0] == 's' || r[0] == 'S')
-                        && (r[1] == 'r' || r[1] == 'R')
-                        && (r[2] == 'f' || r[2] == 'F')
-                        && (r[3] == 'l' || r[3] == 'L')
-                        && (r[4] == 'x' || r[4] == 'X')) {
-                        drop = true;
-                    }
-                }
             }
         }
         if (drop) dropped++;
@@ -549,7 +504,7 @@ static char *filter_sdp_for_chip(const char *sdp) {
         p = eol + 1;
     }
     out[o] = 0;
-    if (dropped) ESP_LOGI(TAG, "filtered SDP: dropped %d TCP/IPv6/srflx candidate(s)", dropped);
+    if (dropped) ESP_LOGI(TAG, "filtered SDP: dropped %d TCP candidate(s)", dropped);
     return out;
 }
 
@@ -663,15 +618,16 @@ static void handle_offer(const char *sdp) {
         ESP_LOGW(TAG, "ice_servers: none — host candidates only");
     }
 
-    // ipv6_support OFF — paired with filter_sdp_for_chip dropping IPv6
-    // candidates from the remote offer. Gathering local v6 would put a
-    // useless v6 host candidate into the answer that no peer can pair
-    // against once the offer's v6 is filtered. Cellular IPv6 (T-Mobile
-    // observed on BR-A044) lets STUN binding through but drops sustained
-    // UDP / larger DTLS — and libpeer's binary lib locks on the first
-    // STUN-OK pair without DTLS fallback, so a v6 trap bricks the session.
+    // ipv6_support ON — gather IPv6 host candidates alongside IPv4. The
+    // Pi (aiortc) just did sustained DTLS-protected video over T-Mobile
+    // cellular v6 host-host on this same hotspot, so v6 is a real path
+    // when both peers have it. Earlier disable in 658eb90 attributed
+    // libpeer-on-ESP32 DTLS timeouts to "cellular v6 traps DTLS"; that
+    // attribution was wrong (Pi proves the network is fine). If libpeer
+    // still locks up here, the bug is in libpeer, not the network — and
+    // the right fix is upstream, not more SDP filtering.
     static esp_peer_default_cfg_t default_cfg = {
-        .ipv6_support = false,
+        .ipv6_support = true,
     };
 
     esp_peer_cfg_t cfg = {
