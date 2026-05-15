@@ -11,6 +11,21 @@ Cheat sheet for diagnostic flags, console handles, debug paths. User-facing → 
 ### Phone (`phone.html`)
 - `#pair=<uuid>` — the pairing room id, normally injected by the QR. Required for the phone to find the room. Implementation: `mobile.js`.
 
+## Keyboard control
+
+WASD / arrow keys drive the **active motors target** — one robot at a time,
+mutually exclusive. With a single connected robot, it's the auto-pick.
+With two or more, the active card's Motors section shows `Motors · Driving`.
+Switch via:
+
+- Click anywhere on a card's **Motors section** → that robot becomes active.
+- Number keys **`1`–`9`** → activate the Nth connected robot (in `state.devices`
+  insertion order — same as the card list).
+
+Active disconnects → auto-pick re-runs on the next key/joypad event.
+Implementation: `public/capabilities/runtime/signed-pair.js`. State key:
+`state.activeMotorsRobotId` (session-only, not persisted).
+
 ## Window handles (DevTools console)
 
 Live on both desktop and phone while `pairing.js` is loaded.
