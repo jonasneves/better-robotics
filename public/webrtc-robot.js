@@ -83,12 +83,19 @@ async function openChannelViaBLE(robotId, label, signalChar, opts) {
   const entry = { pc, channels: new Map() };
   _peers.set(robotId, entry);
 
-  // Unreliable + unordered — video frames are independent; a lost chunk
-  // means the chip's next frame supersedes it anyway. Ordered/reliable
-  // channels stall the whole stream waiting for retransmits we'd throw
-  // away. The chip's reassembly already drops partial frames whose
-  // frame_id is older than a newer one in flight.
-  const channel = pc.createDataChannel(label, { ordered: false, maxRetransmits: 0 });
+  // Per-label DC reliability. Video is unreliable+unordered — frames are
+  // independent, a lost chunk means the next frame supersedes it anyway,
+  // and SCTP head-of-line on a retransmit stalls the whole stream waiting
+  // for a chunk we'd throw away. The chip's reassembly already drops
+  // partial frames whose frame_id is older than a newer one in flight.
+  //
+  // Every other label is a byte stream (ota: firmware image, future:
+  // log tail, PTY) where a single dropped or reordered chunk corrupts
+  // the result. Those get SCTP's default ordered+reliable behavior.
+  const dcOpts = label === "video"
+    ? { ordered: false, maxRetransmits: 0 }
+    : {};
+  const channel = pc.createDataChannel(label, dcOpts);
   entry.channels.set(label, channel);
 
   // Listener for chunked answer notify. Installed before we send the
