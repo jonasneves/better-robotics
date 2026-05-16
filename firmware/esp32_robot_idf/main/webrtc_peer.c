@@ -280,14 +280,19 @@ static void send_dc_text(uint16_t sid, const char *text) {
     esp_peer_send_data(s_peer, &df);
 }
 
-static void handle_ota_dc(const char *msg, size_t len) {
+// Route by DC frame type, not first-byte heuristic — a binary chunk whose
+// first byte happens to be '{' (0x7B) would otherwise be misparsed as JSON
+// and silently dropped from the OTA bin. Roughly 1 in 256 chunk offsets
+// in a real firmware image hit that byte, so the old heuristic was a
+// time-bomb waiting for the wrong bin.
+static void handle_ota_dc(const char *msg, size_t len, esp_peer_data_frame_type_t type) {
     if (len == 0) return;
-    if (msg[0] == '{') {
+    if (type == ESP_PEER_DATA_CHANNEL_STRING) {
         cJSON *root = cJSON_ParseWithLength(msg, len);
         if (!root) return;
-        cJSON *type = cJSON_GetObjectItem(root, "type");
-        if (cJSON_IsString(type)) {
-            const char *t = type->valuestring;
+        cJSON *cmd_type = cJSON_GetObjectItem(root, "type");
+        if (cJSON_IsString(cmd_type)) {
+            const char *t = cmd_type->valuestring;
             if (strcmp(t, "begin") == 0) {
                 cJSON *size = cJSON_GetObjectItem(root, "size");
                 size_t total = cJSON_IsNumber(size) ? (size_t)size->valuedouble : 0;
@@ -328,6 +333,11 @@ static void handle_ota_dc(const char *msg, size_t len) {
 //   [2]    chunk_idx u8
 //   [3]    total_chunks u8
 //   [4..]  jpeg payload (≤ VIDEO_CHUNK_PAYLOAD bytes)
+// libpeer has an undocumented per-message ceiling — empirically 4096 breaks
+// the stream outright, 2048 slows it below baseline (WOULD_BLOCK retries +
+// partial-frame drops). 1200 is the largest known-good value. Attack frame
+// size (sensor JPEG QF) or the inter-chunk vTaskDelay below if more headroom
+// is needed; chunk size is a dead lever.
 #define VIDEO_CHUNK_PAYLOAD  1200
 #define VIDEO_CHUNK_HEADER   4
 
@@ -336,6 +346,9 @@ static int     s_video_fps = 10;
 static int64_t s_video_last_frame_us = 0;
 static uint16_t s_video_frame_id = 0;
 static int     s_video_frame_count = 0;
+// Static-storage (BSS) so larger chunk payloads don't blow the pump task's
+// stack. Single-writer (video_pump_tick is the only caller path).
+static uint8_t s_video_chunk_buf[VIDEO_CHUNK_HEADER + VIDEO_CHUNK_PAYLOAD];
 
 static void video_pump_tick(void) {
     // s_video_active is set true by start_video_streaming AFTER a
@@ -358,21 +371,20 @@ static void video_pump_tick(void) {
     }
 
     s_video_frame_id++;
-    uint8_t buf[VIDEO_CHUNK_HEADER + VIDEO_CHUNK_PAYLOAD];
     bool full_send = true;
     for (size_t chunk = 0; chunk < total_chunks; chunk++) {
         size_t off  = chunk * VIDEO_CHUNK_PAYLOAD;
         size_t plen = fb->len - off;
         if (plen > VIDEO_CHUNK_PAYLOAD) plen = VIDEO_CHUNK_PAYLOAD;
-        buf[0] = (s_video_frame_id >> 8) & 0xff;
-        buf[1] =  s_video_frame_id       & 0xff;
-        buf[2] = (uint8_t)chunk;
-        buf[3] = (uint8_t)total_chunks;
-        memcpy(buf + VIDEO_CHUNK_HEADER, fb->buf + off, plen);
+        s_video_chunk_buf[0] = (s_video_frame_id >> 8) & 0xff;
+        s_video_chunk_buf[1] =  s_video_frame_id       & 0xff;
+        s_video_chunk_buf[2] = (uint8_t)chunk;
+        s_video_chunk_buf[3] = (uint8_t)total_chunks;
+        memcpy(s_video_chunk_buf + VIDEO_CHUNK_HEADER, fb->buf + off, plen);
         esp_peer_data_frame_t df = {
             .type = ESP_PEER_DATA_CHANNEL_DATA,
             .stream_id = s_video_sid,
-            .data = buf,
+            .data = s_video_chunk_buf,
             .size = VIDEO_CHUNK_HEADER + plen,
         };
         int rc = esp_peer_send_data(s_peer, &df);
@@ -531,7 +543,7 @@ static int on_peer_data(esp_peer_data_frame_t *frame, void *ctx) {
     if (s_video_sid_known && frame->stream_id == s_video_sid) {
         handle_video_dc((const char *)frame->data, frame->size);
     } else if (s_ota_sid_known && frame->stream_id == s_ota_sid) {
-        handle_ota_dc((const char *)frame->data, frame->size);
+        handle_ota_dc((const char *)frame->data, frame->size, frame->type);
     }
     return 0;
 }
@@ -706,7 +718,13 @@ static void loop_task_fn(void *arg) {
             s_ota_sid_known   = false;
         }
         s_close_requested = false;
-        vTaskDelay(pdMS_TO_TICKS(10));
+        // 10ms was a 100 Hz cap on pump_tick, which (combined with the
+        // esp_peer_main_loop time ahead of it) capped video at ~10-14 fps.
+        // 2ms keeps the task yielding to WiFi/BLE between iterations but
+        // lets the pump fire often enough to actually reach the requested
+        // fps. esp_peer_main_loop yields internally so other tasks still
+        // breathe.
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
 
