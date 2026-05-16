@@ -5,12 +5,24 @@
 // no backend" wedge.
 //
 // Wire format on the SIGNAL char (both directions, mirrors OTA/snapshot):
-//   0x01 [u16 BE total]   begin
-//   0x02 [bytes]          chunk (≤ 100 B payload, fits any plausible MTU)
-//   0x03                  commit
-//   0xFF [utf8 msg]       error (notify-only)
+//   0x01 [u16 BE total]                       offer begin
+//   0x02 [bytes]                              offer chunk (≤ 100 B payload)
+//   0x03                                      offer commit
+//   0x04 [u16 BE total]                       ice-servers begin
+//   0x05 [bytes]                              ice-servers chunk
+//   0x06                                      ice-servers commit
+//   0x07 [u16 BE cert_len][u16 BE key_len]   cert+key begin (5 bytes)
+//   0x08 [bytes]                              cert+key chunk (cert PEM then key PEM)
+//   0x09                                      cert+key commit
+//   0xFF [utf8 msg]                           error (notify-only)
+//
+// The cert push is dashboard→chip only; the chip falls back to its own
+// ECDSA self-sign if no cert arrives before dtls_srtp_init. See
+// webrtc-cert.js for the keygen + self-sign and the matching firmware
+// handler in webrtc_peer.c / dtls_srtp_supply_cert.
 
 import { fetchIceServers } from "./pairing.js";
+import { generateSessionCert } from "./webrtc-cert.js";
 
 // 90s. ESP32 + libpeer's ICE pairing is sequential — each candidate pair
 // tested with STUN connectivity checks + retries, no parallelism. With
@@ -138,6 +150,18 @@ async function openChannelViaBLE(robotId, label, signalChar, opts) {
     // iCloud-Private-Relay-style networks). Pi fetches its own ICE servers
     // in pi_robot_rtc.py and accepts only opcodes 0x01-0x03 on this char.
     if (robotType === "esp32") {
+      // Cert+key first: chip's dtls_srtp_init uses the cached pair if
+      // present, else self-signs. Push before the offer so the chip's
+      // esp_peer_open path already has it when DTLS warms up. Soft-fail
+      // on cert gen — if WebCrypto / @peculiar/x509 fail, chip falls
+      // back to its own ECDSA gen rather than the camera not opening.
+      try {
+        onStatus("Sending session cert…");
+        const { certPem, keyPem } = await generateSessionCert();
+        await sendCertKey(signalChar, certPem, keyPem);
+      } catch (err) {
+        onStatus(`cert offload failed (${err.message}); chip will self-sign`);
+      }
       onStatus("Sending ICE servers…");
       const chipIce = await iceServersForChip(iceServers);
       const iceBytes = new TextEncoder().encode(JSON.stringify({ ice: chipIce }));
@@ -167,6 +191,36 @@ async function openChannelViaBLE(robotId, label, signalChar, opts) {
 
 async function sendChunked(char, bytes) {
   return sendChunkedOp(char, bytes, 0x01, 0x02, 0x03);
+}
+
+// Cert+key has a custom begin (5 bytes: opcode + two u16 BE lengths)
+// instead of the shared 3-byte begin used by SDP/ICE. Chunk/commit
+// opcodes are still in the 0x08/0x09 pair so sendChunkedOp's inner loop
+// applies after we hand-roll the begin frame.
+async function sendCertKey(char, certPem, keyPem) {
+  const certLen = certPem.length;
+  const keyLen  = keyPem.length;
+  if (certLen === 0 || keyLen === 0 || certLen > 0xFFFF || keyLen > 0xFFFF) {
+    throw new Error(`cert/key sizes out of range: ${certLen}/${keyLen}`);
+  }
+  const begin = new Uint8Array(5);
+  begin[0] = 0x07;
+  begin[1] = (certLen >> 8) & 0xff; begin[2] = certLen & 0xff;
+  begin[3] = (keyLen  >> 8) & 0xff; begin[4] = keyLen  & 0xff;
+  await char.writeValueWithResponse(begin);
+  // Chip expects cert_pem bytes immediately followed by key_pem bytes,
+  // totaling cert_len + key_len. Concatenate then chunk.
+  const merged = new Uint8Array(certLen + keyLen);
+  merged.set(certPem, 0);
+  merged.set(keyPem, certLen);
+  for (let off = 0; off < merged.length; off += BLE_SIG_CHUNK) {
+    const take = Math.min(BLE_SIG_CHUNK, merged.length - off);
+    const buf = new Uint8Array(1 + take);
+    buf[0] = 0x08;
+    buf.set(merged.subarray(off, off + take), 1);
+    await char.writeValueWithResponse(buf);
+  }
+  await char.writeValueWithResponse(new Uint8Array([0x09]));
 }
 
 async function sendChunkedOp(char, bytes, beginOp, chunkOp, commitOp) {

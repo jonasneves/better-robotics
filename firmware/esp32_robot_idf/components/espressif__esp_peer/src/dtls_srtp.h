@@ -121,6 +121,34 @@ typedef struct {
 int dtls_srtp_gen_cert(void);
 
 /**
+ * @brief  Supply a pre-built cert/key pair to be used at the next
+ *         dtls_srtp_init instead of chip-generated self-signed ECDSA.
+ *
+ *         When the dashboard ships an ECDSA P-256 cert+key over BLE
+ *         pre-handshake (BR-WebRTC opcodes 0x07/0x08/0x09), the chip
+ *         never has to run mbedtls_x509write_crt_* or mbedtls_ecp_gen_key
+ *         — drops ~100-200 ms of init time and lets a future build drop
+ *         MBEDTLS_X509_CREATE_C entirely (~3 KB flash). Cert+key are
+ *         held in the existing DTLS_SIGN_ONCE cache slots.
+ *
+ *         Both buffers must be PEM (NUL-terminated). mbedTLS auto-detects
+ *         PEM vs DER on parse, so DER would also work — but the cache
+ *         slots are sized for PEM and the existing
+ *         dtls_srtp_selfsign_cert path stores PEM, so we stay consistent.
+ *
+ * @param[in]  cert_pem  Certificate PEM (NUL-terminated)
+ * @param[in]  cert_len  strlen(cert_pem) + 1
+ * @param[in]  key_pem   Private key PEM (NUL-terminated)
+ * @param[in]  key_len   strlen(key_pem) + 1
+ *
+ * @return
+ *       - 0       Stored; next dtls_srtp_init will use it
+ *       - -1     Either buffer doesn't fit DTLS_CERT_PEM_BUF_SIZE
+ */
+int dtls_srtp_supply_cert(const unsigned char *cert_pem, size_t cert_len,
+                          const unsigned char *key_pem,  size_t key_len);
+
+/**
  * @brief  Initialize for DTSP SRTP
  *
  * @param[in]  cfg  DTLS configuration

@@ -37,6 +37,34 @@ static unsigned char s_cached_key_pem[DTLS_CERT_PEM_BUF_SIZE];
 static bool s_cached_cert_ready = false;
 #endif
 
+// Public, called by the dashboard-supplied cert path
+// (webrtc_peer.c → opcodes 0x07/0x08/0x09 → here).
+// Cache lifetime: persists for the whole boot. WebRTC sessions reuse the
+// last supplied pair; dashboards that want per-session keys just push a
+// fresh one before each start.
+int dtls_srtp_supply_cert(const unsigned char *cert_pem, size_t cert_len,
+                          const unsigned char *key_pem,  size_t key_len)
+{
+#ifdef DTLS_SIGN_ONCE
+    if (cert_len > sizeof(s_cached_cert_pem) || key_len > sizeof(s_cached_key_pem)) {
+        ESP_LOGE(TAG, "supplied cert/key too big: cert=%u key=%u (max=%u)",
+                 (unsigned)cert_len, (unsigned)key_len, (unsigned)sizeof(s_cached_cert_pem));
+        return -1;
+    }
+    memcpy(s_cached_cert_pem, cert_pem, cert_len);
+    if (cert_len < sizeof(s_cached_cert_pem)) s_cached_cert_pem[cert_len] = 0;
+    memcpy(s_cached_key_pem,  key_pem,  key_len);
+    if (key_len < sizeof(s_cached_key_pem))   s_cached_key_pem[key_len] = 0;
+    s_cached_cert_ready = true;
+    ESP_LOGI(TAG, "cert+key supplied externally (%u + %u bytes)",
+             (unsigned)cert_len, (unsigned)key_len);
+    return 0;
+#else
+    (void)cert_pem; (void)cert_len; (void)key_pem; (void)key_len;
+    return -1;
+#endif
+}
+
 extern void measure_start(const char *tag);
 extern void measure_stop(const char *tag);
 

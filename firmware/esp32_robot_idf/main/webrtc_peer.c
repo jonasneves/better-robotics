@@ -18,6 +18,12 @@
 #include "esp_peer.h"
 #include "esp_peer_default.h"
 #include "esp_peer_types.h"
+// Forward decl: dtls_srtp.h lives under esp_peer/src and isn't on the
+// public include path. We only need this one entry point (called once
+// per browser-supplied cert push), so a local extern is cleaner than
+// promoting the whole header to public.
+extern int dtls_srtp_supply_cert(const unsigned char *cert_pem, size_t cert_len,
+                                 const unsigned char *key_pem,  size_t key_len);
 
 #include "esp_camera.h"
 
@@ -54,22 +60,33 @@ static char *rewrite_answer_mid(const char *answer, const char *target_mid);
 
 // ── BLE signaling ────────────────────────────────────────────────────────
 //
-// Two chunked transfers cross the signal char before the SDP answer goes
-// back: the dashboard pushes ICE servers (TURN creds + STUN/TURN URLs as
-// IP literals — DNS + HTTPS happen on the browser, not the chip), then
-// the SDP offer. Each transfer uses a 3-opcode flow (begin/chunk/commit).
+// Three chunked transfers cross the signal char before the SDP answer goes
+// back: the dashboard pushes (a) an ECDSA P-256 cert+key it generated in
+// WebCrypto, (b) ICE servers (TURN creds + STUN/TURN URLs as IP literals),
+// then (c) the SDP offer. Each transfer uses a 3-opcode flow
+// (begin/chunk/commit). The cert push is OPTIONAL — when omitted, dtls_srtp
+// falls back to chip-generated self-signed (~100-200 ms ECDSA gen at init).
 //
 // Wire format:
-//   0x01 [u16 BE total]  offer begin
-//   0x02 [bytes]         offer chunk
-//   0x03                 offer commit
-//   0x04 [u16 BE total]  ice-servers begin
-//   0x05 [bytes]         ice-servers chunk
-//   0x06                 ice-servers commit
-//   0xFF [utf8 msg]      error (notify-only, chip → dashboard)
+//   0x01 [u16 BE total]                        offer begin
+//   0x02 [bytes]                               offer chunk
+//   0x03                                       offer commit
+//   0x04 [u16 BE total]                        ice-servers begin
+//   0x05 [bytes]                               ice-servers chunk
+//   0x06                                       ice-servers commit
+//   0x07 [u16 BE cert_len] [u16 BE key_len]   cert+key begin (5 bytes)
+//   0x08 [bytes]                               cert+key chunk
+//   0x09                                       cert+key commit
+//   0xFF [utf8 msg]                            error (notify-only, chip → dashboard)
+//
+// Cert+key wire layout: cert_pem bytes immediately followed by key_pem
+// bytes, totaling cert_len + key_len. Both PEM, NUL-terminated when each
+// is parsed (chip writes the NUL after copy). cert_len + key_len capped
+// at BLE_SIG_MAX_CERT to keep chunk-state bounded.
 
 #define BLE_SIG_MAX_OFFER  8192
 #define BLE_SIG_MAX_ICE    1024
+#define BLE_SIG_MAX_CERT   4096
 #define BLE_SIG_CHUNK      100
 
 static char *s_ble_offer_buf = NULL;
@@ -80,6 +97,11 @@ static char  s_ice_buf[BLE_SIG_MAX_ICE + 1];
 static size_t s_ice_total = 0;
 static size_t s_ice_received = 0;
 static bool   s_ice_ready = false;
+
+static uint8_t *s_cert_buf = NULL;
+static size_t s_cert_total = 0;     // cert_len + key_len from begin opcode
+static size_t s_cert_cert_len = 0;  // boundary inside s_cert_buf
+static size_t s_cert_received = 0;
 
 static void send_ble_signal_error(const char *msg) {
     uint8_t buf[1 + 64];
@@ -189,6 +211,57 @@ void webrtc_peer_handle_ble_signal_write(uint16_t from_conn, const uint8_t *buf,
         s_ice_buf[s_ice_total] = 0;
         s_ice_ready = true;
         ESP_LOGI(TAG, "ble signal: ice servers received, %u B", (unsigned)s_ice_total);
+    } else if (op == 0x07) {
+        // cert+key begin — payload = u16 BE cert_len, u16 BE key_len.
+        if (len < 5) { send_ble_signal_error("bad cert begin"); return; }
+        size_t cert_len = ((size_t)buf[1] << 8) | buf[2];
+        size_t key_len  = ((size_t)buf[3] << 8) | buf[4];
+        size_t total = cert_len + key_len;
+        if (cert_len == 0 || key_len == 0 || total > BLE_SIG_MAX_CERT) {
+            send_ble_signal_error("cert size out of range");
+            return;
+        }
+        free(s_cert_buf);
+        s_cert_buf = malloc(total);
+        if (!s_cert_buf) { send_ble_signal_error("oom"); s_cert_total = 0; return; }
+        s_cert_total    = total;
+        s_cert_cert_len = cert_len;
+        s_cert_received = 0;
+    } else if (op == 0x08) {
+        if (!s_cert_buf) return;
+        size_t add = len - 1;
+        if (s_cert_received + add > s_cert_total) {
+            free(s_cert_buf); s_cert_buf = NULL;
+            send_ble_signal_error("cert chunk overflow");
+            return;
+        }
+        memcpy(s_cert_buf + s_cert_received, buf + 1, add);
+        s_cert_received += add;
+    } else if (op == 0x09) {
+        if (!s_cert_buf || s_cert_received != s_cert_total) {
+            free(s_cert_buf); s_cert_buf = NULL;
+            send_ble_signal_error("cert incomplete");
+            return;
+        }
+        // PEM is text — dtls_srtp_supply_cert treats the buffer as a string
+        // and writes its own trailing NUL. mbedtls_*_parse functions take an
+        // explicit length anyway; passing buflen+1 lets the trailing NUL
+        // fit the cached PEM slot.
+        int rc = dtls_srtp_supply_cert(s_cert_buf, s_cert_cert_len,
+                                       s_cert_buf + s_cert_cert_len,
+                                       s_cert_total - s_cert_cert_len);
+        if (rc != 0) {
+            send_ble_signal_error("cert reject");
+        } else {
+            ESP_LOGI(TAG, "ble signal: cert+key handed to dtls (%u + %u B)",
+                     (unsigned)s_cert_cert_len,
+                     (unsigned)(s_cert_total - s_cert_cert_len));
+        }
+        free(s_cert_buf);
+        s_cert_buf = NULL;
+        s_cert_total = 0;
+        s_cert_cert_len = 0;
+        s_cert_received = 0;
     }
 }
 
