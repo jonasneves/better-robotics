@@ -529,13 +529,17 @@ const ESP_FIRST_PIN_X = 50;
 const ESP_TOP_ROW_Y = 50;
 const ESP_BOT_ROW_Y = 210;
 
-function espPinFragment(pin, cx, cy, labelAbove) {
+function espPinFragment(pin, cx, cy, labelAbove, claimed) {
   const statusClass = pin.status ? `esp-${pin.status}` : "";
+  const claimedClass = claimed ? "claimed" : "";
   const title = pin.note ? `${pin.label} — ${pin.note}` : pin.label;
   const labelY = labelAbove ? cy - 22 : cy + 26;
+  // data-gpio enables the focus-highlight chain (input → matching pin
+  // dot) and is the ESP32 analogue of the Pi side's data-phys.
+  const gpioAttr = pin.gpio != null ? ` data-gpio="${pin.gpio}"` : "";
   return `
     <text class="pin-label" x="${cx}" y="${labelY}" text-anchor="middle">${escapeHtml(pin.label)}</text>
-    <circle class="pin-dot kind-${pin.kind} ${statusClass}" cx="${cx}" cy="${cy}" r="${ESP_PIN_R}">
+    <circle class="pin-dot kind-${pin.kind} ${statusClass} ${claimedClass}" cx="${cx}" cy="${cy}" r="${ESP_PIN_R}"${gpioAttr}>
       <title>${escapeHtml(title)}</title>
     </circle>
   `;
@@ -641,7 +645,8 @@ function espMotorWiresFragment(claims) {
   return wires.join("");
 }
 
-function espEncoderModuleFragment(side, cx) {
+function espEncoderModuleFragment(side, cx, opts) {
+  const { editable, editConfig, flagged } = opts || {};
   const pcbX = cx - ESP_ENC_PCB_W / 2;
   const vccDx = side === "left" ? +ESP_ENC_PIN_DX : -ESP_ENC_PIN_DX;
   const gndDx = -vccDx;
@@ -649,6 +654,22 @@ function espEncoderModuleFragment(side, cx) {
   const outX  = cx;
   const gndX  = cx + gndDx;
   const pcbTopY = ESP_ENC_Y;
+
+  let inputFrag = "";
+  if (editable) {
+    const key = side === "left" ? "enc_l" : "enc_r";
+    const v = editConfig?.[key];
+    const display = v == null || v < 0 ? "" : String(v);
+    const conflictCls = v != null && v >= 0 && flagged?.has(v) ? " conflict" : "";
+    inputFrag = `
+      <foreignObject x="${outX - 22}" y="${ESP_ENC_DOT_Y + 12}" width="44" height="22">
+        <input xmlns="http://www.w3.org/1999/xhtml" type="text" inputmode="numeric" maxlength="2"
+               class="terminal-input${conflictCls}" data-key="${key}"
+               value="${escapeHtml(display)}" placeholder="—" />
+      </foreignObject>
+    `;
+  }
+
   return `
     <rect class="enc-pcb" x="${pcbX}" y="${pcbTopY}" width="${ESP_ENC_PCB_W}" height="${ESP_ENC_PCB_H}" rx="6"/>
     <text class="enc-title" x="${cx}" y="${pcbTopY + 16}" text-anchor="middle">encoder · ${side}</text>
@@ -658,6 +679,7 @@ function espEncoderModuleFragment(side, cx) {
     <circle class="pin-dot enc-pin kind-gpio" cx="${outX}" cy="${ESP_ENC_DOT_Y}" r="${ESP_ENC_DOT_R}" data-wire="${escapeHtml(`encoders.${side}`)}"/>
     <text class="enc-pin-label" x="${gndX}" y="${ESP_ENC_DOT_Y - 11}" text-anchor="middle">GND</text>
     <circle class="pin-dot enc-pin kind-gnd" cx="${gndX}" cy="${ESP_ENC_DOT_Y}" r="${ESP_ENC_DOT_R}"/>
+    ${inputFrag}
   `;
 }
 
@@ -691,14 +713,28 @@ function espEncoderWiresFragment(side, claims) {
   return out.join("");
 }
 
-function renderEsp32BoardWithDriver(entry) {
+// ESP32's L298N has no editable ENA/ENB — the firmware uses LEDC PWM
+// directly on the direction pins (no separate enable). Terminals stay
+// visible (so the user sees the chip's full silkscreen), just not
+// configurable. IN1-IN4 map to motor direction pins.
+const ESP_TERMINAL_TO_KEY = {
+  in1: "m_l_fwd",
+  in2: "m_l_bwd",
+  in3: "m_r_fwd",
+  in4: "m_r_bwd",
+};
+
+function renderEsp32BoardWithDriver(entry, opts = {}) {
+  const { editable = false, editConfig = null, flagged = new Set() } = opts;
   const claims = esp32ClaimsFromEntry(entry);
-  const topPins = ESP32_PINS_TOP.map((p, i) =>
-    espPinFragment(p, ESP_FIRST_PIN_X + i * ESP_PIN_SPACING, ESP_TOP_ROW_Y, true),
+  // Mark a top/bot pin as "claimed" if any cap currently uses its GPIO
+  // — gives the same blue-ring affordance the Pi pin dots have.
+  const renderRow = (arr, y, labelAbove) => arr.map((p, i) =>
+    espPinFragment(p, ESP_FIRST_PIN_X + i * ESP_PIN_SPACING, y, labelAbove,
+                   p.gpio != null && claims[p.gpio] != null),
   ).join("");
-  const botPins = ESP32_PINS_BOT.map((p, i) =>
-    espPinFragment(p, ESP_FIRST_PIN_X + i * ESP_PIN_SPACING, ESP_BOT_ROW_Y, false),
-  ).join("");
+  const topPins = renderRow(ESP32_PINS_TOP, ESP_TOP_ROW_Y, true);
+  const botPins = renderRow(ESP32_PINS_BOT, ESP_BOT_ROW_Y, false);
   const pcbY = ESP_TOP_ROW_Y + 18;
   const pcbH = ESP_BOT_ROW_Y - ESP_TOP_ROW_Y - 36;
 
@@ -710,15 +746,30 @@ function renderEsp32BoardWithDriver(entry) {
     const cx = ESP_TERMINAL_XS[i];
     const kind = role.startsWith("en") ? "enable" : "input";
     const label = { ena: "ENA", in1: "IN1", in2: "IN2", in3: "IN3", in4: "IN4", enb: "ENB" }[role];
+    let inputFrag = "";
+    if (editable && ESP_TERMINAL_TO_KEY[role]) {
+      const key = ESP_TERMINAL_TO_KEY[role];
+      const v = editConfig?.[key];
+      const display = v == null || v < 0 ? "" : String(v);
+      const conflictCls = v != null && v >= 0 && flagged.has(v) ? " conflict" : "";
+      inputFrag = `
+        <foreignObject x="${cx - 22}" y="${ESP_TERM_CY + 12}" width="44" height="22">
+          <input xmlns="http://www.w3.org/1999/xhtml" type="text" inputmode="numeric" maxlength="2"
+                 class="terminal-input${conflictCls}" data-key="${key}"
+                 value="${escapeHtml(display)}" />
+        </foreignObject>
+      `;
+    }
     return `
       <text class="driver-label" x="${cx}" y="${ESP_TERM_CY - 14}" text-anchor="middle">${label}</text>
       <circle class="driver-pin ${kind}" cx="${cx}" cy="${ESP_TERM_CY}" r="${ESP_TERM_R}" data-role="${role}"/>
+      ${inputFrag}
     `;
   }).join("");
 
   const encoderModules = `
-    ${espEncoderModuleFragment("left",  ESP_ENC_LEFT_CX)}
-    ${espEncoderModuleFragment("right", ESP_ENC_RIGHT_CX)}
+    ${espEncoderModuleFragment("left",  ESP_ENC_LEFT_CX, { editable, editConfig, flagged })}
+    ${espEncoderModuleFragment("right", ESP_ENC_RIGHT_CX, { editable, editConfig, flagged })}
   `;
   const encoderWires = `
     ${espEncoderWiresFragment("left",  claims)}
@@ -1268,6 +1319,12 @@ function beginEsp32Edit(entry) {
 }
 
 function renderEsp32Edit(entry) {
+  // Preserve focus across the innerHTML rebuild so typing into a pin
+  // input doesn't blur after every keystroke. Mirrors the Pi side's
+  // approach.
+  const active = document.activeElement;
+  const savedKey = active?.dataset?.key || null;
+
   const c = editConfig;
   const ALL_KEYS = ["led", "flash", "m_l_fwd", "m_l_bwd", "m_r_fwd", "m_r_bwd", "enc_l", "enc_r"];
   const usedBy = {};
@@ -1281,19 +1338,11 @@ function renderEsp32Edit(entry) {
     return (p >= 0 && ESP32_CAMERA_RESERVED.has(p)) ? [[k, p]] : [];
   });
 
-  // Blank field = -1 (cap disabled). The note explains it inline so the
-  // operator doesn't have to guess at the convention.
-  const input = (label, key) => {
-    const v = c[key];
-    const display = v < 0 ? "" : String(v);
-    const note = v < 0 ? "(disabled)" : esp32PinNote(v);
-    return `<div class="pinout-edit-row">
-      <span class="pinout-edit-label">${label}</span>
-      <input type="text" inputmode="numeric" class="pinout-edit-input"
-             data-key="${key}" value="${display}" placeholder="blank to disable">
-      ${note ? `<span class="meta">${escapeHtml(note)}</span>` : ""}
-    </div>`;
-  };
+  // GPIOs to flag inline (red border on input). Hard conflicts + camera
+  // hits earn the flag; the warning bar names the offenders in prose.
+  const flagged = new Set();
+  for (const [, v] of dup) for (const k of v) if (c[k] >= 0) flagged.add(c[k]);
+  for (const [, p] of cameraHits) flagged.add(p);
 
   const warn = [
     dup.length
@@ -1310,7 +1359,7 @@ function renderEsp32Edit(entry) {
   // editConfig flow, which feeds claimsFromConfig).
   const previewEntry = {
     capSchema: [
-      ...(c.motors_enabled !== false && c.m_l_fwd >= 0 ? [{
+      ...(c.m_l_fwd >= 0 ? [{
         name: "motors",
         pins: {
           left:  { forward: c.m_l_fwd, backward: c.m_l_bwd },
@@ -1323,24 +1372,36 @@ function renderEsp32Edit(entry) {
       }] : []),
     ],
   };
+  // Toolbar carries LED + Flash because they don't belong to any chip
+  // below the ESP32 (LED is direct-attach, Flash is the white LED on
+  // GPIO4). Motors + encoders edit inline on the SVG below.
+  const ledV   = c.led < 0   ? "" : String(c.led);
+  const flashV = c.flash < 0 ? "" : String(c.flash);
+  const ledCls   = c.led   >= 0 && flagged.has(c.led)   ? " conflict" : "";
+  const flashCls = c.flash >= 0 && flagged.has(c.flash) ? " conflict" : "";
+
   $("pinout-body").innerHTML = `
-    ${renderEsp32BoardWithDriver(previewEntry)}
-    <div class="pinout-edit">
-      <div class="pinout-edit-section">
-        ${input("LED",            "led")}
-        ${input("Flash",          "flash")}
-        ${input("Left forward",   "m_l_fwd")}
-        ${input("Left backward",  "m_l_bwd")}
-        ${input("Right forward",  "m_r_fwd")}
-        ${input("Right backward", "m_r_bwd")}
-        ${input("Encoder left",   "enc_l")}
-        ${input("Encoder right",  "enc_r")}
-      </div>
-      ${warn}
+    <div class="pinout-toolbar">
+      <label class="toolbar-toggle">
+        <span>LED</span>
+        <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input${ledCls}"
+               data-key="led" value="${ledV}" placeholder="—">
+      </label>
+      <label class="toolbar-toggle">
+        <span>Flash</span>
+        <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input${flashCls}"
+               data-key="flash" value="${flashV}" placeholder="—">
+      </label>
     </div>
-    <div class="row" style="margin-top: 12px; justify-content: flex-end;">
+    ${renderEsp32BoardWithDriver(previewEntry, { editable: true, editConfig: c, flagged })}
+    ${warn}
+    <div class="meta pinout-helper">
+      Numbers are ESP32 GPIO IDs. Blank input = capability disabled.
+      Camera-reserved pins (15 GPIOs) are off-limits; hover any pin for its constraint.
+    </div>
+    <div class="modal-footer">
       <button class="secondary sm" id="pinout-cancel-btn">Cancel</button>
-      <button class="sm" id="pinout-save-btn" ${blocked ? "disabled" : ""}>Save + restart</button>
+      <button class="sm" id="pinout-save-btn" ${blocked ? "disabled" : ""}>Save &amp; restart</button>
     </div>
   `;
   $("pinout-body").querySelectorAll("input[data-key]").forEach(el => {
@@ -1351,16 +1412,37 @@ function renderEsp32Edit(entry) {
       const v = raw === "" ? -1 : parseInt(raw, 10);
       if (!Number.isNaN(v)) {
         editConfig[el.dataset.key] = v;
-        renderEsp32Edit(entry);  // re-render to refresh conflict + note rows
-        const back = $("pinout-body").querySelector(`input[data-key="${el.dataset.key}"]`);
-        if (back) { back.focus(); back.setSelectionRange(back.value.length, back.value.length); }
+        renderEsp32Edit(entry);  // re-render to refresh conflict + wires
       }
     });
+    // Focus a pin input → highlight the corresponding ESP32 pin dot so
+    // the user sees which physical pin they're about to edit.
+    el.addEventListener("focus", () => highlightEsp32PinFromInput(el));
+    el.addEventListener("blur",  () => clearPinHighlight());
   });
   $("pinout-cancel-btn").addEventListener("click", () => {
     editMode = false; editConfig = null; renderEsp32View(entry);
   });
   $("pinout-save-btn").addEventListener("click", () => saveEsp32Edit(entry));
+  wireUpMotorChains($("pinout-body"));
+
+  // Restore focus + cursor across the innerHTML rebuild so the user
+  // can keep typing without re-clicking.
+  if (savedKey) {
+    const el = $("pinout-body").querySelector(`input[data-key="${savedKey}"]`);
+    if (el) { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch {} }
+  }
+  // Re-apply focus highlight on the SVG dot for whatever input has focus.
+  const act = document.activeElement;
+  if (act?.dataset?.key) highlightEsp32PinFromInput(act);
+}
+
+function highlightEsp32PinFromInput(el) {
+  clearPinHighlight();
+  const gpio = parseInt(el.value, 10);
+  if (Number.isNaN(gpio)) return;
+  const circle = document.querySelector(`.pinout-svg.esp32 .pin-dot[data-gpio="${gpio}"]`);
+  circle?.classList.add("focused");
 }
 
 async function saveEsp32Edit(entry) {
