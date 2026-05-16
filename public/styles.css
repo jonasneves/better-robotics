@@ -1567,6 +1567,39 @@ details.tray.has-alert > summary::after {
 }
 .pinout-svg .motor-wire.wire-input  { stroke: #60a5fa; }
 .pinout-svg .motor-wire.wire-enable { stroke: #a855f7; stroke-dasharray: 5 3; }
+/* Encoder breakout modules. Same PCB green as the L298N (and Pi header
+   strip silver, by inheritance through .pin-dot) so all three boards
+   read as one schematic. Pins use .pin-dot for the shared color/hover
+   behavior; .enc-pin trims the stroke to signal "secondary board". */
+.pinout-svg .enc-pcb {
+  fill: #0f3a1e;
+  stroke: #1a1a1a;
+  stroke-width: 1;
+}
+.pinout-svg .enc-title {
+  font: 500 10px ui-monospace, "SF Mono", Menlo, monospace;
+  fill: #9ca3af;
+  letter-spacing: 0.04em;
+}
+.pinout-svg .enc-pin-label {
+  font: 500 9px ui-monospace, "SF Mono", Menlo, monospace;
+  fill: #cbd5e1;
+}
+.pinout-svg .pin-dot.enc-pin { stroke-width: 0.8; }
+/* Encoder wires. OUT is the editable signal — full blue, same as motor
+   IN wires. VCC and GND are infrastructure (every encoder needs them,
+   the user doesn't pick a destination) — drawn very faintly so they
+   communicate "wire this too" without competing with the actionable
+   OUT line. The faint VCC/GND wires both converge on the same Pi 3V3
+   and Pi GND pins, visually teaching the shared-supply pattern. */
+.pinout-svg .enc-wire {
+  fill: none;
+  stroke-width: 1.8;
+}
+.pinout-svg .enc-wire.wire-out { stroke: #60a5fa; opacity: 0.7; }
+.pinout-svg .enc-wire.wire-vcc { stroke: #f59e0b; opacity: 0.22; stroke-width: 1.2; }
+.pinout-svg .enc-wire.wire-gnd { stroke: #94a3b8; opacity: 0.22; stroke-width: 1.2; }
+.pinout-svg .enc-wire.wire-out.wire-active { opacity: 1; stroke-width: 3.2; }
 /* Supply-side note: reminder of non-wireable connections the user must
    make themselves (GND between Pi and driver, external motor power).
    Muted so it reads as annotation, not a configurable element. */
@@ -1609,26 +1642,6 @@ details.tray.has-alert > summary::after {
 .pinout-svg.esp32 .pin-dot.esp-free     { fill: #22c55e; stroke: #14532d; }
 .pinout-svg.esp32 .pin-dot.esp-sd-shared { fill: #eab308; stroke: #713f12; }
 .pinout-svg.esp32 .pin-dot.esp-reserved  { fill: #6b7280; stroke: #1f2937; }
-/* Board picker tabs above the SVG. Pi | ESP32-CAM; state is the "secondary"
-   variant on inactive, flat primary on active. */
-.pinout-board-toggle {
-  display: flex;
-  gap: 6px;
-  justify-content: center;
-  margin-bottom: 10px;
-}
-/* Inline swatches in the ESP32 caption prose so users can match a word to
-   the color they see in the SVG without a separate legend block. */
-.esp-key {
-  display: inline-block;
-  padding: 0 6px;
-  border-radius: 3px;
-  font-weight: 600;
-  color: #0a0a0a;
-}
-.esp-key.free      { background: #22c55e; }
-.esp-key.sd-shared { background: #eab308; }
-.esp-key.reserved  { background: #6b7280; color: #e5e5e5; }
 
 /* Console (Pi USB-C + ESP32 USB serial unified) — sized for ~110-col
    terminal at 13px (iTerm2-shape), flex-column so the active section's

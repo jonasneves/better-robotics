@@ -39,7 +39,7 @@ from bless import (
     GATTCharacteristicProperties,
     GATTAttributePermissions,
 )
-from gpiozero import LED, Motor
+from gpiozero import LED, Motor, DigitalInputDevice
 
 # UUIDs generated from protocol/uuids.json (tools/gen-uuids.py). Edit the
 # JSON + `make gen-uuids` to add a characteristic; ESP32 firmware AND the
@@ -80,6 +80,12 @@ def _build_caps() -> list:
     if MOTORS_ENABLED:
         caps.append({"name": "motors", "type": "signed-pair",
                      "range": [-100, 100], "pins": MOTORS_PINS, "pin_mode": "pwm"})
+    if ENCODERS_ENABLED:
+        # No dashboard runtime for "tick-count" yet — RUNTIMES[capSchema.type]
+        # falls through to no-op, but claimsFromEntry still picks up `pins`
+        # for the pinout view. Ticks reach the dashboard via telemetry.
+        caps.append({"name": "encoders", "type": "tick-count",
+                     "pins": ENCODERS_PINS, "pin_mode": "in_pull_up"})
     caps.append({"name": "wifi", "type": "wifi-scan"})
     caps.append({"name": "ota", "type": "bundle-ota"})
     if CAMERA_ENABLED is not False:
@@ -135,6 +141,10 @@ SCAN_MAX = 10      # Bounded so the full JSON fits in one ATT read.
 #                   `enable` is optional — set it only if you've cut the
 #                   driver board's ENA/ENB jumpers to wire speed control
 #                   to a GPIO.
+#   encoders_enabled bool — advertise the encoders char (advisory; ticks
+#                          surface via telemetry payload, not a dedicated
+#                          characteristic)
+#   encoders_pins   {left:int, right:int} — single OUT pin per wheel
 #   camera_enabled  "auto" | true | false
 # Missing or unreadable file → default to all capabilities on, so existing Pis
 # OTA'd from pre-config versions keep working.
@@ -158,6 +168,15 @@ MOTORS_PINS    = _config.get("motors_pins", {
     "left":  {"forward": 5,  "backward": 6},
     "right": {"forward": 13, "backward": 26},
 })
+# Wheel-speed encoders — single-OUT (Hall / optical) per side, counted as
+# raw ticks. Defaults sit on free GPIOs near 3V3 (pin 17) and GND (pin 20)
+# so VCC/GND/OUT bundles share one header cluster. pull_up=True matches
+# open-collector sensors (the common case); push-pull encoders also work
+# since the transition still fires when_activated. Active-HIGH sensors
+# need pull_up=False — change in this file and OTA, or wait for a runtime
+# UI knob.
+ENCODERS_ENABLED = bool(_config.get("encoders_enabled", True))
+ENCODERS_PINS    = _config.get("encoders_pins", {"left": 22, "right": 24})
 # Per-robot motor orientation — derived from the dashboard's calibration
 # flow, persisted here. The dashboard sends (L, R) in operator-frame
 # ("L drives the wheel on the operator's left, forward = wheel rolls
@@ -280,6 +299,9 @@ def _pin_conflicts() -> list[tuple[int, list[str]]]:
         for side, pins in MOTORS_PINS.items():
             for role, pin in pins.items():
                 claimed.setdefault(int(pin), []).append(f"motors.{side}.{role}")
+    if ENCODERS_ENABLED:
+        for side, pin in ENCODERS_PINS.items():
+            claimed.setdefault(int(pin), []).append(f"encoders.{side}")
     return [(pin, tags) for pin, tags in claimed.items() if len(tags) > 1]
 
 _conflicts = _pin_conflicts()
@@ -287,10 +309,13 @@ for _pin, _tags in _conflicts:
     log.error("GPIO %d claimed by multiple caps: %s — edit pi-robot.conf or the Pinout dialog to resolve",
               _pin, " + ".join(_tags))
 if _conflicts:
-    # Refuse to initialize motors rather than leave them in undefined state.
-    # LED still goes through (it's usually the one the user meant to keep).
-    log.error("motors disabled due to pin conflict(s)")
+    # Refuse to initialize motors + encoders rather than leave them in
+    # undefined state — gpiozero would raise GPIOPinInUse on the second
+    # claim and the try/except would null-out one driver silently. LED
+    # still goes through (it's usually the one the user meant to keep).
+    log.error("motors + encoders disabled due to pin conflict(s)")
     MOTORS_ENABLED = False
+    ENCODERS_ENABLED = False
 
 led = LED(LED_PIN) if LED_ENABLED else None
 
@@ -311,6 +336,30 @@ if MOTORS_ENABLED:
     except Exception as e:
         log.warning("motor init failed: %s", e)
         _motor_left_drv = _motor_right_drv = None
+
+# Wheel-tick counters. gpiozero dispatches when_activated on its own thread,
+# so the int += 1 is racy-but-fine: Python int writes are atomic under GIL,
+# and we never read a partial update. Cumulative monotonic counts; the
+# dashboard derives speed from successive deltas.
+_enc_l_ticks: int = 0
+_enc_r_ticks: int = 0
+_enc_l_dev: DigitalInputDevice | None = None
+_enc_r_dev: DigitalInputDevice | None = None
+def _enc_l_tick() -> None:
+    global _enc_l_ticks
+    _enc_l_ticks += 1
+def _enc_r_tick() -> None:
+    global _enc_r_ticks
+    _enc_r_ticks += 1
+if ENCODERS_ENABLED:
+    try:
+        _enc_l_dev = DigitalInputDevice(ENCODERS_PINS["left"],  pull_up=True)
+        _enc_r_dev = DigitalInputDevice(ENCODERS_PINS["right"], pull_up=True)
+        _enc_l_dev.when_activated = _enc_l_tick
+        _enc_r_dev.when_activated = _enc_r_tick
+    except Exception as e:
+        log.warning("encoder init failed: %s", e)
+        _enc_l_dev = _enc_r_dev = None
 _led_state = 0
 _server: BlessServer | None = None
 _loop: asyncio.AbstractEventLoop | None = None
@@ -1250,6 +1299,10 @@ async def _telemetry_task() -> None:
             rssi = _read_ble_rssi()
             if rssi is not None:
                 t["rssi_dbm"] = rssi
+            if _enc_l_dev is not None:
+                t["enc_l"] = _enc_l_ticks
+            if _enc_r_dev is not None:
+                t["enc_r"] = _enc_r_ticks
             _publish(TELEMETRY_CHAR_UUID, _json_bytes(t))
         except Exception as e:
             log.warning("telemetry: %s", e)

@@ -1538,14 +1538,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const mod = await import("./shell.js");
     mod.openShellDialog(id);
   });
-  // Recovery lives in the avatar menu, not the per-robot menu: gating the
-  // "BLE is dead" escape hatch behind a paired robot is the exact catch-22
-  // it exists to break. The avatar menu has zero BLE dependency.
-  $("menu-gpio-ref").addEventListener("click", async () => {
-    $("avatar-menu").hidePopover();
-    const mod = await import("./pinout.js");
-    mod.openPinoutReference();
-  });
   $("menu-console").addEventListener("click", () => {
     $("avatar-menu").hidePopover();
     openConsole();

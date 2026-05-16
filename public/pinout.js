@@ -76,6 +76,7 @@ const PI_DEFAULTS = {
     left:  { forward: 5,  backward: 6  },
     right: { forward: 13, backward: 26 },
   },
+  encoders_pins: { left: 22, right: 24 },
 };
 
 // Supports both flat {role: gpio} and nested {left: {forward: 17, backward: 27}} shapes.
@@ -144,15 +145,22 @@ function piRowsFragment(claims) {
     // adjacent columns, so a verbose title would just restate them.
     const lWire = lc?.cap === "motors" ? ` data-wire="${escapeHtml(lc.role)}"` : "";
     const rWire = rc?.cap === "motors" ? ` data-wire="${escapeHtml(rc.role)}"` : "";
+    // Encoder claims are redundant with the breakout-module label that
+    // sits beside the pin row in the SVG — suppress the row text so it
+    // doesn't compete with the module for the same horizontal space.
+    const lcText = lc && lc.cap !== "encoders"
+      ? `<text class="pin-claim" x="118" y="${y}" text-anchor="end"${lWire}>${escapeHtml(lc.cap)} · ${escapeHtml(lc.role)}</text>` : "";
+    const rcText = rc && rc.cap !== "encoders"
+      ? `<text class="pin-claim" x="332" y="${y}" text-anchor="start"${rWire}>${escapeHtml(rc.cap)} · ${escapeHtml(rc.role)}</text>` : "";
     rows.push(`
       <g class="pin-row">
-        ${lc ? `<text class="pin-claim" x="118" y="${y}" text-anchor="end"${lWire}>${escapeHtml(lc.cap)} · ${escapeHtml(lc.role)}</text>` : ""}
+        ${lcText}
         <text class="pin-label" x="178" y="${y}" text-anchor="end">${escapeHtml(ll)}</text>
         <circle class="pin-dot kind-${lk} ${lc ? "claimed" : ""}" cx="${PI_LEFT_CX}" cy="${y}" r="${PI_PIN_R}" data-phys="${lp}"${lWire}><title>${escapeHtml(ll)}</title></circle>
         <text class="pin-num" x="225" y="${y}" text-anchor="middle">${lp}·${rp}</text>
         <circle class="pin-dot kind-${rk} ${rc ? "claimed" : ""}" cx="${PI_RIGHT_CX}" cy="${y}" r="${PI_PIN_R}" data-phys="${rp}"${rWire}><title>${escapeHtml(rl)}</title></circle>
         <text class="pin-label" x="272" y="${y}" text-anchor="start">${escapeHtml(rl)}</text>
-        ${rc ? `<text class="pin-claim" x="332" y="${y}" text-anchor="start"${rWire}>${escapeHtml(rc.cap)} · ${escapeHtml(rc.role)}</text>` : ""}
+        ${rcText}
       </g>
     `);
   }
@@ -189,8 +197,39 @@ function renderBoard(claims) {
 //   IN pins  → blue solid (direction control)
 //   EN pins  → purple dashed (optional speed control; dashed signals optional)
 // Low opacity keeps wires visually secondary to the pin dots themselves.
+//
+// Encoder modules sit beside the Pi strip — left/right of the header at
+// the vertical level of their wired pins. Side-placement keeps each
+// wire as a short horizontal jump instead of a long S-curve that would
+// otherwise cross the L298N's motor wires below. Per-side pin order:
+// VCC nearest the Pi (3V3 fan-in is short), GND outermost. Per-side
+// ground destinations stay on each module's own column (pin 25 for the
+// left module, pin 20 for the right), so only the right module's VCC
+// wire crosses the strip (unavoidable — 3V3 is left-column only).
+// VCC/GND wires are faint (infrastructure); OUT wire pops in blue (the
+// editable signal).
+const ENC_PCB_W    = 100;
+const ENC_PCB_H    = 72;
+const ENC_DOT_R    = 6;
+const ENC_PIN_DX   = 28;
+const ENC_CY       = 218;                       // centered on row 8 (between rows 7+8)
+const ENC_DOT_Y    = ENC_CY;
+// Module right/left edges must clear the Pi-row label band (x=128–178
+// on the left, x=272–322 on the right — widest label "GPIO22" measured
+// at 11px monospace). Modules tuck snug against the labels but leave
+// the GPIO column readable.
+const ENC_LEFT_CX  = 68;                        // right edge ≈ 118, clears label band
+const ENC_RIGHT_CX = 382;                       // left edge  ≈ 332, clears label band
+// Canonical supply pins for the fan-in. 3V3 is left-column only, so
+// both modules' VCC converges there; GND uses each module's own column
+// so only the right VCC crosses the strip.
+const ENC_VCC_PHYS = 17;                        // 3V3 (left col, row 8)
+const ENC_GND_LEFT_PHYS  = 25;                  // GND (left col, row 12)
+const ENC_GND_RIGHT_PHYS = 20;                  // GND (right col, row 9)
+const ENCODER_TO_PATH = { left: "encoders_pins.left", right: "encoders_pins.right" };
+
 const DRIVER_GAP = 60;
-const DRIVER_Y   = PI_H + DRIVER_GAP;          // 568
+const DRIVER_Y   = PI_H + DRIVER_GAP;          // 568 — back to pre-encoder spacing
 const DRIVER_H   = 175;
 const TOTAL_H    = DRIVER_Y + DRIVER_H;        // 743
 const TERM_R     = 7;
@@ -225,11 +264,116 @@ const TERMINAL_TO_PATH = {
   enb: { path: "motors_pins.right.enable",   optional: true  },
 };
 
+// One encoder breakout — three pin dots inside a small rounded PCB.
+// Per-side pin order puts VCC nearest the Pi so the 3V3 fan-in is short
+// (mirror layout: left module is [GND,OUT,VCC], right is [VCC,OUT,GND]).
+// In edit mode the OUT pin carries an inline input; data-path matches
+// the form-input handlers in renderEdit, so save/validation/conflict
+// logic stays unchanged.
+function encoderModuleFragment(side, cx, opts) {
+  const { editable, editConfig, flagged } = opts;
+  const pcbX = cx - ENC_PCB_W / 2;
+  const vccDx = side === "left" ? +ENC_PIN_DX : -ENC_PIN_DX;
+  const gndDx = -vccDx;
+  const vccX  = cx + vccDx;
+  const outX  = cx;
+  const gndX  = cx + gndDx;
+  const pcbTopY = ENC_CY - ENC_PCB_H / 2;
+  const wireAttr = ` data-wire="${escapeHtml(`encoders.${side}`)}"`;
+
+  let inputFrag = "";
+  if (editable) {
+    const path = ENCODER_TO_PATH[side];
+    const v = editConfig?.encoders_pins?.[side] ?? PI_DEFAULTS.encoders_pins[side];
+    const display = String(v);
+    const conflictCls = flagged.has(v) ? " conflict" : "";
+    inputFrag = `
+      <foreignObject x="${outX - 22}" y="${ENC_DOT_Y + 12}" width="44" height="22">
+        <input xmlns="http://www.w3.org/1999/xhtml" type="text" inputmode="numeric" maxlength="2"
+               class="terminal-input${conflictCls}" data-path="${path}"${wireAttr}
+               value="${escapeHtml(display)}" />
+      </foreignObject>
+    `;
+  }
+
+  // Reuse .pin-dot so encoder pins inherit kind-* fills, hover, and the
+  // [data-wire] cursor rule; .enc-pin tweaks stroke for the smaller
+  // breakout-board scale without re-declaring colors.
+  return `
+    <rect class="enc-pcb" x="${pcbX}" y="${pcbTopY}" width="${ENC_PCB_W}" height="${ENC_PCB_H}" rx="6"/>
+    <text class="enc-title" x="${cx}" y="${pcbTopY + 16}" text-anchor="middle">encoder · ${side}</text>
+    <text class="enc-pin-label" x="${vccX}" y="${ENC_DOT_Y - 11}" text-anchor="middle">VCC</text>
+    <circle class="pin-dot enc-pin kind-3v3" cx="${vccX}" cy="${ENC_DOT_Y}" r="${ENC_DOT_R}"/>
+    <text class="enc-pin-label" x="${outX}" y="${ENC_DOT_Y - 11}" text-anchor="middle">OUT</text>
+    <circle class="pin-dot enc-pin kind-gpio" cx="${outX}" cy="${ENC_DOT_Y}" r="${ENC_DOT_R}"${wireAttr}/>
+    <text class="enc-pin-label" x="${gndX}" y="${ENC_DOT_Y - 11}" text-anchor="middle">GND</text>
+    <circle class="pin-dot enc-pin kind-gnd" cx="${gndX}" cy="${ENC_DOT_Y}" r="${ENC_DOT_R}"/>
+    ${inputFrag}
+  `;
+}
+
+// Wires from one module to its three destination Pi pins. Horizontal-
+// dominant routing: emerge from the encoder pin's edge facing the Pi
+// and arrive at the Pi pin's edge facing the encoder. VCC/GND draw
+// even when encoders are disabled (infrastructure hint); OUT draws
+// only when a live claim exists.
+function encoderWiresFragment(side, claims) {
+  const cx   = side === "left" ? ENC_LEFT_CX : ENC_RIGHT_CX;
+  const vccX = side === "left" ? cx + ENC_PIN_DX : cx - ENC_PIN_DX;
+  const outX = cx;
+  const gndX = side === "left" ? cx - ENC_PIN_DX : cx + ENC_PIN_DX;
+  const gndPhys = side === "left" ? ENC_GND_LEFT_PHYS : ENC_GND_RIGHT_PHYS;
+  const out = [];
+
+  const vccPt = piPinCenter(ENC_VCC_PHYS);
+  if (vccPt) out.push(encWirePath(side, vccX, ENC_DOT_Y, vccPt.cx, vccPt.cy, "wire-vcc"));
+  const gndPt = piPinCenter(gndPhys);
+  if (gndPt) out.push(encWirePath(side, gndX, ENC_DOT_Y, gndPt.cx, gndPt.cy, "wire-gnd"));
+
+  let outPhys = null;
+  for (const [physStr, info] of Object.entries(claims)) {
+    if (info?.cap === "encoders" && info?.role === side) {
+      outPhys = parseInt(physStr, 10);
+      break;
+    }
+  }
+  if (outPhys != null) {
+    const pt = piPinCenter(outPhys);
+    if (pt) out.push(encWirePath(side, outX, ENC_DOT_Y, pt.cx, pt.cy, "wire-out", `encoders.${side}`));
+  }
+  return out.join("");
+}
+
+// Side-aware wire path. Endpoints are offset to the Pi-facing edge of
+// each circle, so the wire visually terminates at the dot perimeter
+// instead of overlapping the dot. Control points at midX produce a
+// horizontal trunk then a vertical drop (or rise) toward the Pi pin —
+// keeps the wire outside the Pi strip until close to the destination
+// when the Pi pin is not directly aligned vertically.
+function encWirePath(side, encX, encY, piX, piY, cls, wireRole) {
+  const sx = side === "left" ? encX + ENC_DOT_R : encX - ENC_DOT_R;
+  const ex = side === "left" ? piX  - PI_PIN_R  : piX  + PI_PIN_R;
+  const midX = (sx + ex) / 2;
+  const dataAttr = wireRole ? ` data-wire="${escapeHtml(wireRole)}"` : "";
+  return `<path class="enc-wire ${cls}" d="M${sx},${encY} C${midX},${encY} ${midX},${piY} ${ex},${piY}"${dataAttr}/>`;
+}
+
 function renderBoardWithDriver(claims, opts = {}) {
   const { editable = false, editConfig = null, flagged = new Set() } = opts;
   const driverPcb = `
     <rect class="driver-pcb" x="15" y="${DRIVER_Y}" width="${PI_W - 30}" height="${DRIVER_H}" rx="6"/>
     <text class="driver-title" x="${PI_W / 2}" y="${DRIVER_Y + 22}" text-anchor="middle">H-bridge driver inputs</text>
+  `;
+  // Split modules from wires so the render order can interleave with
+  // motor wires — both wire groups draw last so they sit on top of any
+  // pin dot they touch.
+  const encoderModules = `
+    ${encoderModuleFragment("left",  ENC_LEFT_CX,  { editable, editConfig, flagged })}
+    ${encoderModuleFragment("right", ENC_RIGHT_CX, { editable, editConfig, flagged })}
+  `;
+  const encoderWires = `
+    ${encoderWiresFragment("left",  claims)}
+    ${encoderWiresFragment("right", claims)}
   `;
 
   // Reverse ROLE_TO_TERMINAL via the live claims map — only includes
@@ -322,11 +466,13 @@ function renderBoardWithDriver(claims, opts = {}) {
 
   return `
     <div class="pinout-svg-wrap">
-      <svg class="pinout-svg" viewBox="0 0 ${PI_W} ${TOTAL_H}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Raspberry Pi header with H-bridge driver wiring">
+      <svg class="pinout-svg" viewBox="0 0 ${PI_W} ${TOTAL_H}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Raspberry Pi header with encoder modules and H-bridge driver wiring">
         <rect class="pinout-strip" x="180" y="${PI_PAD_Y - 4}" width="90" height="${PI_H - 2 * PI_PAD_Y + 8}" rx="3"/>
         ${piRowsFragment(claims)}
+        ${encoderModules}
         ${driverPcb}
         ${terminals}
+        ${encoderWires}
         ${wires.join("")}
         ${supplyNote}
       </svg>
@@ -414,6 +560,15 @@ function claimsFromConfig(cfg) {
       if (phys) claims[phys] = { cap: "motors", role };
     }
   }
+  // Encoders default-on in firmware (matches camera_enabled pattern),
+  // so undefined in the conf means enabled.
+  if (cfg?.encoders_enabled !== false) {
+    const effective = { ...PI_DEFAULTS.encoders_pins, ...(cfg?.encoders_pins || {}) };
+    for (const [role, gpio] of Object.entries(effective)) {
+      const phys = GPIO_TO_PHYS.get(gpio);
+      if (phys) claims[phys] = { cap: "encoders", role };
+    }
+  }
   return claims;
 }
 
@@ -426,12 +581,13 @@ function renderView(entry) {
   const editBtn = connected
     ? `<button class="secondary sm" id="pinout-edit-btn">Edit pins</button>`
     : "";
-  // Show Pi + driver diagram with wires when there are motor claims;
-  // plain Pi board otherwise. The diagram is the high-value reference
-  // while wiring — users need to see it in view mode, not only edit.
-  const hasMotorClaims = Object.values(claims).some(c => c?.cap === "motors");
+  // Show Pi + driver + encoders diagram when any of those caps is
+  // claimed; plain Pi board otherwise. The diagram is the high-value
+  // reference while wiring — users need to see it in view mode, not
+  // only edit.
+  const hasBoardClaims = Object.values(claims).some(c => c?.cap === "motors" || c?.cap === "encoders");
   $("pinout-body").innerHTML = `
-    ${hasMotorClaims ? renderBoardWithDriver(claims) : renderBoard(claims)}
+    ${hasBoardClaims ? renderBoardWithDriver(claims) : renderBoard(claims)}
     <div class="row" style="margin-top: 12px;">${legend}${editBtn}</div>
   `;
   $("pinout-edit-btn")?.addEventListener("click", () => beginEdit(entry.id));
@@ -451,7 +607,9 @@ function renderEdit(entry) {
   const ledChecked = c.led_enabled ? "checked" : "";
   const motorsChecked = c.motors_enabled ? "checked" : "";
   const cameraChecked = c.camera_enabled !== false ? "checked" : "";
+  const encodersChecked = c.encoders_enabled !== false ? "checked" : "";
   const motors = c.motors_pins || {};
+  const encoders = c.encoders_pins || {};
   // Duplicate GPIO usage detection, in two tiers:
   //   hard — every claimant is enabled; robot will misbehave on next boot.
   //   soft — at least one claimant is disabled; fine right now but a latent
@@ -462,6 +620,11 @@ function renderEdit(entry) {
   if (c.led_pin != null) (usage[c.led_pin] ||= []).push({ role: "led", enabled: !!c.led_enabled });
   for (const [role, g] of flattenPins(motors)) {
     (usage[g] ||= []).push({ role: `motors.${role}`, enabled: !!c.motors_enabled });
+  }
+  const encodersEnabledEff = c.encoders_enabled !== false;
+  for (const [role, g] of Object.entries(encoders)) {
+    if (typeof g !== "number") continue;
+    (usage[g] ||= []).push({ role: `encoders.${role}`, enabled: encodersEnabledEff });
   }
   const dup = Object.entries(usage).filter(([, v]) => v.length > 1);
   const hard = dup.filter(([, v]) => v.every(x => x.enabled));
@@ -482,6 +645,9 @@ function renderEdit(entry) {
   };
   if (c.led_pin != null) checkReserved(c.led_pin, "LED", !!c.led_enabled);
   for (const [role, g] of flattenPins(motors)) checkReserved(g, `motors.${role}`, !!c.motors_enabled);
+  for (const [role, g] of Object.entries(encoders)) {
+    if (typeof g === "number") checkReserved(g, `encoders.${role}`, encodersEnabledEff);
+  }
   // GPIOs to flag inline (red border on the input). Soft conflicts live in
   // the warning line only — they aren't actively-broken state, so flagging
   // both sides would mislead.
@@ -515,6 +681,13 @@ function renderEdit(entry) {
         <span>Motors (H-bridge)</span>
       </label>
       <label class="toolbar-toggle">
+        <input type="checkbox" data-toggle="encoders_enabled" ${encodersChecked}>
+        <span>Encoders</span>
+        <!-- Pin inputs live on the SVG breakout modules below — same
+             pattern as the L298N terminals. Toolbar carries only the
+             advertise/don't-advertise toggle. -->
+      </label>
+      <label class="toolbar-toggle">
         <input type="checkbox" data-toggle="camera_auto" ${cameraChecked}>
         <span>Camera (auto)</span>
       </label>
@@ -524,6 +697,7 @@ function renderEdit(entry) {
     <div class="meta pinout-helper">
       Numbers are BCM GPIO IDs. Empty ENA/ENB = jumpers left on (no speed-control wire).
       Swap "forward"/"backward" to fix a wheel that spins the wrong way.
+      Encoder VCC/GND tap any Pi 3V3 / GND; check your sensor's voltage (most are 3V3).
     </div>
     <div class="modal-footer">
       <button class="secondary sm" id="pinout-cancel-btn">Cancel</button>
@@ -594,6 +768,7 @@ function renderEdit(entry) {
   $("pinout-safe-defaults-btn")?.addEventListener("click", () => {
     editConfig.led_pin = PI_DEFAULTS.led_pin;
     editConfig.motors_pins = structuredClone(PI_DEFAULTS.motors_pins);
+    editConfig.encoders_pins = structuredClone(PI_DEFAULTS.encoders_pins);
     renderEdit(entry);
   });
   $("pinout-calibrate-btn")?.addEventListener("click", () => {
@@ -966,40 +1141,3 @@ async function saveEsp32Edit(entry) {
   }
 }
 
-// Read-only view, no robot context. Two boards under one toggle: the Pi
-// 40-pin header (the canonical "which GPIO is where" reference) and the
-// ESP32-CAM header (status map — free / SD-shared / reserved — since the
-// camera board's pins aren't user-reassignable). Toggle choice persists
-// across reopens within the session.
-let refBoard = "pi";
-
-function renderReference() {
-  const tab = (id, label) =>
-    `<button class="sm ${refBoard === id ? "" : "secondary"}" data-board="${id}">${label}</button>`;
-  const toggle = `<div class="pinout-board-toggle">${tab("pi", "Raspberry Pi")}${tab("esp32", "ESP32-CAM")}</div>`;
-  const body = refBoard === "pi" ? renderBoard({}) : renderEsp32Board();
-  const caption = refBoard === "pi"
-    ? `Physical layout of the Raspberry Pi 40-pin header. Power rails in red / orange, grounds in gray, I²C ID EEPROM in purple, GPIO in gold. Pair a robot to edit its pin assignments — the same view then highlights claimed pins.`
-    : `Only these edge pins are exposed on the ESP32-CAM — everything else the chip has is permanently wired to the camera or PSRAM and can't be reused. <span class="esp-key free">Green</span> = free to wire. <span class="esp-key sd-shared">Amber</span> = shared with the µSD slot (OK if SD is unused). <span class="esp-key reserved">Grey</span> = reserved (boot strap, UART programming, or camera XCLK) — leave alone. Hover any pin for details.`;
-  $("pinout-body").innerHTML = `
-    ${toggle}
-    ${body}
-    <div class="meta" style="margin-top: 12px;">${caption}</div>
-  `;
-  $("pinout-body").querySelectorAll("[data-board]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      refBoard = btn.dataset.board;
-      renderReference();
-    });
-  });
-}
-
-export function openPinoutReference() {
-  initOnce();
-  currentId = null;
-  editMode = false;
-  editConfig = null;
-  $("pinout-title").textContent = "GPIO reference";
-  renderReference();
-  $("pinout-modal").showModal();
-}
