@@ -41,6 +41,26 @@ async function startEsp32WebRTCVideo(entry, canvas) {
   channel.binaryType = "arraybuffer";
   const ctrl = { channel, canvas, ctx: canvas.getContext("2d") };
   const useDecoder = typeof ImageDecoder !== "undefined";
+  // Rolling 1s window of frame-paint timestamps. Drawn in the corner so
+  // any future throughput experiment (chip QF, vTaskDelay tweak, MTU bump)
+  // reads its result immediately without DevTools.
+  const paintTimes = [];
+
+  function drawFpsOverlay(g, c) {
+    const now = performance.now();
+    paintTimes.push(now);
+    while (paintTimes.length && now - paintTimes[0] > 1000) paintTimes.shift();
+    const label = `${paintTimes.length} fps`;
+    g.save();
+    g.font = "600 14px ui-monospace, monospace";
+    const w = g.measureText(label).width + 12;
+    g.fillStyle = "rgba(0,0,0,0.55)";
+    g.fillRect(6, 6, w, 22);
+    g.fillStyle = "#fff";
+    g.textBaseline = "middle";
+    g.fillText(label, 12, 18);
+    g.restore();
+  }
 
   async function paintJpeg(bytes) {
     // Re-acquire ctx if the canvas got replaced by a re-render and
@@ -65,6 +85,7 @@ async function startEsp32WebRTCVideo(entry, canvas) {
         g.drawImage(bitmap, 0, 0);
         bitmap.close();
       }
+      drawFpsOverlay(g, c);
     } catch {
       // Decode failure — drop this frame. Common on partial JPEGs from
       // out-of-order chunk reassembly; the next frame will arrive shortly.
@@ -100,7 +121,7 @@ async function startEsp32WebRTCVideo(entry, canvas) {
     paintJpeg(merged);
   };
   channel.addEventListener("message", onMsg);
-  try { channel.send(JSON.stringify({ type: "start", fps: 5 })); } catch {}
+  try { channel.send(JSON.stringify({ type: "start", fps: 30 })); } catch {}
   logFor(entry, `video webrtc: streaming (${useDecoder ? "ImageDecoder" : "createImageBitmap"})`);
   ctrl.attachCanvas = (next) => { ctrl.canvas = next; ctrl.ctx = next.getContext("2d"); };
   ctrl.dispose = () => {
