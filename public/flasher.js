@@ -133,27 +133,36 @@ export async function flashFirmware(port, { onLog = () => {}, onProgress = () =>
       try { await fn(); onTrace(`reset: ${label} ok`); return true; }
       catch (e) { onTrace(`reset: ${label} failed (${e?.message || e})`); return false; }
     };
-    if (typeof loader.after === "function" &&
-        await attempt("loader.after(hard_reset)", () => loader.after("hard_reset"))) return;
-    if (typeof loader.hardReset === "function" &&
-        await attempt("loader.hardReset()", () => loader.hardReset())) return;
-    if (typeof transport.hardReset === "function" &&
-        await attempt("transport.hardReset()", () => transport.hardReset())) return;
 
-    // Manual hard-reset via the underlying SerialPort. Release the
-    // transport's reader/writer locks first or setSignals fails with
-    // "the port is locked." Drive the standard ESP reset:
-    //   RTS=true  → EN low  (reset asserted)
-    //   DTR=false → IO0 high (normal boot, not download)
-    //   wait 100 ms, then RTS=false → reset released, chip boots.
-    if (typeof transport.disconnect === "function") {
+    // 1. Library reset method if available (esptool-js handles its own
+    //    RTS pulse). Don't early-return — we still need step 2.
+    let libReset = false;
+    if (typeof loader.after === "function")
+      libReset = await attempt("loader.after(hard_reset)", () => loader.after("hard_reset"));
+    if (!libReset && typeof loader.hardReset === "function")
+      libReset = await attempt("loader.hardReset()", () => loader.hardReset());
+    if (!libReset && typeof transport.hardReset === "function")
+      libReset = await attempt("transport.hardReset()", () => transport.hardReset());
+
+    // 2. Release the transport's reader/writer locks ALWAYS, even on the
+    //    happy path. Without this, port.close() in installEsp32's finally
+    //    silently fails ("port is locked") — Chrome's tab indicator stays
+    //    on, and the port can't be reused for the live console or another
+    //    install. Also unblocks setSignals on the raw port below.
+    if (typeof transport.disconnect === "function")
       await attempt("transport.disconnect()", () => transport.disconnect());
+
+    // 3. If the library reset didn't run, drive the reset manually now
+    //    that the transport is released.
+    //      RTS=true  → EN low  (reset asserted)
+    //      DTR=false → IO0 high (normal boot, not download)
+    if (!libReset) {
+      await attempt("port.setSignals RTS=1 DTR=0", () =>
+        port.setSignals({ requestToSend: true, dataTerminalReady: false }));
+      await new Promise((r) => setTimeout(r, 100));
+      await attempt("port.setSignals RTS=0 DTR=0", () =>
+        port.setSignals({ requestToSend: false, dataTerminalReady: false }));
     }
-    await attempt("port.setSignals RTS=1 DTR=0", () =>
-      port.setSignals({ requestToSend: true, dataTerminalReady: false }));
-    await new Promise((r) => setTimeout(r, 100));
-    await attempt("port.setSignals RTS=0 DTR=0", () =>
-      port.setSignals({ requestToSend: false, dataTerminalReady: false }));
   }
 
   // main() syncs with the bootloader (asserts EN+GPIO0, reads chip

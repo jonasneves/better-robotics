@@ -507,16 +507,15 @@ export async function installEsp32() {
       flashDialogState("error");
     }
   } finally {
-    // Deassert RTS+DTR before close so the FTDI driver doesn't latch
-    // either line in an asserted state at port close — when RTS stays
-    // asserted, EN stays low and the chip sits in reset until the user
-    // physically replugs. Belt and suspenders with esptool-js's own
-    // "Hard resetting via RTS pin..." that runs at writeFlash exit.
-    try { await port.setSignals({ requestToSend: false, dataTerminalReady: false }); } catch {}
-    // Small breathing room for the FTDI driver to apply those signals
-    // and for the chip's boot sequence to start running on its own.
+    // flashFirmware's resetChip already pulsed RTS and released the
+    // transport's reader/writer locks. Brief pause for the FTDI driver
+    // to settle before close, then close. Failure here is visible in
+    // the trace panel — "the port is locked" means the transport
+    // disconnect didn't release everything and the install can't
+    // re-acquire the port without a tab reload.
     await new Promise((r) => setTimeout(r, 300));
-    try { await port.close(); } catch {}
+    try { await port.close(); pushFlashTrace("port.close() ok"); }
+    catch (err) { pushFlashTrace(`port.close() failed (${err?.message || err})`); }
   }
 
   if (result) {
