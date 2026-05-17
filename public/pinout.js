@@ -1453,6 +1453,10 @@ function renderEsp32Edit(entry) {
     </div>
     <div class="modal-footer">
       <button class="secondary sm" id="pinout-cancel-btn">Cancel</button>
+      <!-- Pulses each motor in turn, asks which wheel turned + which way,
+           writes the derived orientation flips via the ops char. Same
+           wizard as Pi — different transport, same outcome. -->
+      <button class="secondary sm" id="pinout-calibrate-btn">Calibrate motors</button>
       <button class="sm" id="pinout-save-btn" ${blocked ? "disabled" : ""}>Save &amp; restart</button>
     </div>
   `;
@@ -1474,6 +1478,26 @@ function renderEsp32Edit(entry) {
   });
   $("pinout-cancel-btn").addEventListener("click", () => {
     editMode = false; editConfig = null; renderEsp32View(entry);
+  });
+  $("pinout-calibrate-btn")?.addEventListener("click", () => {
+    beginMotorsCalibration({
+      entry,
+      editConfig,
+      onCancel: () => renderEsp32Edit(entry),
+      onDone: (ok) => {
+        if (ok) {
+          // ESP32 calibration save calls motors_set_orientation, which
+          // schedules a 500ms restart on the chip. BLE drops briefly;
+          // dashboard's auto-reconnect picks it back up. Close the dialog
+          // so the user sees the reconnect on the card.
+          editMode = false;
+          editConfig = null;
+          $("pinout-modal").close();
+        } else {
+          renderEsp32Edit(entry);
+        }
+      },
+    });
   });
   $("pinout-save-btn").addEventListener("click", () => saveEsp32Edit(entry));
   wireUpMotorChains($("pinout-body"));
