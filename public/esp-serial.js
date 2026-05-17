@@ -207,7 +207,10 @@ const BOARDS = [
     chip: "esp32",
     label: "AI-Thinker ESP32-CAM",
     sub: "Camera + PSRAM. The headline board.",
-    usbHints: [0x10c4],  // CP210x is the typical AI-Thinker programmer bridge
+    // CAM-MB programmer ships with FT232 (0x403); some standalone setups
+    // use a CP210x adapter (0x10c4). Hints are best-effort — both boards
+    // can ship with either bridge depending on the seller.
+    usbHints: [0x0403, 0x10c4],
     webrtc: { capable: true, on: "aithinker_cam_webrtc", off: "aithinker_cam" },
   },
   {
@@ -215,7 +218,8 @@ const BOARDS = [
     chip: "esp32",
     label: "ESP32 DevKitV1 / WROOM-32",
     sub: "Classic ESP32 module. No camera, ~25 usable GPIOs.",
-    usbHints: [0x1a86],  // CH340 typical on cheap DevKits
+    // CH340 is the typical cheap-clone bridge; better DevKits use CP210x.
+    usbHints: [0x1a86, 0x10c4],
     webrtc: { capable: false },
   },
   {
@@ -350,10 +354,14 @@ function pickBoardInDialog({ chip, chipName, portInfo = {} }) {
       $("esp-flash-install").disabled = true;
     } else {
       $("esp-flash-empty").hidden = true;
-      // VID hint + last-used: VID match wins; otherwise last-used if that
-      // board is in the compatible set; otherwise first compatible.
+      // VID hint + last-used. Hint only wins when *exactly one* board
+      // matches the port's VID — two boards sharing a bridge (CP210x is
+      // common on both AI-Thinker and DevKitV1) makes the hint ambiguous,
+      // in which case we fall back to last-used so the user's prior
+      // pick stays sticky.
       const vid = portInfo.usbVendorId;
-      const byHint = compatible.find(b => vid && b.usbHints.includes(vid));
+      const hintMatches = vid ? compatible.filter(b => b.usbHints.includes(vid)) : [];
+      const byHint = hintMatches.length === 1 ? hintMatches[0] : null;
       const lastId = localStorage.getItem(LAST_BOARD_KEY);
       const byLast = compatible.find(b => b.id === lastId);
       const preselect = (byHint || byLast || compatible[0]).id;
@@ -479,6 +487,15 @@ export async function installEsp32() {
 
   const runFlash = async (p) => {
     const portInfo = (() => { try { return p.getInfo(); } catch { return {}; } })();
+    // Surface the USB bridge ids in the trace — diagnostic for "two boards,
+    // both default to AI-Thinker" cases. If both ports share a VID (e.g.,
+    // CP210x is common on both boards), the picker's hint is ambiguous and
+    // falls back to last-used.
+    const vid = portInfo.usbVendorId;
+    const pid = portInfo.usbProductId;
+    if (vid !== undefined) {
+      pushFlashTrace(`port: vid=0x${vid.toString(16).padStart(4, "0")} pid=0x${(pid || 0).toString(16).padStart(4, "0")}`);
+    }
     const { flashFirmware } = await import("./flasher.js");
     return await flashFirmware(p, {
       onLog: setFlashStatus,
