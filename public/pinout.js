@@ -154,18 +154,21 @@ function flattenPins(obj, prefix = "") {
 }
 
 function claimsFromEntry(entry) {
-  const claims = {};
-  for (const cap of entry?.capSchema || []) {
-    if (cap.pin != null) {
-      const phys = GPIO_TO_PHYS.get(cap.pin);
-      if (phys) claims[phys] = { cap: cap.name, role: cap.pin_mode || cap.type };
-    }
-    for (const [role, gpio] of flattenPins(cap.pins)) {
-      const phys = GPIO_TO_PHYS.get(gpio);
-      if (phys) claims[phys] = { cap: cap.name, role };
-    }
-  }
-  return claims;
+  // Pi caps no longer carry pin info in fw-info (kept tiny so the full
+  // payload fits the 512 B GATT attribute cap — pre-fix at 615 B Chrome
+  // truncated the JSON and dropped every capability card). Derive claims
+  // from cap-name presence + PI_DEFAULTS so the read-only diagram still
+  // highlights the canonical wiring; Edit fetches the live pi-robot.conf
+  // via get-config for users with custom pins.
+  const names = new Set((entry?.capSchema || []).map(c => c.name));
+  return claimsFromConfig({
+    led_enabled:      names.has("led"),
+    led_pin:          PI_DEFAULTS.led_pin,
+    motors_enabled:   names.has("motors"),
+    motors_pins:      PI_DEFAULTS.motors_pins,
+    encoders_enabled: names.has("encoders"),
+    encoders_pins:    PI_DEFAULTS.encoders_pins,
+  });
 }
 
 // Shared Pi-header SVG geometry — exposed so the combined "Pi + driver board"

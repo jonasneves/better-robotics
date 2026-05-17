@@ -66,26 +66,25 @@ from uuids import (  # noqa: F401 — re-exported for clarity / import sites els
 
 # Capability schema, built at startup from config. Types name a UI/data
 # shape (toggle, signed-pair, wifi-scan, bundle-ota, webrtc-installable,
-# command). `pin` / `pins` declare GPIO header positions for the dashboard's
-# pinout view.
+# command).
 def _build_caps() -> list:
-    # Stay LEAN — BLE reads cap at ATT MTU (~180 B on macOS/Chrome), so
-    # carrying full UUIDs per capability blows past it and the dashboard
-    # gets truncated JSON. Dashboard maps cap name → char UUIDs via its own
-    # constants (public/ble.js).
+    # Stay LEAN — the full fw-info payload (caps + bundle_url + authorized
+    # + version) must fit in a single BLE GATT attribute read, capped at
+    # 512 B by the BLE spec. Anything over is truncated by Chrome's
+    # `readValue()` mid-string, JSON.parse throws, and the dashboard drops
+    # the whole schema → no capability cards render. Keep entries to name
+    # + type + range; pin assignments live in pi-robot.conf and reach the
+    # dashboard via the get-config ops verb when the pinout dialog opens.
     caps: list[dict] = []
     if LED_ENABLED:
-        caps.append({"name": "led", "type": "toggle",
-                     "pin": LED_PIN, "pin_mode": "out"})
+        caps.append({"name": "led", "type": "toggle"})
     if MOTORS_ENABLED:
         caps.append({"name": "motors", "type": "signed-pair",
-                     "range": [-100, 100], "pins": MOTORS_PINS, "pin_mode": "pwm"})
+                     "range": [-100, 100]})
     if ENCODERS_ENABLED:
         # No dashboard runtime for "tick-count" yet — RUNTIMES[capSchema.type]
-        # falls through to no-op, but claimsFromEntry still picks up `pins`
-        # for the pinout view. Ticks reach the dashboard via telemetry.
-        caps.append({"name": "encoders", "type": "tick-count",
-                     "pins": ENCODERS_PINS, "pin_mode": "in_pull_up"})
+        # falls through to no-op. Ticks reach the dashboard via telemetry.
+        caps.append({"name": "encoders", "type": "tick-count"})
     caps.append({"name": "wifi", "type": "wifi-scan"})
     caps.append({"name": "ota", "type": "bundle-ota"})
     if CAMERA_ENABLED is not False:
@@ -1830,11 +1829,9 @@ async def main() -> None:
             bytearray(),
             GATTAttributePermissions.readable,
         )
-        _src = _detect_camera_source() if _camera_available else None
-        log.info("camera: %s (stack %s, hw %s)",
+        log.info("camera: %s (stack %s)",
                  "ready" if _camera_available else "install-on-demand",
-                 "loaded" if _camera_available else "not installed",
-                 f"{_src[0]}@{_src[1] or 'libcamera'}" if _src else "none")
+                 "loaded" if _camera_available else "not installed")
     else:
         log.info("camera: disabled in pi-robot.conf")
 
