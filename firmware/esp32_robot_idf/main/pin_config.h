@@ -5,6 +5,16 @@
 #include <stdint.h>
 
 // -1 = "not wired, disable this cap."
+//
+// Motor wiring has two modes, mirroring the Pi side's gpiozero Motor()
+// constructor:
+//   - PWM-on-direction (motor_ena/motor_enb = -1): firmware drives PWM
+//     on motor_l_fwd / motor_l_bwd directly. ENA/ENB on the L298N are
+//     tied HIGH externally (factory jumpers or a wire to the L298N's
+//     own +5V rail). 4 LEDC channels.
+//   - PWM-on-enable  (motor_ena and motor_enb >= 0): PWM on the enable
+//     pins, IN1..IN4 are digital direction lines. Matches the Pi
+//     side's behavior when enable= is set on Motor(). 2 LEDC channels.
 typedef struct {
     int led;
     int flash;
@@ -12,6 +22,8 @@ typedef struct {
     int motor_l_bwd;
     int motor_r_fwd;
     int motor_r_bwd;
+    int motor_ena;   // optional; -1 = PWM-on-direction mode
+    int motor_enb;   // optional; -1 = PWM-on-direction mode
     int enc_l;
     int enc_r;
 } pin_config_t;

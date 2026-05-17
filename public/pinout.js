@@ -723,15 +723,21 @@ function espEncoderWiresFragment(side, claims, gpioMap, kindPos) {
   return out.join("");
 }
 
-// ESP32's L298N has no editable ENA/ENB — the firmware uses LEDC PWM
-// directly on the direction pins (no separate enable). Terminals stay
-// visible (so the user sees the chip's full silkscreen), just not
-// configurable. IN1-IN4 map to motor direction pins.
+// ESP32 has two driving modes — same shape as the Pi side's gpiozero
+// Motor(enable=…) constructor:
+//   PWM-on-direction: ENA/ENB tied HIGH externally; PWM on IN1..IN4.
+//                     Firmware ignores m_ena / m_enb (left -1).
+//   PWM-on-enable:    ENA/ENB wired to MCU pins; firmware PWMs on them
+//                     and toggles IN1..IN4 as digital direction lines.
+// Both terminals are editable now; firmware's modes_init() picks the
+// drive path based on whether m_ena / m_enb are set.
 const ESP_TERMINAL_TO_KEY = {
+  ena: "m_ena",
   in1: "m_l_fwd",
   in2: "m_l_bwd",
   in3: "m_r_fwd",
   in4: "m_r_bwd",
+  enb: "m_enb",
 };
 
 function renderEsp32BoardWithDriver(entry, opts = {}) {
@@ -774,19 +780,10 @@ function renderEsp32BoardWithDriver(entry, opts = {}) {
         </foreignObject>
       `;
     }
-    // ENA/ENB on ESP32 builds aren't wired to the chip — firmware uses
-    // LEDC PWM directly on IN1..IN4 for speed control. Tie ENA/ENB HIGH
-    // (3.3V) externally — most L298N modules come with the jumpers in
-    // place by default. Small "tied 3V3" sublabel below the terminal
-    // makes this visible without needing a separate explainer.
-    const subFrag = role.startsWith("en")
-      ? `<text class="driver-sublabel" x="${cx}" y="${ESP_TERM_CY + 22}" text-anchor="middle">tied 3V3</text>`
-      : "";
     return `
       <text class="driver-label" x="${cx}" y="${ESP_TERM_CY - 14}" text-anchor="middle">${label}</text>
       <circle class="driver-pin ${kind}" cx="${cx}" cy="${ESP_TERM_CY}" r="${ESP_TERM_R}" data-role="${role}"/>
       ${inputFrag}
-      ${subFrag}
     `;
   }).join("");
 
@@ -1274,6 +1271,10 @@ function esp32PinsFromFwInfo(entry) {
     m_l_bwd: motors?.left?.backward  ?? 15,
     m_r_fwd: motors?.right?.forward  ?? 13,
     m_r_bwd: motors?.right?.backward ?? 12,
+    // ENA/ENB optional — firmware uses PWM-on-direction when these are
+    // -1 (L298N's factory jumpers on +5V), PWM-on-enable when set.
+    m_ena:   motors?.left?.enable    ?? -1,
+    m_enb:   motors?.right?.enable   ?? -1,
     // Encoders default disabled on ESP32 (firmware ships -1) — pin
     // pressure on ESP32-CAM makes a sensible default infeasible.
     enc_l:   encoders?.left  ?? -1,
@@ -1334,8 +1335,10 @@ function renderEsp32View(entry) {
         ${hasFlash ? row("Flash", "flash") : ""}
         ${row("Left forward",   "m_l_fwd")}
         ${row("Left backward",  "m_l_bwd")}
+        ${row("Left enable",    "m_ena")}
         ${row("Right forward",  "m_r_fwd")}
         ${row("Right backward", "m_r_bwd")}
+        ${row("Right enable",   "m_enb")}
         ${row("Encoder left",   "enc_l")}
         ${row("Encoder right",  "enc_r")}
       </div>
@@ -1363,7 +1366,7 @@ function renderEsp32Edit(entry) {
   const savedKey = active?.dataset?.key || null;
 
   const c = editConfig;
-  const ALL_KEYS = ["led", "flash", "m_l_fwd", "m_l_bwd", "m_r_fwd", "m_r_bwd", "enc_l", "enc_r"];
+  const ALL_KEYS = ["led", "flash", "m_l_fwd", "m_l_bwd", "m_r_fwd", "m_r_bwd", "m_ena", "m_enb", "enc_l", "enc_r"];
   const usedBy = {};
   for (const k of ALL_KEYS) {
     if (c[k] < 0) continue;  // -1 = disabled, multiple disables don't conflict
@@ -1403,8 +1406,16 @@ function renderEsp32Edit(entry) {
       ...(c.m_l_fwd >= 0 ? [{
         name: "motors",
         pins: {
-          left:  { forward: c.m_l_fwd, backward: c.m_l_bwd },
-          right: { forward: c.m_r_fwd, backward: c.m_r_bwd },
+          left:  {
+            forward: c.m_l_fwd,
+            backward: c.m_l_bwd,
+            ...(c.m_ena >= 0 ? { enable: c.m_ena } : {}),
+          },
+          right: {
+            forward: c.m_r_fwd,
+            backward: c.m_r_bwd,
+            ...(c.m_enb >= 0 ? { enable: c.m_enb } : {}),
+          },
         },
       }] : []),
       ...(c.enc_l >= 0 || c.enc_r >= 0 ? [{

@@ -89,12 +89,23 @@ void fw_info_init(const pin_config_t *pins) {
     first = false;
 
     if (motors_enabled()) {
+        // Schema matches gpiozero Motor() on the Pi side — `enable` is
+        // optional and only present when wired. When omitted the chip is
+        // running in PWM-on-direction mode (ENA/ENB tied HIGH externally,
+        // factory jumpers on the L298N). Present means PWM-on-enable
+        // mode with the chip driving speed via the enable line.
         o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,
             ",{\"name\":\"motors\",\"type\":\"signed-pair\",\"range\":[-100,100],"
-            "\"pins\":{\"left\":{\"forward\":%d,\"backward\":%d},"
-            "\"right\":{\"forward\":%d,\"backward\":%d}}}",
-            pins->motor_l_fwd, pins->motor_l_bwd,
+            "\"pins\":{\"left\":{\"forward\":%d,\"backward\":%d",
+            pins->motor_l_fwd, pins->motor_l_bwd);
+        if (pins->motor_ena >= 0)
+            o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o, ",\"enable\":%d", pins->motor_ena);
+        o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o,
+            "},\"right\":{\"forward\":%d,\"backward\":%d",
             pins->motor_r_fwd, pins->motor_r_bwd);
+        if (pins->motor_enb >= 0)
+            o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o, ",\"enable\":%d", pins->motor_enb);
+        o += snprintf(s_buf + o, FW_INFO_BUF_SIZE - o, "}}}");
     }
     // tick-count cap has no dashboard runtime (yet) — RUNTIMES[type]
     // falls through to no-op; claimsFromEntry still picks up `pins` for
