@@ -36,6 +36,21 @@ note() {
 : > "$STATUS_FILE"
 note start
 
+# Fire-and-forget: clear the systemd.run trigger from cmdline.txt FIRST,
+# not last. The kernel cmdline routes the boot through
+# systemd.unit=kernel-command-line.target, which does NOT pull in
+# multi-user.target — so while this script is running (or hung), no
+# services start. usb-gadget.service is enabled-but-not-active, BLE is
+# off, SSH is off. A previous version cleared the trigger only after a
+# successful service probe at the end, so any mid-script hang (apt-get
+# install without network, pip install on a busy DNS, …) bricked the
+# Pi into "permanently re-running firstrun" mode requiring an SD-card-
+# editor recovery. Clearing here means one attempt: if firstrun crashes
+# or hangs, the next reboot proceeds to multi-user.target normally and
+# the operator can SSH / USB-CDC in to finish the job.
+sed -i 's| systemd\.run=[^ ]*||g; s| systemd\.run_success_action=[^ ]*||g; s| systemd\.unit=[^ ]*||g' "$BOOTFS/cmdline.txt"
+note trigger_cleared
+
 CURRENT_HOSTNAME=$(tr -d " \t\n\r" < /etc/hostname)
 echo "$HOSTNAME" > /etc/hostname
 sed -i "s/127.0.1.1.*$CURRENT_HOSTNAME/127.0.1.1\t$HOSTNAME/g" /etc/hosts
@@ -275,15 +290,23 @@ BTEOF
 
     # avahi-daemon: required for the dashboard to resolve <hostname>.local.
     # Install if missing — base image varies; --no-install-recommends keeps
-    # the dependency footprint tight.
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends avahi-daemon 2>/dev/null || true
+    # the dependency footprint tight. Bounded by `timeout` so a flaky
+    # network can't hang the whole script — Acquire::Retries=1 caps
+    # apt's own internal retry loop in case the outer timeout fires
+    # mid-package while the dpkg lock is held.
+    timeout 60 env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        -o Acquire::Retries=1 -o Acquire::http::Timeout=10 \
+        --no-install-recommends avahi-daemon 2>/dev/null || true
 
     # pi-robot-rtc: WebRTC peer for browser shell + future channels.
     # Python-side via aiortc — runs in the same venv as pi_robot.py.
     # aiortc + aiohttp are listed in requirements.txt but the offline
     # wheels installer above doesn't ship them; pull from PyPI here.
+    # Same outer-timeout reasoning as the apt-get line above; pip's
+    # built-in --timeout / --retries cap per-connection retries on top.
     note rtc_install_start
-    sudo -u "$USER_NAME" "$DEST/.venv/bin/pip" install aiortc aiohttp \
+    timeout 120 sudo -u "$USER_NAME" "$DEST/.venv/bin/pip" install \
+        --timeout 15 --retries 2 aiortc aiohttp \
         >> "$BOOTFS/rtc-install.log" 2>&1
     RTC_RC=$?
     if [ $RTC_RC -eq 0 ]; then
@@ -326,8 +349,6 @@ else
 fi
 fi  # end FIRMWARE_OK conditional
 
-# Always clear the systemd.run trigger from cmdline.txt so we never re-run.
-sed -i 's| systemd\.run=[^ ]*||g; s| systemd\.run_success_action=[^ ]*||g; s| systemd\.unit=[^ ]*||g' "$BOOTFS/cmdline.txt"
 if [ "$INSTALL_OK" = "1" ]; then
     rm -f "$BOOTFS/firstrun.sh"
     note done "rebooting into pi_robot"
