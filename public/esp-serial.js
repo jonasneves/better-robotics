@@ -46,7 +46,7 @@ function isEspPort(port) {
 function pickKnownEsp(ports) {
   return ports.find(isEspPort) || null;
 }
-async function pickOrRequestPort({ unfiltered = false } = {}) {
+async function pickOrRequestPort({ unfiltered = false, forcePrompt = false } = {}) {
   if (unfiltered) {
     // Escape hatch: filtered picker came back empty. Honour the user's
     // choice but warn if VID isn't in our known-ESP list — keeps the
@@ -59,9 +59,17 @@ async function pickOrRequestPort({ unfiltered = false } = {}) {
     }
     return port;
   }
-  let known = [];
-  try { known = await navigator.serial.getPorts(); } catch {}
-  return pickKnownEsp(known) || await navigator.serial.requestPort({ filters: ESP_FILTERS });
+  // forcePrompt skips the getPorts() shortcut. Install uses this so a
+  // user with two ESPs plugged in can pick which one to flash — the
+  // shortcut otherwise auto-returns whichever was authorized first,
+  // and the second board is never visible.
+  if (!forcePrompt) {
+    let known = [];
+    try { known = await navigator.serial.getPorts(); } catch {}
+    const picked = pickKnownEsp(known);
+    if (picked) return picked;
+  }
+  return await navigator.serial.requestPort({ filters: ESP_FILTERS });
 }
 // Two-attempt open: macOS occasionally fails the first open() right after
 // a previous disconnect because the kernel hasn't fully released the
@@ -448,9 +456,14 @@ export async function installEsp32() {
   // pickOrRequestPort must be called synchronously from the user-gesture
   // handler. The dialog opens *after* the port is in hand so a port-pick
   // cancel doesn't leave an empty dialog on screen.
+  //
+  // forcePrompt: skip the getPorts() shortcut so users with multiple
+  // ESPs plugged in get the full Chrome chooser and can pick which one
+  // to flash. Without this, install auto-returns whichever board was
+  // authorized first and the second board is invisible.
   let port;
   try {
-    port = await pickOrRequestPort();
+    port = await pickOrRequestPort({ forcePrompt: true });
   } catch (err) {
     if (err.name !== "NotFoundError") log(`ESP port pick: ${err.message}`);
     return null;
