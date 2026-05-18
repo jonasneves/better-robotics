@@ -761,7 +761,15 @@ void webrtc_peer_init(const char *robot_name) {
 
     // 12 KB stack — esp_peer's main_loop pulls in srtp + jitter buffer
     // beyond what libpeer needed. Bump if DTLS handshake stack-overflows.
-    xTaskCreate(loop_task_fn, "rtc_loop", 12288, NULL, 5, &s_loop_task);
+    //
+    // Pinned to APP_CPU (1) — NimBLE host (CONFIG_BT_NIMBLE_PINNED_TO_CORE=0)
+    // and WiFi (CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0) both live on PRO_CPU.
+    // Unpinned, rtc_loop floats onto PRO_CPU during the CPU-bound DTLS
+    // handshake / SCTP packing bursts and competes with the BLE host for
+    // scheduler slots — peer eventually terminates the link with reason
+    // 520 (BLE_HS_HCI_BASE + BLE_ERR_CONN_TMO). Same shape as snapshot.c's
+    // transfer task, which has the same constraint.
+    xTaskCreatePinnedToCore(loop_task_fn, "rtc_loop", 12288, NULL, 5, &s_loop_task, 1);
     ESP_LOGI(TAG, "rtc init: BLE-signaled WebRTC ready (esp_peer)");
 }
 
