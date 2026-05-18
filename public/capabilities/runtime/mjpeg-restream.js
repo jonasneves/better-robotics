@@ -49,8 +49,21 @@ export function startMjpegForward(entry, srcEl) {
     catch { return false; }
     entry.cameraStream = state.stream;
     state.intervalId = setInterval(() => {
-      try { ctx.drawImage(srcEl, 0, 0, canvas.width, canvas.height); }
-      catch { /* tainted canvas or img not ready — keep last frame */ }
+      try {
+        // Bake the camera-flip into the forwarding canvas so phones see
+        // the same orientation the operator sees. Reads entry.cameraFlip
+        // live each tick — toggling the local CSS transform on the <img>
+        // and the pump rotation update together with no plumbing.
+        if (entry.cameraFlip) {
+          ctx.save();
+          ctx.translate(canvas.width / 2, canvas.height / 2);
+          ctx.rotate(Math.PI);
+          ctx.drawImage(srcEl, -canvas.width / 2, -canvas.height / 2, canvas.width, canvas.height);
+          ctx.restore();
+        } else {
+          ctx.drawImage(srcEl, 0, 0, canvas.width, canvas.height);
+        }
+      } catch { /* tainted canvas or img not ready — keep last frame */ }
     }, 1000 / FPS);
     notifyRobotStreamChange(entry);
     return true;

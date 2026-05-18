@@ -91,6 +91,62 @@ export function makeWebrtcInstallableCap(schema) {
     }
   }
 
+  // Offscreen canvas pump that copies the visible <video> into a canvas
+  // (rotated when entry.cameraFlip is true) and exposes the canvas via
+  // captureStream() for phone mirroring. videoEl.captureStream() would
+  // hand phones the *source* track — CSS transforms only affect the
+  // local render, not the bytes. The canvas detour gets phones the same
+  // orientation the operator sees. Cleanup handle on entry._forwardPump.
+  function setupForwardPump(entry, videoEl) {
+    teardownForwardPump(entry);
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    let stopped = false;
+    const draw = () => {
+      if (stopped) return;
+      const w = videoEl.videoWidth, h = videoEl.videoHeight;
+      if (w && h) {
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w; canvas.height = h;
+        }
+        try {
+          if (entry.cameraFlip) {
+            ctx.save();
+            ctx.translate(w / 2, h / 2);
+            ctx.rotate(Math.PI);
+            ctx.drawImage(videoEl, -w / 2, -h / 2, w, h);
+            ctx.restore();
+          } else {
+            ctx.drawImage(videoEl, 0, 0, w, h);
+          }
+        } catch { /* video not ready yet — next tick */ }
+      }
+      // rVFC drives at native video FPS without burning rAF cycles; the
+      // rAF fallback runs ~60 Hz which oversamples but still works.
+      if ("requestVideoFrameCallback" in videoEl) {
+        videoEl.requestVideoFrameCallback(draw);
+      } else {
+        requestAnimationFrame(draw);
+      }
+    };
+    if ("requestVideoFrameCallback" in videoEl) {
+      videoEl.requestVideoFrameCallback(draw);
+    } else {
+      requestAnimationFrame(draw);
+    }
+    const stream = canvas.captureStream(30);
+    entry._forwardPump = { canvas, stream, stop: () => { stopped = true; } };
+    return stream;
+  }
+
+  function teardownForwardPump(entry) {
+    const p = entry._forwardPump;
+    if (!p) return;
+    try { p.stop(); } catch {}
+    if (p.stream) for (const t of p.stream.getTracks()) try { t.stop(); } catch {}
+    entry._forwardPump = null;
+  }
+
   async function start(entry) {
     if (!entry[signalField] || entry[pcField]) return;
     entry[statusState] = { st: "starting" };
@@ -101,11 +157,25 @@ export function makeWebrtcInstallableCap(schema) {
     registerExternalPc(entry.id, name, pc);
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.ontrack = (e) => {
-      entry[streamField] = e.streams[0];
+      const rawTrack = e.streams[0];
+      // Visible <video> plays the raw RTP stream + local CSS rotation.
+      // entry[`${name}RawTrack`] stashes it so a re-render's postRender
+      // can re-attach without confusing the canvas pump's source.
+      entry[`${name}RawTrack`] = rawTrack;
       const video = entry.node?.querySelector(`video[data-${name}-id="${entry.id}"]`);
-      if (video) video.srcObject = entry[streamField];
-      // Forward to paired phones. Camera cap name is "camera", so
-      // entry.cameraStream is what phones.js picks up.
+      if (video) video.srcObject = rawTrack;
+      // For phone forwarding: pump the visible <video> into an offscreen
+      // canvas (rotated when cameraFlip is on), captureStream the canvas,
+      // and hand THAT to phones via entry.cameraStream. videoEl.
+      // captureStream() would forward the source track, ignoring CSS
+      // rotation — phones would see un-flipped pixels. The canvas detour
+      // gives phones the same orientation the operator sees. One drawImage
+      // per video frame (rVFC / rAF fallback) — GPU-composited, ~1 ms.
+      if (streamField === "cameraStream" && video) {
+        entry[streamField] = setupForwardPump(entry, video);
+      } else {
+        entry[streamField] = rawTrack;
+      }
       if (streamField === "cameraStream") notifyRobotStreamChange(entry);
     };
     pc.onicecandidate = async (e) => {
@@ -149,7 +219,9 @@ export function makeWebrtcInstallableCap(schema) {
       try { entry[pcField].close(); } catch {}
       entry[pcField] = null;
     }
+    teardownForwardPump(entry);
     entry[streamField] = null;
+    entry[`${name}RawTrack`] = null;
     if (streamField === "cameraStream") notifyRobotStreamChange(entry);
     entry[statusState] = { st: "idle" };
     renderEntry(entry);
@@ -169,6 +241,7 @@ export function makeWebrtcInstallableCap(schema) {
     initEntry: () => ({
       [signalField]: null, [statusField]: null,
       [pcField]: null, [streamField]: null,
+      [`${name}RawTrack`]: null,
       [bufField]: null, [statusState]: null,
     }),
 
@@ -192,7 +265,9 @@ export function makeWebrtcInstallableCap(schema) {
         try { entry[pcField].close(); } catch {}
         entry[pcField] = null;
       }
+      teardownForwardPump(entry);
       entry[streamField] = null;
+      entry[`${name}RawTrack`] = null;
       entry[statusState] = null;
     },
 
@@ -252,11 +327,14 @@ export function makeWebrtcInstallableCap(schema) {
       });
     },
 
-    // Rebind the live <video> to its MediaStream after innerHTML rebuild.
+    // Rebind the live <video> to the raw RTP track after innerHTML rebuild.
+    // Not the canvas-pump stream — the pump's source IS this video, so
+    // pointing it at the pump output would create a self-mirror.
     postRender(entry) {
-      if (!entry[streamField]) return;
+      const raw = entry[`${name}RawTrack`];
+      if (!raw) return;
       const video = entry.node?.querySelector(`video[data-${name}-id="${entry.id}"]`);
-      if (video) video.srcObject = entry[streamField];
+      if (video) video.srcObject = raw;
     },
   };
 }

@@ -63,6 +63,22 @@ async function startEsp32WebRTCVideo(entry, canvas) {
     g.restore();
   }
 
+  // 180° rotation: bake into drawImage so canvas pixels are rotated —
+  // captureStream() of this canvas now delivers rotated bytes to phones
+  // and any other consumer. Local view IS this canvas, so no CSS
+  // transform needed on top.
+  function drawRotated(g, src, w, h) {
+    if (entry.cameraFlip) {
+      g.save();
+      g.translate(w / 2, h / 2);
+      g.rotate(Math.PI);
+      g.drawImage(src, -w / 2, -h / 2);
+      g.restore();
+    } else {
+      g.drawImage(src, 0, 0);
+    }
+  }
+
   async function paintJpeg(bytes) {
     // Re-acquire ctx if the canvas got replaced by a re-render and
     // app.js's transplant logic re-pointed ctrl.canvas at the live one.
@@ -75,7 +91,7 @@ async function startEsp32WebRTCVideo(entry, canvas) {
         if (c.width !== image.codedWidth || c.height !== image.codedHeight) {
           c.width = image.codedWidth; c.height = image.codedHeight;
         }
-        g.drawImage(image, 0, 0);
+        drawRotated(g, image, c.width, c.height);
         image.close();
         decoder.close();
       } else {
@@ -83,7 +99,7 @@ async function startEsp32WebRTCVideo(entry, canvas) {
         if (c.width !== bitmap.width || c.height !== bitmap.height) {
           c.width = bitmap.width; c.height = bitmap.height;
         }
-        g.drawImage(bitmap, 0, 0);
+        drawRotated(g, bitmap, c.width, c.height);
         bitmap.close();
       }
       drawFpsOverlay(g, c);
@@ -172,14 +188,15 @@ export function makeMjpegStreamCap(schema) {
         // crossOrigin on <img> lets camera-frame.js read pixels; canvas
         // pixels are same-origin by construction.
         const useCanvas = entry.fwType === "esp32" && transport === "webrtc";
-        // CSS rotate(180deg) — GPU-composited, zero CPU. captureStream-to-
-        // phone-mirror sees pre-transform pixels (mirrored phone view stays
-        // un-flipped; same constraint as the Pi camera path). When the
-        // operator needs phone-side flipping too, do it firmware-side.
-        const flipStyle = entry.cameraFlip ? ` style="transform: rotate(180deg)"` : "";
+        // Canvas path bakes the 180° rotation into drawImage so captureStream
+        // forwards rotated pixels to paired phones. No CSS transform needed
+        // — canvas IS the pixels. HTTP MJPEG path keeps CSS rotation on the
+        // <img>; mjpeg-restream.js separately rotates its forwarding canvas
+        // so phone mirroring stays consistent with the local view.
+        const flipImgStyle = (!useCanvas && entry.cameraFlip) ? ` style="transform: rotate(180deg)"` : "";
         body = useCanvas
-          ? `<canvas class="robot-camera" data-cam-id="${entry.id}" width="640" height="480" aria-label="webrtc video"${flipStyle}></canvas>`
-          : `<img class="robot-camera" crossorigin="anonymous" data-cam-id="${entry.id}" alt="${transport} video"${flipStyle}>`;
+          ? `<canvas class="robot-camera" data-cam-id="${entry.id}" width="640" height="480" aria-label="webrtc video"></canvas>`
+          : `<img class="robot-camera" crossorigin="anonymous" data-cam-id="${entry.id}" alt="${transport} video"${flipImgStyle}>`;
       }
       // Stream URL omitted from idle body — it's debug info that leaked
       // into daily UX. The dashboard log echoes it on connect for anyone
