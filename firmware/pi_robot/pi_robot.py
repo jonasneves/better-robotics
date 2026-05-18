@@ -250,11 +250,18 @@ _picamera2_available = False
 if CAMERA_ENABLED is not False:
     try:
         from aiortc import (  # type: ignore
-            RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
+            RTCPeerConnection, RTCSessionDescription,
             RTCConfiguration, RTCIceServer, MediaStreamTrack,
         )
         from aiortc.rtcrtpsender import RTCRtpSender  # type: ignore
         from aiortc.contrib.media import MediaPlayer  # type: ignore
+        # aiortc 1.10+ removed the SDP-string `candidate` kwarg from
+        # RTCIceCandidate; trickle ICE coming from the browser has to be
+        # parsed through this helper instead. Same call shape on both
+        # camera paths (RTP-track and any future variant) — the failure
+        # the helper fixes is in the receiver-side ICE plumbing, which
+        # the camera-track refactor didn't touch.
+        from aiortc.sdp import candidate_from_sdp  # type: ignore
         import aiohttp  # type: ignore
         import av  # type: ignore
         import fractions
@@ -1444,11 +1451,14 @@ async def _cam_handle_message(msg: dict) -> None:
             }})
             _set_cam_status(st="answered")
         elif t == "ice" and _cam_pc is not None:
-            cand = RTCIceCandidate(
-                sdpMid=d.get("sdpMid"),
-                sdpMLineIndex=d.get("sdpMLineIndex"),
-                candidate=d.get("candidate", ""),
-            )
+            cand_str = (d.get("candidate") or "").strip()
+            if not cand_str:
+                return  # end-of-candidates marker; aiortc doesn't need one
+            if cand_str.startswith("candidate:"):
+                cand_str = cand_str[len("candidate:"):]
+            cand = candidate_from_sdp(cand_str)
+            cand.sdpMid = d.get("sdpMid")
+            cand.sdpMLineIndex = d.get("sdpMLineIndex")
             await _cam_pc.addIceCandidate(cand)
         elif t == "stop":
             await _cam_teardown()
