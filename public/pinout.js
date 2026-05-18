@@ -1269,7 +1269,10 @@ function esp32PinsFromFwInfo(entry) {
   const encoders = caps.find(c => c.name === "encoders")?.pins;
   return {
     led:     led    ?? 33,
-    flash:   flash  ?? 4,
+    // No-cap fallback: -1 (disabled). C3/DevKit firmware doesn't advertise
+    // flash at all; defaulting to GPIO 4 fabricates a phantom claim that
+    // collides with whatever the user has on 4 (often a motor IN pin).
+    flash:   flash  ?? -1,
     m_l_fwd: motors?.left?.forward   ?? 14,
     m_l_bwd: motors?.left?.backward  ?? 15,
     m_r_fwd: motors?.right?.forward  ?? 13,
@@ -1369,7 +1372,11 @@ function renderEsp32Edit(entry) {
   const savedKey = active?.dataset?.key || null;
 
   const c = editConfig;
-  const ALL_KEYS = ["led", "flash", "m_l_fwd", "m_l_bwd", "m_r_fwd", "m_r_bwd", "m_ena", "m_enb", "enc_l", "enc_r"];
+  // Flash only exists on boards that advertise the cap (AI-Thinker CAM).
+  // Excluding it from ALL_KEYS on no-flash boards keeps the conflict guard
+  // from flagging a phantom claim against the real motor/LED assignments.
+  const hasFlash = (entry?.fwInfo?.caps || []).some(c => c.name === "flash");
+  const ALL_KEYS = ["led", ...(hasFlash ? ["flash"] : []), "m_l_fwd", "m_l_bwd", "m_r_fwd", "m_r_bwd", "m_ena", "m_enb", "enc_l", "enc_r"];
   const usedBy = {};
   for (const k of ALL_KEYS) {
     if (c[k] < 0) continue;  // -1 = disabled, multiple disables don't conflict
@@ -1442,11 +1449,11 @@ function renderEsp32Edit(entry) {
         <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input${ledCls}"
                data-key="led" value="${ledV}" placeholder="—">
       </label>
-      <label class="toolbar-toggle">
+      ${hasFlash ? `<label class="toolbar-toggle">
         <span>Flash</span>
         <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input${flashCls}"
                data-key="flash" value="${flashV}" placeholder="—">
-      </label>
+      </label>` : ""}
     </div>
     ${renderEsp32BoardWithDriver(previewEntry, { editable: true, editConfig: c, flagged })}
     ${warn}
