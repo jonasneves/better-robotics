@@ -172,6 +172,11 @@ export function makeWebrtcInstallableCap(schema) {
     const pc = new RTCPeerConnection({ iceServers });
     entry[pcField] = pc;
     registerExternalPc(entry.id, name, pc);
+    // Re-render with pcField set so the <canvas> appears in the DOM
+    // BEFORE we querySelector it below. Without this second render the
+    // decoder never attaches: frames arrive over the data channel and
+    // hit no listener, the card sits at "pc-connected" forever.
+    renderEntry(entry);
 
     // Chunked JPEG over data channel — same wire format the ESP32
     // firmware uses, decoded by the WebCodecs path below. No RTP track
