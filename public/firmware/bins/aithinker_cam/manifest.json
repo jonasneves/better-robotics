@@ -1,8 +1,8 @@
 {
   "board": "aithinker_cam",
   "chip": "esp32",
-  "version": "0da7700",
-  "built_at": "2026-05-17T20:31:28Z",
+  "version": "1bec095",
+  "built_at": "2026-05-18T16:15:27Z",
   "files": [
     { "path": "bootloader.bin",  "offset": "0x1000" },
     { "path": "partitions.bin",  "offset": "0x8000" },
