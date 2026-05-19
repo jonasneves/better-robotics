@@ -6,138 +6,242 @@
 // Each demo's `run(ctx)` is async and orchestrates calls to ctx.exec()
 // (the executor with pill rendering) and ctx.sleep(). Demos can issue
 // `move_motor`, `speak`, `start_robot_camera`, `start_robot_watcher`,
-// `get_robot_detections` — same primitives the LLM uses. So a demo
-// step renders in the chat the same way an LLM-issued tool call does.
+// `get_robot_detections`, `view_robot_frame` — same primitives the LLM
+// uses. So a demo step renders in the chat the same way an LLM-issued
+// tool call does.
 //
-// Pattern reference: Boston Dynamics Spot Choreographer (music-synced
-// step sequences), DJI Robomaster S1 Lab Mode (named routines), Petoi
-// Bittle bundled dances. The shared trick is keeping each step ≤ 1s so
-// dead-reckoning drift doesn't accumulate visibly between demos.
+// Design philosophy (revised after first-pass screenshots showed tiny,
+// twitchy motion):
+//   - Use the full 2000ms pulse cap. Per-pulse gaps are noticeable
+//     only on chained-forward; for arcs / spins, the slight pause
+//     reads as "intentional pose-hold," not jitter.
+//   - Vocal punctuation at section boundaries. Spot's viral dances
+//     all have music sync; we substitute TTS phrases ("ready?", "ta-
+//     da!", "scanning") which both narrate intent AND mask drift.
+//   - Multi-section structure (intro → motif → bridge → finale) per
+//     Petoi Bittle / Sphero RVR Trick Library convention. Even short
+//     demos get a beginning, middle, end.
+//   - LLM-grade demos (selfie, follow) use the camera + detections.
+//     These are the ones competitors can't fake with timed pulses
+//     because the planner-loop is the control system.
 
 const SPEED = 40;        // saturate; firmware caps to ±40 anyway
+const MAX = 2000;        // firmware duration cap per pulse
 
 // pulse-and-settle: move_motor is bounded; we wait the pulse duration
-// plus a small settle window before the next call so we don't queue
-// pulses on top of each other (firmware would cancel-and-replace and
-// the motion would jerk).
+// plus a small settle so we don't queue pulses on top of each other
+// (firmware would cancel-and-replace and motion would jerk).
 async function pulse(ctx, l, r, ms) {
   await ctx.exec("move_motor", { id: ctx.id, l, r, duration_ms: ms });
   await ctx.sleep(ms + 30);
 }
 
-// 1 — Figure-8. Two arcs in opposite curves, ~5s total. Classic
-//     differential-drive showpiece; the smoothness reads as intent.
+// chain forward — N consecutive max-duration drives. Each ~2s pulse
+// has a brief firmware-stop between, but the visual is "sustained drive
+// across the floor" rather than a single brief lunge. Forward only
+// (firmware clips when dist_cm < ~15, so it self-protects).
+async function sustainedDrive(ctx, l, r, count = 2) {
+  for (let i = 0; i < count; i++) await pulse(ctx, l, r, MAX);
+}
+
+// 1 — Figure-8. Two wide arcs in opposite curves, ~10s total. Bigger
+//     diameter than the v1 (which was a tiny tight figure). Speaks at
+//     start so the viewer knows what they're about to see.
 async function figure8(ctx) {
-  for (let i = 0; i < 4; i++) await pulse(ctx,  SPEED,         SPEED * 0.4, 700);
-  for (let i = 0; i < 4; i++) await pulse(ctx,  SPEED * 0.4,   SPEED,       700);
+  await ctx.exec("speak", { text: "Figure eight." });
+  await ctx.sleep(500);
+  // Right-arc forward (left wheel faster) — traces left lobe of the 8
+  for (let i = 0; i < 3; i++) await pulse(ctx, SPEED, SPEED * 0.35, MAX);
+  // Left-arc forward — traces right lobe
+  for (let i = 0; i < 3; i++) await pulse(ctx, SPEED * 0.35, SPEED, MAX);
 }
 
-// 2 — Zigzag forward sweep. Reads as "searching"; pairs well with a
-//     spoken status line midway through.
+// 2 — Zigzag sweep. Wide alternating arcs forward — like a search
+//     pattern. ~10s total. Vocal mid-sweep so the demo feels narrated.
 async function zigzag(ctx) {
+  await ctx.exec("speak", { text: "Scanning the area." });
+  await ctx.sleep(400);
   for (let i = 0; i < 3; i++) {
-    await pulse(ctx,  SPEED,        SPEED * 0.35, 550);
-    await pulse(ctx,  SPEED * 0.35, SPEED,        550);
+    await pulse(ctx, SPEED, SPEED * 0.3, MAX);
+    await pulse(ctx, SPEED * 0.3, SPEED, MAX);
   }
+  await ctx.exec("speak", { text: "Sweep complete." });
 }
 
-// 3 — Dance. Beat sequence with vocal punctuation. Spot/Petoi pattern:
-//     music covers small motion variance, the "ta-da!" is the reveal.
+// 3 — Dance. Multi-section: intro → spin sequence → shimmy → charge →
+//     finale. ~15s total. Each section visually distinct so it reads as
+//     "choreography" not "scripted twitch."
 async function dance(ctx) {
   await ctx.exec("speak", { text: "Watch this." });
   await ctx.sleep(700);
-  const beats = [
-    [-SPEED,  SPEED, 350],
-    [ SPEED, -SPEED, 350],
-    [ SPEED,  SPEED, 250],
-    [-SPEED, -SPEED, 250],
-    [-SPEED,  SPEED, 350],
-    [ SPEED, -SPEED, 350],
-    [ SPEED,  SPEED, 500],
-  ];
-  for (const [l, r, ms] of beats) await pulse(ctx, l, r, ms);
+  // Section 1 — slow full spins, one each way
+  await pulse(ctx, -SPEED,  SPEED, MAX);
+  await pulse(ctx,  SPEED, -SPEED, MAX);
+  // Section 2 — fast shimmy (tail-wag rhythm)
+  for (let i = 0; i < 4; i++) {
+    await pulse(ctx,  SPEED, -SPEED, 200);
+    await pulse(ctx, -SPEED,  SPEED, 200);
+  }
+  // Section 3 — charge forward + retreat
+  await ctx.exec("speak", { text: "Charge!" });
+  await pulse(ctx,  SPEED,  SPEED, MAX);
+  await pulse(ctx, -SPEED, -SPEED, MAX);
+  // Section 4 — finale full spin + reveal
+  await pulse(ctx, -SPEED,  SPEED, MAX);
   await ctx.exec("speak", { text: "Ta-da!" });
 }
 
-// 4 — Patrol. Forward sweep + alternating spin "look around" between
-//     sweeps. Reads as "alive" because the robot keeps checking.
+// 4 — Patrol. Sustained drive segments + big spin-and-look between
+//     them. Reads as "alive and checking" because the look-around is
+//     full-rotation, not a quick tic. ~18s total.
 async function patrol(ctx) {
-  for (let i = 0; i < 3; i++) {
-    await pulse(ctx,  SPEED,  SPEED, 700);
-    await ctx.sleep(250);
-    await pulse(ctx, -SPEED,  SPEED, 500);
-    await ctx.sleep(150);
-    await pulse(ctx,  SPEED, -SPEED, 500);
-    await ctx.sleep(150);
+  await ctx.exec("speak", { text: "Patrolling." });
+  for (let i = 0; i < 2; i++) {
+    await sustainedDrive(ctx, SPEED, SPEED, 2);  // ~4s straight
+    await ctx.sleep(300);
+    await pulse(ctx, -SPEED,  SPEED, MAX);       // big spin one way
+    await ctx.sleep(200);
+    await pulse(ctx,  SPEED, -SPEED, MAX);       // big spin back
+    await ctx.sleep(200);
   }
   await ctx.exec("speak", { text: "Patrol complete." });
 }
 
-// 5 — React. Camera + fire-once watcher on `person`. The Cozmo move:
-//     reactive personality lands harder than raw motion. Hands off to
-//     the watcher's halt_and_speak action so the robot reacts even if
-//     the user closes the dashboard.
+// 5 — React. Theatrical: open camera → slow scan-spin so the user can
+//     SEE the robot is paying attention → arm the watcher. The
+//     fire-once watcher then halts and speaks when a person appears,
+//     even if the user closes the dashboard.
 async function react(ctx) {
   await ctx.exec("start_robot_camera", { id: ctx.id });
-  await ctx.exec("speak", { text: "Watching for a person." });
+  await ctx.exec("speak", { text: "Watching for visitors." });
+  // Full 360 scan so the viewer sees the robot looking around
+  await pulse(ctx, -SPEED, SPEED, MAX);
+  await pulse(ctx, -SPEED, SPEED, MAX);
   await ctx.exec("start_robot_watcher", {
     id: ctx.id,
     classes: ["person"],
     action: "halt_and_speak",
-    speak_text: "Hi there!",
+    speak_text: "Hello!",
   });
 }
 
-// 6 — Follow. Closed-loop detection-driven approach. The killer one —
-//     it's the only routine a competitor can't fake with timed pulses
-//     because the LLM-loop is the control system. Open the camera, then
-//     query → decide → pulse → repeat for N steps. Bbox cx convention
-//     from get_robot_detections: cx<0.45 = left of center, cx>0.55 =
-//     right; otherwise drive forward.
+// 6 — Follow. Closed-loop detection-driven approach. Longer drive
+//     pulses so motion is fluid rather than choppy. Aborts cleanly via
+//     ctx.shouldAbort() (Stop button or "stop" voice command).
 async function follow(ctx, target = "person") {
   await ctx.exec("start_robot_camera", { id: ctx.id });
   await ctx.exec("speak", { text: `Following ${target}.` });
-  const STEPS = 8;
+  const STEPS = 12;
   for (let i = 0; i < STEPS; i++) {
     if (ctx.shouldAbort?.()) return;
     const r = await ctx.exec("get_robot_detections", { id: ctx.id, queries: [target] });
-    // Detection response shape varies a bit by camera; normalize.
     const hits = r?.detections || r?.results || (Array.isArray(r) ? r : []);
     const det = hits[0];
     if (!det) {
-      // Lost target — small scan-spin and try again.
-      await pulse(ctx, -SPEED, SPEED, 250);
+      await pulse(ctx, -SPEED, SPEED, 400);  // scan-spin to re-acquire
       continue;
     }
     const cx = det.bbox?.cx ?? 0.5;
-    if      (cx < 0.45) await pulse(ctx, -SPEED,  SPEED, 200);  // turn left
-    else if (cx > 0.55) await pulse(ctx,  SPEED, -SPEED, 200);  // turn right
-    else                await pulse(ctx,  SPEED,  SPEED, 400);  // drive forward
+    if      (cx < 0.4) await pulse(ctx, -SPEED,  SPEED, 300);  // turn left
+    else if (cx > 0.6) await pulse(ctx,  SPEED, -SPEED, 300);  // turn right
+    else               await pulse(ctx,  SPEED,  SPEED, MAX);  // sustained drive toward
   }
 }
 
+// 7 — Introduce. Self-introduction routine for first-time viewers.
+//     Slow 360 spin while narrating what's on the platform. Great
+//     opener; sets context for everything else. ~12s.
+async function introduce(ctx) {
+  await ctx.exec("speak", { text: "Hi there. I'm a small wheeled robot." });
+  await pulse(ctx, -SPEED, SPEED, MAX);
+  await ctx.exec("speak", { text: "I have two motors, a camera, and an ultrasonic sensor." });
+  await pulse(ctx, -SPEED, SPEED, MAX);
+  await ctx.exec("speak", { text: "I can drive, detect objects, react, and follow you. What should we try?" });
+}
+
+// 8 — Wiggle. Quick "tail-wag" emote — Cozmo-grade personality. 3
+//     seconds of fast alternating mini-spins. Looks happy. Good
+//     standalone reaction or filler between bigger demos.
+async function wiggle(ctx) {
+  for (let i = 0; i < 6; i++) {
+    await pulse(ctx,  SPEED, -SPEED, 180);
+    await pulse(ctx, -SPEED,  SPEED, 180);
+  }
+}
+
+// 9 — Selfie. Take a frame, run closed-vocab COCO detection against
+//     likely scene anchors, narrate what's there. This is the demo
+//     competitors can't fake — the platform is reasoning about what
+//     the camera actually saw. COCO-only labels here (open-vocab is
+//     disabled); the 5-query cap matches the tool schema.
+async function selfie(ctx) {
+  await ctx.exec("start_robot_camera", { id: ctx.id });
+  await ctx.exec("speak", { text: "Let me take a look around." });
+  await ctx.sleep(800);
+  const probes = ["person", "laptop", "cup", "cell phone", "chair"];
+  const r = await ctx.exec("get_robot_detections", { id: ctx.id, queries: probes });
+  const hits = (r?.detections || r?.results || (Array.isArray(r) ? r : []))
+    .filter(d => d?.label && (d.score ?? 1) > 0.3);
+  if (hits.length === 0) {
+    await ctx.exec("speak", { text: "I can't quite make out the room. Bring something closer?" });
+    return;
+  }
+  const labels = [...new Set(hits.map(d => d.label))].slice(0, 4);
+  const list = labels.length === 1 ? `a ${labels[0]}` : `${labels.slice(0, -1).map(l => `a ${l}`).join(", ")}, and a ${labels[labels.length - 1]}`;
+  await ctx.exec("speak", { text: `I see ${list}.` });
+  await ctx.sleep(400);
+  await pulse(ctx, -SPEED, SPEED, 600);  // small "nod" to acknowledge
+  await ctx.exec("speak", { text: "Nice meeting you." });
+}
+
+// 10 — Show-off. Greatest-hits reel chaining intro + figure8 + wiggle +
+//      dance. ~45s. Use this as the "full pitch" — every capability,
+//      back to back, with vocal narration tying them together.
+async function showOff(ctx) {
+  await ctx.exec("speak", { text: "Demo reel, here we go." });
+  await ctx.sleep(600);
+  await introduce(ctx);
+  await ctx.sleep(400);
+  await ctx.exec("speak", { text: "Figure eight." });
+  await figure8(ctx);
+  await ctx.sleep(400);
+  await ctx.exec("speak", { text: "Happy wiggle." });
+  await wiggle(ctx);
+  await ctx.sleep(400);
+  await dance(ctx);
+  await ctx.exec("speak", { text: "End of reel. Thanks for watching." });
+}
+
 const DEMOS = {
-  figure8: { run: figure8, label: "figure-8" },
-  zigzag:  { run: zigzag,  label: "zigzag"  },
-  dance:   { run: dance,   label: "dance"   },
-  patrol:  { run: patrol,  label: "patrol"  },
-  react:   { run: react,   label: "react"   },
-  follow:  { run: follow,  label: "follow"  },
+  figure8:   { run: figure8,   label: "figure-8"   },
+  zigzag:    { run: zigzag,    label: "zigzag"     },
+  dance:     { run: dance,     label: "dance"      },
+  patrol:    { run: patrol,    label: "patrol"     },
+  react:     { run: react,     label: "react"      },
+  follow:    { run: follow,    label: "follow"     },
+  introduce: { run: introduce, label: "introduce"  },
+  wiggle:    { run: wiggle,    label: "wiggle"     },
+  selfie:    { run: selfie,    label: "selfie"     },
+  showoff:   { run: showOff,   label: "show-off"   },
 };
 
 export const DEMO_NAMES = Object.keys(DEMOS);
 
 // Match `demo <name>` or `/demo <name>`. Aliases cover the variations
-// Web Speech produces — "figure eight" / "figure 8" / "figure-eight",
-// "zig zag" / "zigzag", etc. Dictated demo invocations should "just
-// work" without the user having to spell things exactly.
+// Web Speech produces — "figure eight" / "figure 8", "zig zag" /
+// "zigzag", "show off" / "showoff", etc. Dictated demo invocations
+// should "just work" without the user having to spell things exactly.
 const ALIASES = {
-  figure8: /(?:figure[\s-]*(?:eight|8))/i,
-  zigzag:  /(?:zig[\s-]*zag)/i,
-  dance:   /dance/i,
-  patrol:  /patrol/i,
-  react:   /react/i,
-  follow:  /follow/i,
+  figure8:   /(?:figure[\s-]*(?:eight|8))/i,
+  zigzag:    /(?:zig[\s-]*zag)/i,
+  dance:     /dance/i,
+  patrol:    /patrol/i,
+  react:     /react/i,
+  follow:    /follow/i,
+  introduce: /(?:introduce|introduction|intro)/i,
+  wiggle:    /(?:wiggle|wag)/i,
+  selfie:    /(?:selfie|look\s+around|describe\s+room)/i,
+  showoff:   /(?:show[\s-]*off|reel|highlights?)/i,
 };
 const RX_PREFIX = /^\/?demo\s+(.+)$/i;
 
