@@ -531,26 +531,6 @@ export function initAssistant() {
   // Intro fires once per install; subsequent loads stay silent at idle.
   const seenKey = "better-robotics:pip-intro-seen";
   const showIntro = !localStorage.getItem(seenKey);
-  // Track whether the most recent UI input was an explicit close request
-  // (bubble click or Escape key). pip-core's capture-phase document click
-  // handler at line ~1193 closes the panel on any outside click, which is
-  // too aggressive for a dashboard — users want to inspect cards / cameras
-  // / motors while keeping the conversation visible. We distinguish:
-  //   bubblePressed  set by mousedown (fires before click → before pip's close)
-  //   escapePressed  set by capture-phase keydown (fires before pip's keydown)
-  // onClose checks both: if either, honor the close; otherwise re-open the
-  // panel on the next microtask (system-initiated close defeated).
-  let bubblePressed = false;
-  let escapePressed = false;
-  document.addEventListener("mousedown", (e) => {
-    bubblePressed = !!(_pip?.bubble?.contains(e.target));
-  }, true);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && _pip?.panel?.matches(":popover-open")) {
-      escapePressed = true;
-    }
-  }, true);
-
   _pip = createPip({
     container: document.body,
     ask,
@@ -566,19 +546,6 @@ export function initAssistant() {
     modelLabel: activeModelForBackend(settings.pipBackend),
     // Stop button click — flag the askWithTools loop to abort between iterations.
     onAbort: () => { _abort = true; },
-    onClose: () => {
-      if (bubblePressed || escapePressed) {
-        bubblePressed = false;
-        escapePressed = false;
-        return;  // user-initiated, honor it
-      }
-      // System-initiated close (outside click) — re-open. setTimeout(0)
-      // escapes pip-core's close() call stack so showPopover() doesn't
-      // collide with the just-finished hidePopover().
-      setTimeout(() => {
-        if (!_pip?.panel?.matches(":popover-open")) _pip?.bubble?.click();
-      }, 0);
-    },
   });
   registerInitialSlashCommands();
   if (showIntro) { try { localStorage.setItem(seenKey, "1"); } catch {} }
