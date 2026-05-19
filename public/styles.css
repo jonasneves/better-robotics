@@ -2060,6 +2060,32 @@ dialog[open]::backdrop { opacity: 1; }
   border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
   object-fit: contain;
 }
+
+/* Inline reflex-fire notice — rendered when watcher.js fires its
+   onWatcherFire event during an active Pip turn. Dim, single-line,
+   distinct from tool pills. Fire-once-and-disable means it lands at most
+   once per arm cycle so the visual weight stays low. */
+.pip-reflex-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, #d4b24e 12%, transparent);
+  color: color-mix(in srgb, var(--ink) 80%, #d4b24e);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.pip-reflex-notice svg { flex-shrink: 0; color: #d4b24e; }
+.pip-reflex-notice strong { font-weight: 600; }
+.pip-reflex-notice code {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
 /* Pip chat panel — pip-core defaults to 320px, below the 45-75-character
    reading sweet spot for 14px body. 420px puts a line at ~55ch and gives
    code blocks + tool pills room to breathe without dominating the

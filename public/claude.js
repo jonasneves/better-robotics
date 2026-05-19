@@ -338,7 +338,7 @@ export async function askWithTools(messages, opts = {}) {
   return _anthropicAskWithTools(messages, opts);
 }
 
-async function _anthropicAskWithTools(messages, { system, tools, executor, maxIterations = 10, maxTokens = 1024, onToolStart, onToolEnd, shouldAbort, onMaxIterations, onDelta } = {}) {
+async function _anthropicAskWithTools(messages, { system, tools, executor, maxIterations = 10, maxTokens = 1024, onToolStart, onToolEnd, shouldAbort, onMaxIterations, onDelta, getPendingObservations } = {}) {
   const convo = [...messages];
   let i = 0;
   let budget = maxIterations;
@@ -424,7 +424,16 @@ async function _anthropicAskWithTools(messages, { system, tools, executor, maxIt
         });
       }
     }
-    convo.push({ role: "user", content: toolResults });
+    // Drain any host-queued out-of-band observations (e.g. reflex-watcher
+    // fire events that fired mid-turn) into the same user-role message
+    // as the tool_results. Appending as a text block alongside the
+    // tool_result blocks keeps role-alternation valid (Anthropic requires
+    // user/assistant ping-pong; two user messages in a row errors).
+    const obs = getPendingObservations?.();
+    const content = (Array.isArray(obs) && obs.length)
+      ? [...toolResults, { type: "text", text: obs.join("\n\n") }]
+      : toolResults;
+    convo.push({ role: "user", content });
     i++;
     if (i >= budget && onMaxIterations) {
       const more = await onMaxIterations();

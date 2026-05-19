@@ -4,6 +4,7 @@ import { labelTool, summarizeTool } from "./format.js";
 import { settings, saveSettings } from "./settings.js";
 import { state } from "./state.js";
 import { isSupported as voiceInputSupported, startDictation } from "./voice-input.js";
+import { onWatcherFire } from "./watcher.js";
 import { AUTH_URL } from "./endpoints.js";
 import { createPip, renderMd } from "https://cdn.jsdelivr.net/npm/@jonasneves/pip@2.9.5/pip-core.esm.js";
 
@@ -83,6 +84,14 @@ export const PIP_INTRO = "Try: \"why isn't this robot connecting\" or \"what's i
 let _pip = null;
 let _abort = false;
 let _activeTurnEl = null;
+
+// L2 reflex-fire injection — see watcher.js + claude.js. When the
+// reflex watcher fires during an active Pip turn, we queue a synthetic
+// observation here; askWithTools drains it via getPendingObservations
+// between iterations so Pip sees the event on its next loop without
+// having to poll. Bounded by fire-once-and-disable: at most one entry
+// per arm cycle, so the queue can't pile up.
+const _pendingObservations = [];
 
 // Tool-call pill, hatch-style. Appended directly to turnEl in flow with
 // the rest of the iteration's text — so a multi-step turn renders as
@@ -320,6 +329,7 @@ async function onSubmit(text, { turnEl }) {
       scrollPanelToBottom();
     },
     shouldAbort: () => _abort,
+    getPendingObservations: () => _pendingObservations.splice(0),
   });
   _activeTurnEl = null;
 
@@ -594,6 +604,38 @@ export function initAssistant() {
   });
   watchDialogs();
   wireMicButton();
+  wireWatcherFireBridge();
+}
+
+// L2 reflex-fire bridge. On every watcher fire-event:
+//   - queue a synthetic observation for askWithTools to drain on the
+//     next iteration (so Pip sees it without having to poll state)
+//   - render a small inline notice in the active turn (subtle, dim) so
+//     the operator sees what got injected — fire-once-and-disable means
+//     this lands at most once per arm cycle.
+function wireWatcherFireBridge() {
+  onWatcherFire((entry, det) => {
+    const ts = new Date(det?.ts || Date.now()).toISOString();
+    const score = typeof det?.score === "number" ? det.score.toFixed(2) : "?";
+    const action = entry?.watcher?.action || "?";
+    const obsText =
+      `[reflex-fire] Robot "${entry.name}" (id="${entry.id}") watcher caught ` +
+      `label="${det?.label}" score=${score} at ${ts}. Action "${action}" executed. ` +
+      `Watcher is now disarmed.`;
+    _pendingObservations.push(obsText);
+    if (!_activeTurnEl) return;  // not mid-turn; user will see via state poll
+    const el = document.createElement("div");
+    el.className = "pip-reflex-notice";
+    el.innerHTML =
+      `<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">` +
+        `<circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/>` +
+        `<circle cx="6" cy="6" r="1.8" fill="currentColor"/>` +
+      `</svg> ` +
+      `Reflex: saw <strong>${escHtml(String(det?.label || ""))}</strong> ` +
+      `(${score}) — action <code>${escHtml(action)}</code> executed.`;
+    _activeTurnEl.appendChild(el);
+    scrollPanelToBottom();
+  });
 }
 
 // Web Speech dictation on pip's input. Injected post-init because pip-core

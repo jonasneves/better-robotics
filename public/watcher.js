@@ -20,6 +20,21 @@ import { speak as ttsSpeak } from "./voice.js";
 // id → { stop }
 const _running = new Map();
 
+// Fire-event listeners — assistant.js subscribes so it can inject a
+// synthetic observation into Pip's active turn (L2 "harness pushes state
+// to planner" pattern from Butter-Bench / ExploreVLM). Fire-once-disable
+// means at most one event per arm cycle, so this can't spam the chat.
+const _fireListeners = new Set();
+export function onWatcherFire(fn) {
+  _fireListeners.add(fn);
+  return () => _fireListeners.delete(fn);
+}
+function emitFire(entry, det) {
+  for (const fn of _fireListeners) {
+    try { fn(entry, det); } catch (err) { console.warn("[watcher] fire listener:", err); }
+  }
+}
+
 const ACTIONS = {
   halt:   async (entry)      => { await pulseMotors(entry.id, 0, 0, 200); },
   speak:  async (_entry, det) => { ttsSpeak(`saw ${det.label}`); },
@@ -59,6 +74,9 @@ export function startWatcher(entry, opts = {}) {
     renderEntry(entry);
     try { await ACTIONS[cfg.action]?.(entry, det); }
     catch (err) { console.warn(`[watcher] action ${cfg.action} failed:`, err); }
+    // Notify subscribers AFTER the action ran so the observation reads
+    // "saw X, action Y executed" rather than "saw X, about to act."
+    emitFire(entry, det);
   });
   renderEntry(entry);
   return cfg;
