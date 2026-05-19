@@ -2034,10 +2034,14 @@ dialog[open]::backdrop { opacity: 1; }
 /* When the mic is present, keep the send button rendered even when
    pip-core hides it (empty input) — the empty slot to the mic's right
    reads as "broken layout" otherwise. Disabled-looking when not usable.
-   !important because pip-core's `.pip-send-btn[hidden] { display: none }`
-   ships in a <style> appended late and ties with us at higher source
-   order despite our higher specificity in some cache states. */
-.pip-form--mic .pip-send-btn[hidden] {
+
+   :has() gate is critical: send and stop both pin at right:4, same slot.
+   When pip is responding, pip-core flips stopBtn[hidden] off and hides
+   send so the user can cancel. Without this guard our force-show would
+   overlay stop, and stopping a turn becomes impossible. !important
+   because pip-core's `.pip-send-btn[hidden] { display: none }` ships in
+   a <style> appended late and ties with us at higher source order. */
+.pip-form--mic:has(.pip-stop-btn[hidden]) .pip-send-btn[hidden] {
   display: inline-flex !important;
   opacity: 0.35;
   pointer-events: none;
