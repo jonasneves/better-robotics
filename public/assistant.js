@@ -514,8 +514,11 @@ function wireMicButton() {
           stroke="currentColor" stroke-width="1.6" fill="none"
           stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`;
-  // First child so it sits at the left edge, mirroring pip-slash-key.
-  form.insertBefore(btn, form.firstChild);
+  // Append so the button lives at the right edge of the form alongside
+  // pip-core's send button. CSS pins it absolutely at right:32, so DOM
+  // order is incidental — appendChild keeps the form-control tab order
+  // intuitive (input → mic → send).
+  form.appendChild(btn);
   form.classList.add("pip-form--mic");
 
   const setListening = (on) => {
@@ -524,7 +527,8 @@ function wireMicButton() {
   };
 
   // Snapshot whatever's in the input when dictation starts so the
-  // transcript appends to existing text rather than nuking it.
+  // transcript appends to existing text rather than nuking it. Cancel
+  // restores this prefix so the user gets their pre-dictation state back.
   let prefix = "";
   const writeTranscript = (text) => {
     input.value = (prefix ? prefix + " " : "") + text;
@@ -532,9 +536,9 @@ function wireMicButton() {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   };
 
-  const stop = () => {
+  const stop = ({ cancel = false } = {}) => {
     if (!_dictation) return;
-    _dictation.stop();
+    _dictation.stop({ cancel });
     _dictation = null;
     setListening(false);
   };
@@ -552,21 +556,38 @@ function wireMicButton() {
           input.placeholder = "Microphone permission denied — check Site settings.";
         }
       },
-      onEnd: () => {
+      onEnd: ({ reason }) => {
         // Chrome can fire onend on idle even with continuous=true — flip
         // the button back so the user can re-engage with one click instead
         // of two.
         _dictation = null;
         setListening(false);
-        input.focus();
+        if (reason === "cancel") {
+          // Escape: restore pre-dictation input so the user gets their
+          // earlier draft back instead of the partial transcript.
+          input.value = prefix;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.focus();
+          return;
+        }
+        // Commit: tap-mic-again ("user") or silence-timeout ("auto") both
+        // ship the transcript. requestSubmit fires pip-core's submit
+        // handler — same path the send button uses.
+        if (input.value.trim()) {
+          // Let the input event flush + render before submit, so the user
+          // sees the final transcript flash in the field for a beat.
+          requestAnimationFrame(() => form.requestSubmit?.());
+        } else {
+          input.focus();
+        }
       },
     });
   };
 
   btn.addEventListener("click", () => (_dictation ? stop() : start()));
-  // Escape from anywhere bails out of an in-progress dictation.
+  // Escape from anywhere bails an in-progress dictation without sending.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && _dictation) stop();
+    if (e.key === "Escape" && _dictation) stop({ cancel: true });
   });
 }
 

@@ -29,6 +29,7 @@ export function startDictation({ onInterim, onFinal, onError, onEnd, lang = "en-
 
   let finalText = "";
   let stopped = false;
+  let cancelled = false;
 
   rec.onresult = (e) => {
     let interim = "";
@@ -48,13 +49,14 @@ export function startDictation({ onInterim, onFinal, onError, onEnd, lang = "en-
   };
 
   rec.onend = () => {
-    // Chrome sometimes fires onend prematurely (~10s of silence) even with
-    // continuous=true. We don't restart automatically — that's the caller's
-    // job if they want a longer session; restart-on-end is a feature, not
-    // a default, because some errors (not-allowed, network) shouldn't loop.
-    if (!stopped && finalText) onFinal?.(finalText.trim());
-    else if (stopped) onFinal?.(finalText.trim());
-    onEnd?.();
+    // Chrome can fire onend on idle (~10s silence) even with continuous=true.
+    // We surface three reasons so the caller can distinguish them:
+    //   "auto"   — natural silence timeout (commit the transcript)
+    //   "user"   — caller called stop() to commit (e.g. tapped the mic again)
+    //   "cancel" — caller called stop({ cancel: true }) to abort (drop it)
+    const reason = cancelled ? "cancel" : stopped ? "user" : "auto";
+    if (finalText && reason !== "cancel") onFinal?.(finalText.trim(), { reason });
+    onEnd?.({ reason });
   };
 
   try { rec.start(); }
@@ -62,13 +64,14 @@ export function startDictation({ onInterim, onFinal, onError, onEnd, lang = "en-
     // start() throws if recognition is already running (rare on PTT but
     // possible if the caller double-clicks the mic button before onend).
     onError?.(`start-failed: ${err.message || err}`);
-    onEnd?.();
+    onEnd?.({ reason: "error" });
     return { stop: () => {} };
   }
 
   return {
-    stop: () => {
+    stop: ({ cancel = false } = {}) => {
       stopped = true;
+      cancelled = !!cancel;
       try { rec.stop(); } catch {}
     },
   };
