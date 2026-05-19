@@ -1985,37 +1985,41 @@ dialog[open]::backdrop { opacity: 1; }
 /* Mic button — sits at the right edge, just inside the send-button slot.
    Send is at right:4 with width 24; mic at right:32 leaves a 4px gap so
    both fit without overlap. Dashboard-injected (assistant.js
-   wireMicButton); pip-core doesn't know about it. */
+   wireMicButton); pip-core doesn't know about it.
+
+   Hover/active are color-only (no background paint) so the mic doesn't
+   cover the input's focus border like send / slash-key never do — both
+   of those use brightness or transparent-border tricks. */
 .pip-mic-btn {
   position: absolute;
-  right: 32px; top: 50%;
-  transform: translateY(-50%);
+  right: 32px;
+  top: calc(50% - 12px);
   width: 24px; height: 24px;
   display: inline-flex;
   align-items: center; justify-content: center;
   padding: 0;
+  margin: 0;
   border: none;
-  border-radius: 6px;
   background: transparent;
   color: var(--ink-muted);
   cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition: color 120ms ease;
   z-index: 1;
 }
-.pip-mic-btn:hover { background: var(--surface); color: var(--ink); }
-.pip-mic-btn:active { background: var(--bg); }
-.pip-mic-btn.listening {
-  color: #d93b3b;
-  background: color-mix(in srgb, #d93b3b 12%, transparent);
-  animation: pip-mic-pulse 1.2s ease-in-out infinite;
-}
-@keyframes pip-mic-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, #d93b3b 40%, transparent); }
-  50%      { box-shadow: 0 0 0 4px color-mix(in srgb, #d93b3b 0%,  transparent); }
-}
+.pip-mic-btn:hover  { color: var(--ink); }
+.pip-mic-btn:active { color: var(--ink); opacity: 0.7; }
+.pip-mic-btn.listening { color: #d93b3b; }
 /* Extra right-padding so typed text doesn't slide under the mic. Send is
    at 4..28px from the right edge, mic at 32..56px — 64px clears both. */
 .pip-form--mic .pip-input { padding-right: 64px; }
+/* When the mic is present, keep the send button rendered even when
+   pip-core hides it (empty input) — the empty slot to the mic's right
+   reads as "broken layout" otherwise. Disabled-looking when not usable. */
+.pip-form--mic .pip-send-btn[hidden] {
+  display: inline-flex;
+  opacity: 0.35;
+  pointer-events: none;
+}
 /* Pip chat panel — pip-core defaults to 320px, below the 45-75-character
    reading sweet spot for 14px body. 420px puts a line at ~55ch and gives
    code blocks + tool pills room to breathe without dominating the
