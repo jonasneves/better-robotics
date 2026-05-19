@@ -7,8 +7,14 @@
 // (~100MB model, ~500ms–2s latency) — same shape, different backend.
 //
 // Push-to-talk by design: caller controls start + stop. continuous=true so
-// natural pauses don't auto-end the session; interimResults=true so the UI
-// can show the live transcript as the user speaks.
+// natural pauses inside a sentence don't drop the session; interimResults=
+// true so the UI can show the live transcript as the user speaks.
+//
+// Custom silence-commit: Chrome's built-in idle timeout (~10s) is far too
+// long for short commands ("drive forward" should fire within 1s of
+// finishing). We watch onresult activity and call stop() after `silenceMs`
+// of no new transcript, which triggers onend → caller's onFinal → submit.
+// Caller passes silenceMs=0 to disable (pure manual stop).
 
 const SR = typeof window !== "undefined"
   ? (window.SpeechRecognition || window.webkitSpeechRecognition)
@@ -16,7 +22,7 @@ const SR = typeof window !== "undefined"
 
 export function isSupported() { return !!SR; }
 
-export function startDictation({ onInterim, onFinal, onError, onEnd, lang = "en-US" } = {}) {
+export function startDictation({ onInterim, onFinal, onError, onEnd, lang = "en-US", silenceMs = 1200 } = {}) {
   if (!SR) {
     onError?.("not-supported");
     onEnd?.();
@@ -30,6 +36,21 @@ export function startDictation({ onInterim, onFinal, onError, onEnd, lang = "en-
   let finalText = "";
   let stopped = false;
   let cancelled = false;
+  let silenceTimer = null;
+
+  // Each onresult resets this. When it fires (no transcript activity for
+  // silenceMs), we stop the recognition. onend then runs with reason
+  // "user" — same path as the caller manually stopping — and our existing
+  // auto-submit in onEnd fires the transcript.
+  const armSilenceTimer = () => {
+    if (!silenceMs || stopped || cancelled) return;
+    if (silenceTimer) clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      if (stopped || cancelled) return;
+      stopped = true;
+      try { rec.stop(); } catch {}
+    }, silenceMs);
+  };
 
   rec.onresult = (e) => {
     let interim = "";
@@ -42,17 +63,19 @@ export function startDictation({ onInterim, onFinal, onError, onEnd, lang = "en-
     // interim) — same model used by Gboard/iOS dictation, lets the input
     // field grow smoothly instead of flickering.
     onInterim?.(finalText + interim);
+    armSilenceTimer();
   };
 
   rec.onerror = (e) => {
+    if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
     onError?.(e.error || "unknown");
   };
 
   rec.onend = () => {
-    // Chrome can fire onend on idle (~10s silence) even with continuous=true.
+    if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
     // We surface three reasons so the caller can distinguish them:
-    //   "auto"   — natural silence timeout (commit the transcript)
-    //   "user"   — caller called stop() to commit (e.g. tapped the mic again)
+    //   "auto"   — Chrome's own idle timeout (rare now that we silence-stop)
+    //   "user"   — caller (or silenceTimer) called stop() — the common commit path
     //   "cancel" — caller called stop({ cancel: true }) to abort (drop it)
     const reason = cancelled ? "cancel" : stopped ? "user" : "auto";
     if (finalText && reason !== "cancel") onFinal?.(finalText.trim(), { reason });
@@ -68,10 +91,16 @@ export function startDictation({ onInterim, onFinal, onError, onEnd, lang = "en-
     return { stop: () => {} };
   }
 
+  // Arm immediately so a long silence before any speech (mic clicked by
+  // mistake) auto-ends with empty transcript — caller's onEnd will see
+  // no finalText and focus the input instead of submitting empty.
+  armSilenceTimer();
+
   return {
     stop: ({ cancel = false } = {}) => {
       stopped = true;
       cancelled = !!cancel;
+      if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
       try { rec.stop(); } catch {}
     },
   };
