@@ -439,12 +439,18 @@ async function connect(id) {
     entry.stickyStatus = null;
 
     // Telemetry (read + notify) — optional; ESP32 / older Pi don't expose it.
+    // telemetryUpdatedAt stamped on every value change so get_robot_state
+    // can surface freshness to Pip — research showed unstamped sensor data
+    // gets treated as live ("Your LLM Agents are Temporally Blind", arxiv
+    // 2510.23853; matches what we saw on the BR-0D08 patrol run).
     try {
       const telChar = await service.getCharacteristic(TELEMETRY_CHAR_UUID);
       entry.telemetry = decodeJson(await telChar.readValue()) || null;
+      if (entry.telemetry) entry.telemetryUpdatedAt = Date.now();
       await telChar.startNotifications();
       telChar.addEventListener("characteristicvaluechanged", (e) => {
         entry.telemetry = decodeJson(e.target.value) || null;
+        if (entry.telemetry) entry.telemetryUpdatedAt = Date.now();
         patchSecondaryRow(entry);  // surgical patch, no full-card re-render
       });
     } catch {

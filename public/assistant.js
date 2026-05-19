@@ -1,5 +1,5 @@
 import { ask, askWithTools, activeModelForBackend, CLAUDE_VARIANTS } from "./claude.js";
-import { getTools, executor, setAskInChatHandler } from "./pip-tools.js";
+import { getTools, executor, setAskInChatHandler, isVisionAvailable } from "./pip-tools.js";
 import { labelTool, summarizeTool } from "./format.js";
 import { settings, saveSettings } from "./settings.js";
 import { state } from "./state.js";
@@ -20,6 +20,15 @@ const PIP_SYSTEM = [
   "Tools let you read robot state, see frames, detect objects, pulse motors, ask the human.",
   "Use tools to discover state — don't guess.",
   "If a tool returns { error: ... }, surface it; don't fabricate around it.",
+  // Anti-narrate-without-acting — the dominant failure mode observed in
+  // patrol runs (Claude Code's own discipline, mirrored from the
+  // Piebald-AI/claude-code-system-prompts repo).
+  "If you say you will call a tool, call it in the SAME turn. Don't promise tool calls for future turns. Don't describe actions you didn't take.",
+  // Perception-first for visual tasks — ExploreVLM / Butter-Bench pattern.
+  "For 'find X' / 'see X' / 'explore' tasks, your FIRST tool call must be view_robot_frame (when available) so you ground the plan in current pixels. Then arm a watcher if any COCO class plausibly matches; if no class fits (e.g. 'Roomba' isn't COCO), don't fake it — rely on view_robot_frame after each meaningful move.",
+  // Sensor freshness — research-backed, ties staleness to motion events
+  // not wall clock (arxiv 2510.23853 "Temporally Blind").
+  "When get_robot_state returns motion_invalidated: true, telemetry was captured BEFORE the last motor action. Do NOT trust dist_cm in that state — issue another get_robot_state after letting the robot settle, or take a frame.",
   "telemetry.dist_cm (when present) is the forward-facing ultrasonic distance in centimeters.",
   "Firmware silently clips pure-forward motion when dist_cm < ~15 — turns and reverse always pass, so rotate away first if blocked.",
   "",
@@ -53,7 +62,17 @@ function currentRobotsLine() {
 }
 
 function buildSystem() {
-  return `${PIP_SYSTEM}\n\n${currentRobotsLine()}`;
+  // Per-turn time + capability injection. Research consensus is one "now"
+  // per turn (Claude Code's UserPromptSubmit hook, OpenAI Codex's
+  // turn_started_at_unix_ms) rather than per tool — surfaces wall-clock
+  // context where the planner reasons. Vision availability flagged here
+  // so Pip stops narrating "let me take a snapshot" when the tool is
+  // filtered out of getTools().
+  const now = new Date().toISOString();
+  const vision = isVisionAvailable()
+    ? "view_robot_frame is available — use it for visual queries."
+    : "view_robot_frame is NOT available this turn (vision off, or backend doesn't accept inline images). Don't promise visual snapshots. If a frame is needed, tell the user to run /vision on or switch backend with /model.";
+  return `${PIP_SYSTEM}\n\nCurrent time: ${now}\n${vision}\n\n${currentRobotsLine()}`;
 }
 
 export const PIP_INTRO = "Try: \"why isn't this robot connecting\" or \"what's in the camera\". /help for commands.";

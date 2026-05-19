@@ -284,14 +284,29 @@ async function dispatch(name, input) {
     case "get_robot_state": {
       const e = state.devices.get(input.id);
       if (!e) return { error: `no robot with id ${input.id}` };
+      const now = Date.now();
+      const telAge = e.telemetryUpdatedAt ? now - e.telemetryUpdatedAt : null;
+      const motorAge = e.lastMotorActionAt ? now - e.lastMotorActionAt : null;
+      // motion_invalidated: true when a motor pulse fired AFTER the last
+      // telemetry sample, so dist_cm reflects pre-motion state. Tie
+      // staleness to the event, not a wall-clock TTL — survives Claude's
+      // weak time arithmetic (per "Temporally Blind" research).
+      const motion_invalidated = !!(
+        e.telemetryUpdatedAt && e.lastMotorActionAt
+        && e.lastMotorActionAt > e.telemetryUpdatedAt
+      );
       return {
         id: e.id, name: e.name, type: e.fwType ?? null,
         status: e.status,
         fwInfo: e.fwInfo ?? null,
         wifiStatus: e.wifiStatus ?? null,
         telemetry: e.telemetry ?? null,
+        telemetry_age_ms: telAge,
+        since_last_motor_action_ms: motorAge,
+        motion_invalidated,
         robotStatus: e.robotStatus ?? null,
         capSchema: e.capSchema ?? null,
+        now_ms: now,
       };
     }
     case "get_log": {
@@ -441,7 +456,10 @@ async function dispatch(name, input) {
       // Each pulse is firmware-bounded (speed ±40, duration 50–2000 ms,
       // watchdog auto-stop, dist_cm forward-clip). The planner decides
       // when to look or ask for help — no executor-imposed observation
-      // cadence between pulses.
+      // cadence between pulses. Stamp the action so subsequent
+      // get_robot_state returns can flag motion-invalidated telemetry.
+      const e = state.devices.get(input.id);
+      if (e) e.lastMotorActionAt = Date.now();
       return await pulseMotors(input.id, input.l, input.r, input.duration_ms);
     }
     case "start_robot_camera": {

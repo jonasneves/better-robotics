@@ -13,9 +13,13 @@ export const settings = Object.assign(
   //   identity (avatar / robot labels) AND the GitHub Models Pip backend.
   //   One grant, two purposes; sign-out clears both. 401 → re-connect prompt.
   // pipVisionEnabled: when true AND backend supports images, Pip gets
-  //   view_robot_frame, sending the actual frame. Off by default —
-  //   baseline is "frames stay local"; opt-in is the user's call (cost +
-  //   privacy; .claude/CLAUDE.md → Model discipline).
+  //   view_robot_frame, sending the actual frame. ON by default — the
+  //   "off by default, model still narrates 'let me check'" failure mode
+  //   was worse than the cost trade-off. Documented anti-pattern: the
+  //   training corpus has a strong "I'll check the camera" prior, so
+  //   filtering the tool out of getTools() doesn't suppress the verbal
+  //   commitment, it just makes Pip lie. Better to keep the tool live.
+  //   Off via /vision off if cost/privacy becomes a real concern.
   // Keys + tokens in localStorage — browser-only, never leaves origin,
   // but treat like passwords (don't share your browser).
   // arucoOverheadPhoneId / arucoOverheadLocalId: roomId of the phone, or
@@ -23,7 +27,7 @@ export const settings = Object.assign(
   //   localizer. Mutually exclusive — only one is non-null at a time.
   // arucoMarkerSizeMm: printed marker side length, used by POS.Posit for
   //   metric pose. Defaults to the printable sheets' size (100 mm).
-  { pipBackend: "github", pipApiKey: "", pipOpenaiKey: "", pipClaudeModel: "claude-sonnet-4-6", githubAuth: null, pipVisionEnabled: false, arucoOverheadPhoneId: null, arucoOverheadLocalId: null, arucoMarkerSizeMm: 100 },
+  { pipBackend: "github", pipApiKey: "", pipOpenaiKey: "", pipClaudeModel: "claude-sonnet-4-6", githubAuth: null, pipVisionEnabled: true, arucoOverheadPhoneId: null, arucoOverheadLocalId: null, arucoMarkerSizeMm: 100 },
   (() => {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
     // Migration: pipGithubAuth → githubAuth (Identity + Pip share one OAuth
