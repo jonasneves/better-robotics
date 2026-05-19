@@ -2042,6 +2042,20 @@ dialog[open]::backdrop { opacity: 1; }
   opacity: 0.35;
   pointer-events: none;
 }
+
+/* Inline camera-frame thumbnail — rendered when view_robot_frame returns
+   so the perception is visible alongside the action that triggered it
+   (matches Anthropic computer-use UX). Capped at 220px tall so a single
+   frame doesn't push the rest of the turn off-screen. */
+.pip-tool-image {
+  display: block;
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: 6px;
+  margin: 6px 0;
+  border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
+  object-fit: contain;
+}
 /* Pip chat panel — pip-core defaults to 320px, below the 45-75-character
    reading sweet spot for 14px body. 420px puts a line at ~55ch and gives
    code blocks + tool pills room to breathe without dominating the
