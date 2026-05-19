@@ -195,6 +195,26 @@ const ALL_TOOLS = [
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
   },
   {
+    name: "start_robot_camera",
+    description: "Start the camera stream on a robot (synthetic click on the same Start button the user sees on the Camera card). Idempotent — returns success if already running. Required before view_robot_frame, get_robot_detections, or start_robot_watcher have a frame to act on.",
+    input_schema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    },
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "stop_robot_camera",
+    description: "Stop the camera stream on a robot. Idempotent — returns success if already stopped.",
+    input_schema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    },
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
     name: "speak",
     description: "Say a short message aloud via browser TTS — ambient voice for the human without making them check the chat. Use for findings ('I see a stop sign'), completion signals ('done — three loops'), or important asks. Don't narrate tool calls or restate chat replies. Keep utterances under ~15 words. Returns immediately; audio plays asynchronously and cancels any prior utterance still speaking.",
     input_schema: {
@@ -423,6 +443,37 @@ async function dispatch(name, input) {
       // when to look or ask for help — no executor-imposed observation
       // cadence between pulses.
       return await pulseMotors(input.id, input.l, input.r, input.duration_ms);
+    }
+    case "start_robot_camera": {
+      const e = state.devices.get(input.id);
+      if (!e) return { error: `no robot with id ${input.id}` };
+      const node = e.node;
+      if (!node) return { error: `robot ${input.id} has no rendered card` };
+      // Synthetic click on the same Camera "Start" button the user sees —
+      // same code path, same UI state transitions. Idempotent: if a Stop
+      // button is present, the stream is already running.
+      if (node.querySelector(`[data-action="camera-stop"]`)) {
+        return { ok: true, running: true, note: "camera already running" };
+      }
+      const btn = node.querySelector(`[data-action="camera-start"]`);
+      if (!btn) {
+        return { error: "no camera-start button found — robot may not have a camera capability, or camera firmware support isn't installed yet" };
+      }
+      btn.click();
+      return { ok: true, started: true };
+    }
+    case "stop_robot_camera": {
+      const e = state.devices.get(input.id);
+      if (!e) return { error: `no robot with id ${input.id}` };
+      const node = e.node;
+      if (!node) return { error: `robot ${input.id} has no rendered card` };
+      if (node.querySelector(`[data-action="camera-start"]`)) {
+        return { ok: true, running: false, note: "camera already stopped" };
+      }
+      const btn = node.querySelector(`[data-action="camera-stop"]`);
+      if (!btn) return { error: "no camera-stop button found" };
+      btn.click();
+      return { ok: true, stopped: true };
     }
     case "speak": {
       const text = String(input.text || "").trim();
