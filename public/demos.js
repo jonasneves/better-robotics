@@ -107,22 +107,59 @@ async function patrol(ctx) {
   await ctx.exec("speak", { text: "Patrol complete." });
 }
 
-// 5 — React. Theatrical: open camera → slow scan-spin so the user can
-//     SEE the robot is paying attention → arm the watcher. The
-//     fire-once watcher then halts and speaks when a person appears,
-//     even if the user closes the dashboard.
+// 5 — React. Active scan loop: spin a bit, check for a person, repeat
+//     until someone shows up OR the budget elapses. On detection, grab
+//     a frame and ask Claude for a personalized greeting that references
+//     ONE specific thing it can see (the wow moment — the LLM is
+//     reasoning about pixels in real time, no canned lines). Arms a
+//     watcher at the end either way so future visitors get caught.
+//
+//     Previous version used invalid watcher args ("halt_and_speak"
+//     isn't an action; ACTION_NAMES = ["halt", "speak", "notify"]) and
+//     ended immediately after arming — the reactive moment landed when
+//     the watcher fired minutes later, visually disconnected from the
+//     demo. This version makes the reactive moment BE the demo.
 async function react(ctx) {
   await ctx.exec("start_robot_camera", { id: ctx.id });
-  await ctx.exec("speak", { text: "Watching for visitors." });
-  // Full 360 scan so the viewer sees the robot looking around
-  await pulse(ctx, -SPEED, SPEED, MAX);
-  await pulse(ctx, -SPEED, SPEED, MAX);
-  await ctx.exec("start_robot_watcher", {
-    id: ctx.id,
-    classes: ["person"],
-    action: "halt_and_speak",
-    speak_text: "Hello!",
-  });
+  await ctx.exec("speak", { text: "Looking around." });
+
+  // Scan-and-check loop. 8 ticks × ~700ms spin = ~5.5s of motion + ~8
+  // detections = ~16s wall clock. Stops as soon as a person is found.
+  let found = null;
+  for (let i = 0; i < 8; i++) {
+    if (ctx.shouldAbort?.()) return;
+    const r = await ctx.exec("get_robot_detections", { id: ctx.id, queries: ["person"] });
+    const hits = r?.detections || (Array.isArray(r) ? r : []);
+    const hit = hits.find(d => (d?.score ?? 0) > 0.4);
+    if (hit) { found = hit; break; }
+    await pulse(ctx, -SPEED, SPEED, 700);  // small scan-spin
+  }
+
+  if (!found) {
+    await ctx.exec("speak", { text: "I don't see anyone. I'll keep watching." });
+    // Backstop: arm the watcher so a later visitor still gets caught.
+    await ctx.exec("start_robot_watcher", { id: ctx.id, classes: ["person"], action: "halt" });
+    return;
+  }
+
+  // Try the LLM-grade personalized greeting. Grab a fresh frame, send
+  // it to Claude with a tight prompt. Cost is ~$0.0015 on Sonnet —
+  // negligible for the wow it lands. Falls back to a canned greeting
+  // if vision is off, the backend isn't Claude, or the call fails.
+  let greeting = null;
+  const frameRes = await ctx.exec("view_robot_frame", { id: ctx.id }).catch(() => null);
+  const imageBlock = frameRes?._pipContent?.find(c => c.type === "image");
+  if (imageBlock && ctx.askAboutFrame) {
+    const dataUrl = `data:${imageBlock.source.media_type};base64,${imageBlock.source.data}`;
+    greeting = await ctx.askAboutFrame(
+      dataUrl,
+      "You are a friendly robot meeting someone. Reply with one short greeting (12 words max) that references ONE specific thing you can see about them (clothing color, what they're holding, posture, or the room behind them). Plain text only — no quotes, no preamble.",
+      { maxTokens: 60 }
+    );
+  }
+  await ctx.exec("speak", { text: greeting || "Hello there!" });
+  // Keep the watcher armed for future visitors after the demo ends.
+  await ctx.exec("start_robot_watcher", { id: ctx.id, classes: ["person"], action: "halt" });
 }
 
 // 6 — Follow. Closed-loop detection-driven approach. Longer drive

@@ -311,6 +311,41 @@ export async function ask(userText, opts = {}) {
   return _anthropicAsk(userText, opts);
 }
 
+// Single-shot Claude call that includes an image — for demos / hosts
+// that need a short LLM observation about a frame without going through
+// the full askWithTools tool-loop. Image is sent as a base64 content
+// block alongside the prompt. Returns the response text, or null on
+// any failure. Bridge backend only (the path that proxies through
+// 127.0.0.1:7337); falls through to null on github/openai backends
+// since they don't share the same vision content-block protocol.
+export async function askAboutFrame(imageDataUrl, prompt, { maxTokens = 100, system } = {}) {
+  if (settings.pipBackend !== "bridge" && settings.pipBackend !== "anthropic") return null;
+  const m = /^data:(image\/[\w.+-]+);base64,(.+)$/.exec(imageDataUrl || "");
+  if (!m) return null;
+  const body = withPromptCache({
+    model: currentClaudeModel(),
+    max_tokens: maxTokens,
+    system,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: m[1], data: m[2] } },
+        { type: "text", text: String(prompt || "Describe this image in one short sentence.") },
+      ],
+    }],
+    stream: false,
+  });
+  const res = await callAnthropic(body);
+  if (!res || res.error) { logBackendError("askAboutFrame", res); return null; }
+  if (res.status < 200 || res.status >= 300) { logBackendError("askAboutFrame", res); return null; }
+  try {
+    const json = JSON.parse(res.body);
+    return json?.content?.[0]?.text?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function _anthropicAsk(userText, { system, maxTokens = 200 } = {}) {
   const res = await callAnthropic(withPromptCache({
     model: currentClaudeModel(),

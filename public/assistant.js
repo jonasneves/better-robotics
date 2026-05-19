@@ -1,4 +1,4 @@
-import { ask, askWithTools, activeModelForBackend, CLAUDE_VARIANTS } from "./claude.js";
+import { ask, askWithTools, askAboutFrame, activeModelForBackend, CLAUDE_VARIANTS } from "./claude.js";
 import { getTools, executor, setAskInChatHandler, isVisionAvailable } from "./pip-tools.js";
 import { labelTool, summarizeTool } from "./format.js";
 import { settings, saveSettings } from "./settings.js";
@@ -6,7 +6,7 @@ import { state } from "./state.js";
 import { isSupported as voiceInputSupported, startDictation } from "./voice-input.js";
 import { tryMatchCommand, SAFETY_INTENTS } from "./voice-commands.js";
 import { tryMatchDemo, DEMO_NAMES } from "./demos.js";
-import { onWatcherFire } from "./watcher.js";
+import { onWatcherFire, releaseAllGates } from "./watcher.js";
 import { AUTH_URL } from "./endpoints.js";
 import { createPip, renderMd } from "https://cdn.jsdelivr.net/npm/@jonasneves/pip@2.9.5/pip-core.esm.js";
 
@@ -391,6 +391,11 @@ async function onSubmit(text, { turnEl }) {
       // reflex events (e.g. stopsign demo halts its loop when the
       // watcher catches "stop sign"). Returns an unsubscribe fn.
       onWatcherFire,
+      // Single-shot Claude observation about a frame (no tool loop).
+      // Powers demos like `react` that want a personalized greeting
+      // from what the robot actually saw. Null on non-Claude backends
+      // or any failure — caller falls back to a canned line.
+      askAboutFrame,
     };
     try { await demo.run(ctx); }
     catch (err) {
@@ -691,8 +696,12 @@ export function initAssistant() {
     // Model identifier surfaces in the input placeholder so the user
     // always knows which backend is live.
     modelLabel: activeModelForBackend(settings.pipBackend),
-    // Stop button click — flag the askWithTools loop to abort between iterations.
-    onAbort: () => { _abort = true; },
+    // Stop button click — flag the askWithTools loop to abort between
+    // iterations AND release any reflex motor-gate so a tool currently
+    // awaiting "stop sign clears" unblocks immediately. Without the gate
+    // release, Stop would wait up to 10s for the gate's timeout to fire
+    // before the loop noticed _abort.
+    onAbort: () => { _abort = true; releaseAllGates(); },
   });
   registerInitialSlashCommands();
   if (showIntro) { try { localStorage.setItem(seenKey, "1"); } catch {} }
@@ -721,32 +730,36 @@ export function initAssistant() {
   wireWatcherFireBridge();
 }
 
-// L2 reflex-fire bridge. On every watcher fire-event:
+// L2 reflex-fire bridge. On every watcher fire-event (enter or exit):
 //   - queue a synthetic observation for askWithTools to drain on the
 //     next iteration (so Pip sees it without having to poll state)
-//   - render a small inline notice in the active turn (subtle, dim) so
-//     the operator sees what got injected — fire-once-and-disable means
-//     this lands at most once per arm cycle.
+//   - render a small inline notice in the active turn so the operator
+//     sees what got injected
+// `kind` is "fire" (target entered frame) or "clear" (target left). Halt-
+// mode watchers emit both; speak/notify only emit "fire".
 function wireWatcherFireBridge() {
-  onWatcherFire((entry, det) => {
+  onWatcherFire((entry, det, kind = "fire") => {
     const ts = new Date(det?.ts || Date.now()).toISOString();
     const score = typeof det?.score === "number" ? det.score.toFixed(2) : "?";
     const action = entry?.watcher?.action || "?";
     // Terse fact-only observation — no "surface this / pause your plan"
-    // prescriptions (the firmware-bounded reflex already halted; planner
-    // narrates the fact, doesn't second-guess the safety floor).
-    const obsText = `[reflex-fire] saw "${det?.label}" (${score}) on ${entry.name} at ${ts}; action ${action} ran.`;
+    // prescriptions (the firmware-bounded reflex already gated motion;
+    // planner narrates the fact, doesn't second-guess the safety floor).
+    const obsText = kind === "clear"
+      ? `[reflex-clear] "${det?.label}" no longer visible on ${entry.name} at ${ts}; motion gate released, your queued motor calls will proceed.`
+      : `[reflex-fire] saw "${det?.label}" (${score}) on ${entry.name} at ${ts}; action ${action} ran${action === "halt" ? " and motion is now gated until the target leaves frame" : ""}.`;
     _pendingObservations.push(obsText);
     if (!_activeTurnEl) return;  // not mid-turn — planner sees it on the next user turn via convo replay
     const el = document.createElement("div");
-    el.className = "pip-reflex-notice";
+    el.className = `pip-reflex-notice${kind === "clear" ? " pip-reflex-notice--clear" : ""}`;
     el.innerHTML =
       `<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">` +
         `<circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/>` +
         `<circle cx="6" cy="6" r="1.8" fill="currentColor"/>` +
       `</svg> ` +
-      `Reflex: saw <strong>${escHtml(String(det?.label || ""))}</strong> ` +
-      `(${score}) — action <code>${escHtml(action)}</code> executed.`;
+      (kind === "clear"
+        ? `Reflex clear: <strong>${escHtml(String(det?.label || ""))}</strong> left frame — motion resumed.`
+        : `Reflex: saw <strong>${escHtml(String(det?.label || ""))}</strong> (${score}) — action <code>${escHtml(action)}</code> executed.`);
     _activeTurnEl.appendChild(el);
     scrollPanelToBottom();
   });
