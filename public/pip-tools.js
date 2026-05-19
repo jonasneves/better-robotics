@@ -31,7 +31,7 @@ const ALL_TOOLS = [
   },
   {
     name: "get_robot_state",
-    description: "Cached state for one robot: fwInfo, wifiStatus, telemetry, robotStatus, capability schema. No BLE write.",
+    description: "Cached state for one robot: fwInfo, wifiStatus, telemetry, robotStatus, capability schema. No BLE write. Returns telemetry_age_ms, since_last_motor_action_ms, motion_invalidated (true when telemetry predates last motion — re-read before trusting). telemetry.dist_cm = forward ultrasonic distance in cm; firmware silently clips pure-forward motion when dist_cm < ~15 (turns/reverse always pass).",
     input_schema: {
       type: "object",
       properties: { id: { type: "string" } },
@@ -164,11 +164,7 @@ const ALL_TOOLS = [
   },
   {
     name: "start_robot_watcher",
-    description: `Start a closed-vocab reflex watcher on the robot's camera (MediaPipe COCO, ~10–30ms/frame). Fires the action on first detection of any class in \`classes\`, then disables itself (fire-once). Use for see→act reflex shapes — e.g. watch for 'stop sign' and 'halt'. Idempotent: starting a new watcher replaces any prior.
-
-Valid classes (exact strings, COCO-80): ${COCO_CLASSES.join(", ")}. Strings outside this set will never fire — if the target isn't here (e.g. "Roomba"), don't arm a watcher; use view_robot_frame after each move instead.
-
-When a watcher is armed for the user's target, trust it: it polls every camera frame at ~10ms. You don't need to also call view_robot_frame between moves — that just spends image tokens and adds latency. Move freely; the L2 [reflex-fire] observation will appear in your next iteration's tool_result when the watcher catches the target.`,
+    description: "Start a closed-vocab MediaPipe COCO reflex on the robot's camera (~10ms/frame). Fires the action on first detection of any string in `classes`, then disarms. Once armed, you do NOT need to also poll view_robot_frame for the same target — a [reflex-fire] block will appear in your next tool_result when it catches. Idempotent: a second call replaces any prior. If unsure which class names are valid, call list_coco_classes first.",
     input_schema: {
       type: "object",
       properties: {
@@ -187,6 +183,12 @@ When a watcher is armed for the user's target, trust it: it polls every camera f
       required: ["id", "classes"],
     },
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true, openWorldHint: false },
+  },
+  {
+    name: "list_coco_classes",
+    description: "Return the 80 valid class strings the closed-vocab reflex watcher accepts. Call only when uncertain whether your target name matches the COCO vocabulary.",
+    input_schema: { type: "object", properties: {}, required: [] },
+    annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "stop_robot_watcher",
@@ -299,27 +301,11 @@ async function dispatch(name, input) {
         e.telemetryUpdatedAt && e.lastMotorActionAt
         && e.lastMotorActionAt > e.telemetryUpdatedAt
       );
-      // Watcher status — surface fire-once detection events here so Pip
-      // sees "the reflex caught something" on its next state poll without
-      // having to be told. This is the level-1 fix for "harness pushes
-      // state to planner, planner doesn't have to ask" (Butter-Bench /
-      // ExploreVLM convergent pattern). Fields surfaced explicitly with
-      // ages so the planner has enough context to decide whether to react.
-      const watcher = e.watcher
-        ? {
-            enabled: !!e.watcher.enabled,
-            classes: e.watcher.classes ?? null,
-            action: e.watcher.action ?? null,
-            last_detection: e.watcher.lastDetection
-              ? {
-                  label: e.watcher.lastDetection.label,
-                  score: e.watcher.lastDetection.score,
-                  ts_ms: e.watcher.lastDetection.ts,
-                  age_ms: now - e.watcher.lastDetection.ts,
-                }
-              : null,
-          }
-        : null;
+      // Watcher fire-events flow exclusively through the L2 injection
+      // path (claude.js getPendingObservations → [reflex-fire] text block
+      // alongside next tool_result). Two channels for the same signal
+      // would just confuse the planner about authoritativeness; pick the
+      // direct one.
       return {
         id: e.id, name: e.name, type: e.fwType ?? null,
         status: e.status,
@@ -329,7 +315,6 @@ async function dispatch(name, input) {
         telemetry_age_ms: telAge,
         since_last_motor_action_ms: motorAge,
         motion_invalidated,
-        watcher,
         robotStatus: e.robotStatus ?? null,
         capSchema: e.capSchema ?? null,
         now_ms: now,
@@ -461,6 +446,9 @@ async function dispatch(name, input) {
       } catch (err) {
         return { error: `detector failed: ${String(err.message || err)}` };
       }
+    }
+    case "list_coco_classes": {
+      return { classes: COCO_CLASSES };
     }
     case "start_robot_watcher": {
       const e = state.devices.get(input.id);

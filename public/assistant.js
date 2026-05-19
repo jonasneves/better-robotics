@@ -4,6 +4,7 @@ import { labelTool, summarizeTool } from "./format.js";
 import { settings, saveSettings } from "./settings.js";
 import { state } from "./state.js";
 import { isSupported as voiceInputSupported, startDictation } from "./voice-input.js";
+import { tryMatchCommand } from "./voice-commands.js";
 import { onWatcherFire } from "./watcher.js";
 import { AUTH_URL } from "./endpoints.js";
 import { createPip, renderMd } from "https://cdn.jsdelivr.net/npm/@jonasneves/pip@2.9.5/pip-core.esm.js";
@@ -16,33 +17,21 @@ const HISTORY_LIMIT = 12;
 // system prompt carries identity + discovery posture; the current
 // connected-robot snapshot is appended per-turn by buildSystem() so Pip
 // can skip list_robots when ids are unambiguous.
+// Trimmed via lens audit (signal-to-noise + attention-routing): every
+// reactive single-incident patch removed. Tool descriptions carry
+// per-tool guidance; the system prompt carries only identity + the rules
+// the planner can't infer from schemas. Hardware constraints (dist_cm,
+// firmware clip) live in get_robot_state / move_motor descriptions where
+// the planner reads them at the moment of relevance.
 const PIP_SYSTEM = [
   "You are an assistant in a browser robotics dashboard for ESP32 and Pi robots.",
-  "Tools let you read robot state, see frames, detect objects, pulse motors, ask the human.",
-  "Use tools to discover state — don't guess.",
-  "If a tool returns { error: ... }, surface it; don't fabricate around it.",
-  // Anti-narrate-without-acting — the dominant failure mode observed in
-  // patrol runs (Claude Code's own discipline, mirrored from the
-  // Piebald-AI/claude-code-system-prompts repo).
+  // Anti-narrate-without-acting — dominant failure mode in patrol runs;
+  // Sonnet skips actual tool calls without it.
   "If you say you will call a tool, call it in the SAME turn. Don't promise tool calls for future turns. Don't describe actions you didn't take.",
-  // Perception-first for visual tasks — ExploreVLM / Butter-Bench pattern,
-  // but specialized: trust the closed-vocab reflex when it's armed.
-  "For 'find X' / 'see X' / 'explore' tasks: take ONE view_robot_frame to ground the plan, then (a) if X is a COCO class, arm start_robot_watcher for it and STOP calling view_robot_frame between moves — the watcher polls every frame at ~10ms and the L2 [reflex-fire] observation lands in your next tool_result. Calling view_robot_frame between moves while the watcher is armed wastes image tokens and adds latency. (b) If X is NOT a COCO class (e.g. 'Roomba'), don't arm a watcher; call view_robot_frame after each meaningful move instead.",
-  "The watcher doesn't reset itself between turns. Once you call start_robot_watcher and get back ok:true, it stays armed until it fires or you call stop_robot_watcher. Don't re-arm it 'just in case' — that's a no-op if it's already running, and a hallucinated reset if you're guessing.",
-  // Sensor freshness — research-backed, ties staleness to motion events
-  // not wall clock (arxiv 2510.23853 "Temporally Blind").
-  "When get_robot_state returns motion_invalidated: true, telemetry was captured BEFORE the last motor action. Do NOT trust dist_cm in that state — issue another get_robot_state after letting the robot settle, or take a frame.",
-  // Watcher fire-events — surfaced via get_robot_state.watcher.last_detection.
-  // The reflex runs on its own thread; you find out it fired by polling state.
-  "get_robot_state returns a `watcher` field. If `watcher.last_detection` is recent (age_ms small) and `watcher.enabled` flipped to false, the reflex caught the configured class and ran its action (typically halt). Surface this to the user — say what was seen, when, and stop your current plan unless they confirm you should continue. The watcher fires once then disarms; re-arm with start_robot_watcher if continued protection is needed.",
-  "telemetry.dist_cm (when present) is the forward-facing ultrasonic distance in centimeters.",
-  "Firmware silently clips pure-forward motion when dist_cm < ~15 — turns and reverse always pass, so rotate away first if blocked.",
-  "",
-  // Hard-enforced format constraints. Pip renders into a small chat
-  // bubble with a deliberately tiny markdown subset — anything outside
-  // it ships as raw syntax to the user. Plain-text-summary keeps Claude
-  // honest about length (see hatch agent-loop.js for prior art).
-  "REPLY FORMAT: reply with a concise plain-text summary. One short sentence is the default; never more than three lines unless the user explicitly asks for detail. No preamble, no recap, no apology, no narrating what you're about to do.",
+  // Sensor freshness (arxiv 2510.23853 "Temporally Blind").
+  "When get_robot_state returns motion_invalidated: true, telemetry was captured BEFORE the last motor action — re-read state or take a frame before trusting dist_cm.",
+  // Reply shape constraints (the chat bubble's markdown subset).
+  "REPLY FORMAT: concise plain-text summary. One short sentence is the default; never more than three lines unless the user asks for detail. No preamble, no recap, no narrating what you're about to do.",
   "Supported markdown: **bold**, *italic*, `code`, - bullets, 1. numbered lists, ```code blocks```. Do NOT use headers (#, ##, ###), horizontal rules (---), tables, or decorative section emojis — those render as raw text.",
 ].join("\n");
 
@@ -280,6 +269,34 @@ async function onSubmit(text, { turnEl }) {
     turnEl.appendChild(el);
     return el;
   };
+
+  // Direct-command path: if the input matches a recognized command
+  // verb (drive, turn, stop…), dispatch the corresponding tool call
+  // immediately and skip the LLM round-trip. Mycroft / OpenVoiceOS
+  // pattern: regex intent gate first, LLM fallback for everything
+  // else. Saves 2-3s for the things that should be instant.
+  const cmd = tryMatchCommand(text);
+  if (cmd) {
+    const robotId = [...state.devices.values()]
+      .find(e => e.status === "connected")?.id;
+    if (!robotId) {
+      const el = appendReplyEl();
+      el.textContent = "No robot connected — pair one first.";
+      scrollPanelToBottom();
+      return "";
+    }
+    const input = { id: robotId, ...cmd.partialInput };
+    const pill = appendStepPill(turnEl, cmd.tool);
+    const startedAt = performance.now();
+    try {
+      const result = await executor(cmd.tool, input);
+      const isErr = result && (result.error || result.ok === false);
+      finishStepPill(pill, cmd.tool, input, result, isErr ? (result.error || "failed") : null, performance.now() - startedAt);
+    } catch (err) {
+      finishStepPill(pill, cmd.tool, input, null, err, performance.now() - startedAt);
+    }
+    return "";
+  }
 
   const messages = _pip.history.slice(-HISTORY_LIMIT)
     .map(m => ({ role: m.role, content: m.content }));
@@ -587,12 +604,12 @@ function wireWatcherFireBridge() {
     const ts = new Date(det?.ts || Date.now()).toISOString();
     const score = typeof det?.score === "number" ? det.score.toFixed(2) : "?";
     const action = entry?.watcher?.action || "?";
-    const obsText =
-      `[reflex-fire] Robot "${entry.name}" (id="${entry.id}") watcher caught ` +
-      `label="${det?.label}" score=${score} at ${ts}. Action "${action}" executed. ` +
-      `Watcher is now disarmed.`;
+    // Terse fact-only observation — no "surface this / pause your plan"
+    // prescriptions (the firmware-bounded reflex already halted; planner
+    // narrates the fact, doesn't second-guess the safety floor).
+    const obsText = `[reflex-fire] saw "${det?.label}" (${score}) on ${entry.name} at ${ts}; action ${action} ran.`;
     _pendingObservations.push(obsText);
-    if (!_activeTurnEl) return;  // not mid-turn; user will see via state poll
+    if (!_activeTurnEl) return;  // not mid-turn — planner sees it on the next user turn via convo replay
     const el = document.createElement("div");
     el.className = "pip-reflex-notice";
     el.innerHTML =
