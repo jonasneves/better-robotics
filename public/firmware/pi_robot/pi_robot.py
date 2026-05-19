@@ -1033,12 +1033,18 @@ def _open_camera_track():
 
 
 class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type: ignore
-    """Capture at the cam's full-FOV native mode, downscale to TRANSMIT_SIZE
-    before handing to aiortc. UVC webcams typically expose only one
-    non-cropped mode (their max-resolution sensor mode); all lower-res
-    UVC modes are center crops of it — picking 640×480 directly looks
-    "zoomed in." 1280×960 covers every cheap UVC cam we've seen; falls
-    back to whatever picamera2 picks if the cam doesn't list it.
+    """Capture at the cam's full-FOV native mode for sensor coverage, deliver
+    TRANSMIT_SIZE via picamera2's `lores` stream so the VC4/VC7L ISP does
+    the downscale in HW. UVC webcams typically expose only one non-cropped
+    mode (their max-resolution sensor mode); all lower-res UVC modes are
+    center crops of it — picking 640×480 directly looks "zoomed in."
+    1280×960 covers every cheap UVC cam we've seen.
+
+    Pairing main at native with lores at TRANSMIT_SIZE keeps libswscale off
+    the asyncio thread, and yuv420 from lores feeds VP8 directly with no
+    RGB→YUV conversion in the encoder — the CPU only ever touches the
+    small buffer per frame. Earlier shape captured RGB888 at native and
+    `.reformat()`-d on recv(); that pinned the encoder thread on Pi 3/4.
 
     Capture runs on a background thread into a single-slot buffer; recv()
     drains the latest frame and discards anything older. Bounds glass-to
@@ -1058,6 +1064,7 @@ class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type
         self.camera = Picamera2()
         cfg = self.camera.create_video_configuration(
             main={"size": self.CAPTURE_SIZE, "format": "RGB888"},
+            lores={"size": self.TRANSMIT_SIZE, "format": "YUV420"},
         )
         self.camera.configure(cfg)
         self.camera.start()
@@ -1075,7 +1082,7 @@ class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type
     def _capture_loop(self) -> None:
         while not self._stop_flag.is_set():
             try:
-                arr = self.camera.capture_array("main")
+                arr = self.camera.capture_array("lores")
             except Exception:
                 if self._stop_flag.wait(0.05):
                     break
@@ -1096,16 +1103,12 @@ class _PiCameraTrack(MediaStreamTrack if _camera_available else object):  # type
             self._frame_event.clear()
             if arr is not None:
                 break
-        # libcamera's "RGB888" config name describes the FORMAT, not the
-        # memory order — the uvcvideo pipeline (USB cams) hands back bytes
-        # in true R,G,B order. (Historically the CSI/vc4 pipeline delivered
-        # BGR under the same config name, which we worked around by lying
-        # to PyAV; that workaround now breaks USB cams — symptom is purple
-        # skin / blue oranges. We optimize for USB since that's what
-        # ships on most boards we encounter.)
-        frame = av.VideoFrame.from_ndarray(arr, format="rgb24")
-        frame = frame.reformat(width=self.TRANSMIT_SIZE[0],
-                               height=self.TRANSMIT_SIZE[1])
+        # lores delivers a planar YUV420 ndarray of shape
+        # (height * 3 / 2, width): Y plane first, then U, then V at half
+        # size. PyAV's "yuv420p" format takes the same layout. VP8 consumes
+        # YUV420 natively, so the encoder skips the RGB→YUV step it would
+        # otherwise do on every frame.
+        frame = av.VideoFrame.from_ndarray(arr, format="yuv420p")
         frame.pts = int(time.monotonic() * 90000)
         frame.time_base = self._time_base
         return frame
