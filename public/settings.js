@@ -3,10 +3,12 @@ const SETTINGS_KEY = "better-robotics:settings";
 
 export const settings = Object.assign(
   // pipBackend: "github" (GitHub Models, default — OAuth via auth.neevs.io)
-  //   | "bridge" (AI Bridge Chrome extension, Keychain-backed)
+  //   | "bridge" (AI Bridge localhost proxy at 127.0.0.1:7337, Keychain-backed)
   //   | "anthropic" (direct, user's key) | "openai" (direct, user's key).
   // pipApiKey:    Anthropic key — only when pipBackend === "anthropic".
   // pipOpenaiKey: OpenAI key    — only when pipBackend === "openai".
+  // pipClaudeModel: which Claude variant to use on the bridge/anthropic
+  //   backends — "claude-opus-4-7" | "claude-sonnet-4-6" | "claude-haiku-4-5-20251001".
   // githubAuth:   { username, token } from GitHub OAuth. Backs BOTH
   //   identity (avatar / robot labels) AND the GitHub Models Pip backend.
   //   One grant, two purposes; sign-out clears both. 401 → re-connect prompt.
@@ -21,7 +23,7 @@ export const settings = Object.assign(
   //   localizer. Mutually exclusive — only one is non-null at a time.
   // arucoMarkerSizeMm: printed marker side length, used by POS.Posit for
   //   metric pose. Defaults to the printable sheets' size (100 mm).
-  { pipBackend: "github", pipApiKey: "", pipOpenaiKey: "", githubAuth: null, pipVisionEnabled: false, arucoOverheadPhoneId: null, arucoOverheadLocalId: null, arucoMarkerSizeMm: 100 },
+  { pipBackend: "github", pipApiKey: "", pipOpenaiKey: "", pipClaudeModel: "claude-sonnet-4-6", githubAuth: null, pipVisionEnabled: false, arucoOverheadPhoneId: null, arucoOverheadLocalId: null, arucoMarkerSizeMm: 100 },
   (() => {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
     // Migration: pipGithubAuth → githubAuth (Identity + Pip share one OAuth

@@ -1,4 +1,4 @@
-import { ask, askWithTools, activeModelForBackend } from "./claude.js";
+import { ask, askWithTools, activeModelForBackend, CLAUDE_VARIANTS } from "./claude.js";
 import { getTools, executor, setAskInChatHandler } from "./pip-tools.js";
 import { labelTool, summarizeTool } from "./format.js";
 import { settings, saveSettings } from "./settings.js";
@@ -238,22 +238,39 @@ function registerInitialSlashCommands() {
 
   // /model handles both *switching* the backend and *setting it up* if the
   // chosen one needs auth or a key. One slash, one mental model: pick a
-  // backend, the rest happens inline. Key entry repurposes Pip's main
-  // input via _pip.collectSecret — same input the user's already looking at.
+  // backend or a Claude variant, the rest happens inline. Key entry
+  // repurposes Pip's main input via _pip.collectSecret — same input the
+  // user's already looking at.
+  const CLAUDE_ALIASES = CLAUDE_VARIANTS.map(v => v.alias);
+  const MODEL_CHOICES = [...PIP_BACKENDS, ...CLAUDE_ALIASES];
   _pip.registerSlash({
     name: "model",
-    description: "switch Pip's backend (github/bridge/anthropic/openai)",
-    complete: (partial) => PIP_BACKENDS.filter(b => b.startsWith(partial.toLowerCase())),
+    description: "switch Pip's backend (github/bridge/anthropic/openai) or Claude variant (opus/sonnet/haiku)",
+    complete: (partial) => MODEL_CHOICES.filter(b => b.startsWith(partial.toLowerCase())),
     handler: async (argsString) => {
       const arg = argsString.trim().toLowerCase();
       if (!arg) {
         const others = PIP_BACKENDS.filter(b => b !== settings.pipBackend);
         return {
-          reply: `Current backend: \`${settings.pipBackend}\`. Switch with \`/model <name>\` — try ${others.map(b => `\`${b}\``).join(", ")}.`,
+          reply: `Current backend: \`${settings.pipBackend}\` · model: \`${activeModelForBackend(settings.pipBackend)}\`. Switch backend with \`/model <name>\` (${others.map(b => `\`${b}\``).join(", ")}) or Claude variant with \`/model opus|sonnet|haiku\`.`,
         };
       }
+
+      // Claude variant switch — sets pipClaudeModel; takes effect on
+      // bridge + anthropic backends. On other backends we still save it so
+      // it'll apply once they switch to a Claude-capable backend.
+      const variant = CLAUDE_VARIANTS.find(v => v.alias === arg);
+      if (variant) {
+        settings.pipClaudeModel = variant.id;
+        try { saveSettings(); } catch {}
+        _pip.setModelLabel?.(activeModelForBackend(settings.pipBackend));
+        const isClaudeBackend = settings.pipBackend === "bridge" || settings.pipBackend === "anthropic";
+        const tail = isClaudeBackend ? "" : ` — takes effect after \`/model bridge\` or \`/model anthropic\`.`;
+        return { reply: `Claude variant set to \`${variant.id}\`${tail}` };
+      }
+
       if (!PIP_BACKENDS.includes(arg)) {
-        return { reply: `Unknown backend \`${arg}\`. One of: ${PIP_BACKENDS.map(b => `\`${b}\``).join(", ")}` };
+        return { reply: `Unknown choice \`${arg}\`. Backends: ${PIP_BACKENDS.map(b => `\`${b}\``).join(", ")}. Claude variants: ${CLAUDE_ALIASES.map(b => `\`${b}\``).join(", ")}.` };
       }
 
       // Contextual setup: backends that need auth/keys get prompted inline

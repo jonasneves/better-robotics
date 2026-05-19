@@ -1,64 +1,67 @@
 // Pip backend dispatch — picks how to reach the LLM based on user setting:
 //   github    — GitHub Models inference (default; OAuth via neevs.io,
 //               OpenAI-compatible request shape, no API key to manage).
-//   bridge    — AI Bridge Chrome extension (Keychain-backed creds, token
-//               never visible to the page).
+//   bridge    — AI Bridge localhost proxy at 127.0.0.1:7337 (Keychain-backed
+//               creds, token never visible to the page). Requires the proxy
+//               launchd agent (`make install-proxy` in ai-bridge).
 //   anthropic — direct fetch() to api.anthropic.com using the user's API key
 //               from settings. Browser-stored, "user's responsibility" model.
 //   openai    — direct fetch() to api.openai.com (chat/completions, function-
 //               calling). Different protocol from Anthropic; translated below.
-//
-// Wire protocol of the bridge (from ai-bridge/bridge-content.js):
-//   page → document.dispatchEvent(new CustomEvent('ai-bridge-request', { detail: {...} }))
-//   page ← document.addEventListener('ai-bridge-response', e => e.detail)
 import { settings } from "./settings.js";
 
-const MODEL = "claude-sonnet-4-6";
+const BRIDGE_PROXY_URL = "http://127.0.0.1:7337";
+
+// Claude variants available on the bridge + anthropic backends. Short aliases
+// are what the user types into `/model`; the id is what goes on the wire.
+export const CLAUDE_VARIANTS = [
+  { alias: "opus",   id: "claude-opus-4-7" },
+  { alias: "sonnet", id: "claude-sonnet-4-6" },
+  { alias: "haiku",  id: "claude-haiku-4-5-20251001" },
+];
+const CLAUDE_DEFAULT = "claude-sonnet-4-6";
+const CLAUDE_IDS = new Set(CLAUDE_VARIANTS.map(v => v.id));
+
+function currentClaudeModel() {
+  const id = settings.pipClaudeModel;
+  return CLAUDE_IDS.has(id) ? id : CLAUDE_DEFAULT;
+}
 
 // User-facing model identifier per backend. Single source of truth for
 // what name shows up in the Pip placeholder ("Ask Pip… · gpt-4o-mini")
 // and in any future model picker. Keeps display logic out of assistant.js
 // — model knowledge lives next to the actual API calls.
 export function activeModelForBackend(backend) {
-  if (backend === "bridge" || backend === "anthropic") return MODEL;
+  if (backend === "bridge" || backend === "anthropic") return currentClaudeModel();
   if (backend === "openai") return "gpt-4o-mini";
   if (backend === "github") return "gpt-4o-mini";  // strip vendor prefix for display
   return backend;
 }
-// Per-Claude-call ceiling. Tool-using conversations make several
-// bridgeRequests in series; 20s covers typical Anthropic response time
-// with headroom for slow networks and first-request cold-start.
+// Per-Claude-call ceiling. Tool-using conversations make several requests in
+// series; 20s covers typical Anthropic response time with headroom for slow
+// networks and first-request cold-start.
 const TIMEOUT_MS = 20000;
-// Shorter ceiling for the auto-retry — if the first attempt hung for the full
-// 20s we're fairly sure the bridge is wedged, not just slow; a quick retry
-// either reaches a recovered bridge or confirms it's gone.
-const RETRY_TIMEOUT_MS = 10000;
 
-function bridgeRequestOnce(detail, timeoutMs) {
-  return new Promise((resolve) => {
-    const id = crypto.randomUUID();
-    const cleanup = () => {
-      document.removeEventListener("ai-bridge-response", onResponse);
-      clearTimeout(timer);
-    };
-    const onResponse = (e) => {
-      if (e.detail?._id !== id) return;
-      cleanup();
-      resolve(e.detail);
-    };
-    document.addEventListener("ai-bridge-response", onResponse);
-    const timer = setTimeout(() => { cleanup(); resolve(null); }, timeoutMs);
-    document.dispatchEvent(new CustomEvent("ai-bridge-request", { detail: { _id: id, ...detail } }));
-  });
-}
-
-// One silent retry on null covers the common transient case: bridge extension
-// reloaded, network blip to proxy.neevs.io, content script momentarily between
-// tabs. If both attempts return null the bridge is really gone — then we log.
-async function bridgeRequest(detail) {
-  const first = await bridgeRequestOnce(detail, TIMEOUT_MS);
-  if (first !== null) return first;
-  return await bridgeRequestOnce(detail, RETRY_TIMEOUT_MS);
+// Talks to the AI Bridge localhost proxy. The proxy injects the OAuth token
+// and Claude-Max billing header; we just send the bare messages body. Returns
+// the same {status, body} | null shape the rest of this file already consumes.
+async function bridgeRequest({ path, method, body }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const resp = await fetch(BRIDGE_PROXY_URL + path, {
+      method: method || "POST",
+      headers: { "content-type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    return { status: resp.status, body: await resp.text() };
+  } catch (err) {
+    if (err.name === "AbortError") return null;
+    return { status: 0, error: err.message || String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Direct Anthropic API call. Returns the same {status, body} shape bridgeRequest
@@ -90,7 +93,7 @@ async function anthropicDirectRequest(body) {
 
 async function callAnthropic(body) {
   if (settings.pipBackend === "anthropic") return anthropicDirectRequest(body);
-  return bridgeRequest({ type: "proxy", provider: "claude", path: "/v1/messages", method: "POST", body });
+  return bridgeRequest({ path: "/v1/messages", method: "POST", body });
 }
 
 // OpenAI-compatible chat-completions request. Used by two backends:
@@ -177,7 +180,7 @@ export async function ask(userText, opts = {}) {
 
 async function _anthropicAsk(userText, { system, maxTokens = 200 } = {}) {
   const res = await callAnthropic({
-    model: MODEL,
+    model: currentClaudeModel(),
     max_tokens: maxTokens,
     system,
     messages: [{ role: "user", content: userText }],
@@ -246,7 +249,7 @@ async function _anthropicAskWithTools(messages, { system, tools, executor, maxIt
   while (i < budget) {
     if (shouldAbort?.()) return "(stopped)";
     const res = await callAnthropic({
-      model: MODEL,
+      model: currentClaudeModel(),
       max_tokens: maxTokens,
       system,
       messages: convo,
