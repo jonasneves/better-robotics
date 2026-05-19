@@ -206,7 +206,10 @@ async function selfie(ctx) {
 //      fire event via ctx.onWatcherFire so it can break out of its
 //      sweep and narrate the catch.
 async function stopsignPatrol(ctx) {
-  await ctx.exec("speak", { text: "Patrol mode. Looking for a stop sign." });
+  // Intentionally do NOT announce what we're watching for — the demo's
+  // wow moment is the unexpected halt when the watcher catches the sign.
+  // Spoiling it up front ("looking for a stop sign") kills the reveal.
+  await ctx.exec("speak", { text: "Patrol mode." });
   await ctx.exec("start_robot_camera", { id: ctx.id });
   await ctx.exec("start_robot_watcher", {
     id: ctx.id,

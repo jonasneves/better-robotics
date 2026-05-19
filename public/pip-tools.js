@@ -185,15 +185,16 @@ const ALL_TOOLS = [
   },
   {
     name: "approach_until",
-    description: "Closed-loop forward approach run inside the executor at ~3 Hz. Drives in long pulses, optionally turning to keep a COCO target centered between pulses, stops when stop_dist_cm or max_seconds is hit. Use INSTEAD of repeated move_motor + view_robot_frame cycles when approaching something — saves N LLM round-trips for N pulses. Returns { ok, reason, steps, final_dist_cm, trajectory }. Trajectory entries record action ('drive' | 'turn-left' | 'turn-right') for auditing.",
+    description: "Closed-loop forward approach run inside the executor at ~3 Hz. Drives in pulses, optionally centering on a COCO target between them. Halts on the FIRST of three stop predicates: (a) ultrasonic dist_cm < stop_dist_cm — useful for walls / large flat targets; (b) target bbox area >= stop_bbox_area — the reliable signal for small / short / off-axis targets (bottles, cups) that the ultrasonic cone misses; (c) target lost 3 consecutive frames after being seen — prevents blindly driving past an overshot target. Returns { ok, reason, steps, final_dist_cm, trajectory }. Use INSTEAD of repeated move_motor + view_robot_frame cycles when approaching something.",
     input_schema: {
       type: "object",
       properties: {
-        id:           { type: "string" },
-        stop_dist_cm: { type: "number", minimum: 10, maximum: 200, description: "Stop when ultrasonic dist_cm drops below this. Default 20." },
-        target:       { type: "string", description: "Optional COCO class to center on ('person', 'cup', 'stop sign', etc.). Omit for pure straight-line approach using dist_cm only." },
-        max_seconds:  { type: "number", minimum: 1, maximum: 30, description: "Safety cap on total approach time. Default 15." },
-        speed:        { type: "number", minimum: 5, maximum: 40, description: "Drive speed magnitude 5-40 (default 40)." },
+        id:             { type: "string" },
+        stop_dist_cm:   { type: "number", minimum: 10, maximum: 200, description: "Stop when ultrasonic dist_cm drops below this. Default 20. Often unreliable for short / small targets like bottles or cups; pair with target+stop_bbox_area for those." },
+        target:         { type: "string", description: "Optional COCO class to center on ('person', 'cup', 'stop sign', etc.). Omit for pure straight-line approach using dist_cm only." },
+        stop_bbox_area: { type: "number", minimum: 0.05, maximum: 0.9, description: "When `target` is set, also stop when its bbox covers this fraction of the frame. Default 0.25 (~half-frame width = close enough by sight). Smaller (~0.1) for distant approach; larger (~0.4) to get very close." },
+        max_seconds:    { type: "number", minimum: 1, maximum: 30, description: "Safety cap on total approach time. Default 15." },
+        speed:          { type: "number", minimum: 5, maximum: 40, description: "Drive speed magnitude 5-40 (default 40)." },
       },
       required: ["id"],
     },
@@ -536,13 +537,22 @@ async function dispatch(name, input) {
       const maxSeconds = Math.max(1, Math.min(30, Number(input.max_seconds) || 15));
       const speed = Math.max(5, Math.min(40, Number(input.speed) || 40));
       const target = input.target ? String(input.target).toLowerCase() : null;
+      const stopBboxArea = Math.max(0.05, Math.min(0.9, Number(input.stop_bbox_area) || 0.25));
       const startedAt = Date.now();
       const trajectory = [];
       let reason = null;
-      // Drive-pulse duration tuned so each cycle covers ~30-40cm at
-      // speed 40 — long enough to be efficient, short enough that
-      // course-correction or stop-checks aren't badly delayed.
-      const drivePulseMs = 1200;
+      let lostCount = 0;
+      let everSeen = false;
+      // Three consecutive misses = target genuinely gone (one miss is
+      // common during a turn; two could be a frame race). DJI ActiveTrack
+      // / TurtleBot Nav2 use the same N-strike pattern.
+      const MAX_LOST = 3;
+      // Long pulse far away, short pulse when target is already moderately
+      // big in frame — keeps us from overshooting the last 20cm when the
+      // ultrasonic isn't a reliable stop (small / short / off-axis targets
+      // like a bottle that the cone misses while the wall behind reads).
+      const drivePulseMsFar  = 1200;
+      const drivePulseMsNear = 400;
 
       while ((Date.now() - startedAt) / 1000 < maxSeconds) {
         const distCm = e.telemetry?.dist_cm;
@@ -551,8 +561,10 @@ async function dispatch(name, input) {
           break;
         }
 
-        // Optional center-on-target step. Only spend a turn if the
-        // target is well off-center (dead-band 0.4..0.6).
+        let bboxArea = 0;
+        let driveMs = drivePulseMsFar;
+
+        // Target-aware path: detect, center, check bbox-area, decide pulse.
         if (target) {
           const sources = listCameraSources(e);
           const primary = sources.find(s => s.label === "primary");
@@ -562,6 +574,19 @@ async function dispatch(name, input) {
             catch { /* swallow per-iteration; loop guard handles total */ }
             const hit = dets?.[0];
             if (hit) {
+              lostCount = 0;
+              everSeen = true;
+              bboxArea = (hit.bbox?.w ?? 0) * (hit.bbox?.h ?? 0);
+              // Stop predicate #2: target fills enough of the frame. This
+              // is the reliable "close enough" signal for small objects
+              // the ultrasonic cone misses.
+              if (bboxArea >= stopBboxArea) {
+                reason = `bbox_area=${bboxArea.toFixed(2)} >= stop_bbox_area=${stopBboxArea} (close enough by sight)`;
+                break;
+              }
+              // Adaptive pulse: shorter when target is already biggish.
+              if (bboxArea > 0.10) driveMs = drivePulseMsNear;
+
               const cx = hit.bbox?.cx ?? 0.5;
               if (cx < 0.4 || cx > 0.6) {
                 const turnMs = 200;
@@ -569,22 +594,40 @@ async function dispatch(name, input) {
                 const r = cx < 0.4 ? speed : -speed;
                 await pulseMotors(input.id, l, r, turnMs);
                 e.lastMotorActionAt = Date.now();
-                trajectory.push({ action: cx < 0.4 ? "turn-left" : "turn-right", cx: +cx.toFixed(2), ms: turnMs });
+                trajectory.push({ action: cx < 0.4 ? "turn-left" : "turn-right", cx: +cx.toFixed(2), area: +bboxArea.toFixed(2), ms: turnMs });
                 await new Promise(res => setTimeout(res, turnMs + 30));
                 continue;
               }
+            } else {
+              // Stop predicate #3: target was seen before but is now lost
+              // for N consecutive iterations — almost certainly out-of-
+              // frame because we got too close or overshot. Halt before
+              // we keep blindly driving past.
+              lostCount++;
+              if (everSeen && lostCount >= MAX_LOST) {
+                reason = `target '${target}' lost (${MAX_LOST} consecutive misses, was seen before — likely overshot or below camera)`;
+                break;
+              }
+              // Small scan-spin to try re-acquiring; don't drive forward
+              // blindly when we just lost the thing we're chasing.
+              const turnMs = 200;
+              await pulseMotors(input.id, -speed, speed, turnMs);
+              e.lastMotorActionAt = Date.now();
+              trajectory.push({ action: "scan-spin", lost_streak: lostCount, ms: turnMs });
+              await new Promise(res => setTimeout(res, turnMs + 30));
+              continue;
             }
           }
         }
 
         // Forward drive pulse (firmware clips at dist_cm<15 anyway).
-        const r = await pulseMotors(input.id, speed, speed, drivePulseMs);
+        const r = await pulseMotors(input.id, speed, speed, driveMs);
         e.lastMotorActionAt = Date.now();
-        trajectory.push({ action: "drive", ms: drivePulseMs, ok: !!r?.ok });
+        trajectory.push({ action: "drive", ms: driveMs, area: +bboxArea.toFixed(2), ok: !!r?.ok });
         if (!r?.ok) { reason = `move_motor failed: ${r?.error || "unknown"}`; break; }
         // Wait for pulse + a small extra so telemetry has a chance to
         // refresh before the next dist_cm read.
-        await new Promise(res => setTimeout(res, drivePulseMs + 100));
+        await new Promise(res => setTimeout(res, driveMs + 100));
       }
 
       if (!reason) reason = `max_seconds=${maxSeconds} reached`;
