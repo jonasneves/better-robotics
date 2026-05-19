@@ -140,6 +140,7 @@ const PI_DEFAULTS = {
     right: { forward: 13, backward: 26 },
   },
   encoders_pins: { left: 22, right: 24 },
+  ultrasonic_pins: { trig: 23, echo: 27 },
 };
 
 // Supports both flat {role: gpio} and nested {left: {forward: 17, backward: 27}} shapes.
@@ -162,12 +163,14 @@ function claimsFromEntry(entry) {
   // via get-config for users with custom pins.
   const names = new Set((entry?.capSchema || []).map(c => c.name));
   return claimsFromConfig({
-    led_enabled:      names.has("led"),
-    led_pin:          PI_DEFAULTS.led_pin,
-    motors_enabled:   names.has("motors"),
-    motors_pins:      PI_DEFAULTS.motors_pins,
-    encoders_enabled: names.has("encoders"),
-    encoders_pins:    PI_DEFAULTS.encoders_pins,
+    led_enabled:        names.has("led"),
+    led_pin:            PI_DEFAULTS.led_pin,
+    motors_enabled:     names.has("motors"),
+    motors_pins:        PI_DEFAULTS.motors_pins,
+    encoders_enabled:   names.has("encoders"),
+    encoders_pins:      PI_DEFAULTS.encoders_pins,
+    ultrasonic_enabled: names.has("ultrasonic"),
+    ultrasonic_pins:    PI_DEFAULTS.ultrasonic_pins,
   });
 }
 
@@ -866,6 +869,15 @@ function claimsFromConfig(cfg) {
       if (phys) claims[phys] = { cap: "encoders", role };
     }
   }
+  // Ultrasonic defaults off in firmware (level-divider trap on ECHO),
+  // so only render claims when explicitly enabled.
+  if (cfg?.ultrasonic_enabled) {
+    const effective = { ...PI_DEFAULTS.ultrasonic_pins, ...(cfg?.ultrasonic_pins || {}) };
+    for (const [role, gpio] of Object.entries(effective)) {
+      const phys = GPIO_TO_PHYS.get(gpio);
+      if (phys) claims[phys] = { cap: "ultrasonic", role };
+    }
+  }
   return claims;
 }
 
@@ -905,8 +917,10 @@ function renderEdit(entry) {
   const motorsChecked = c.motors_enabled ? "checked" : "";
   const cameraChecked = c.camera_enabled !== false ? "checked" : "";
   const encodersChecked = c.encoders_enabled !== false ? "checked" : "";
+  const ultrasonicChecked = c.ultrasonic_enabled ? "checked" : "";
   const motors = c.motors_pins || {};
   const encoders = c.encoders_pins || {};
+  const ultrasonic = c.ultrasonic_pins || {};
   // Duplicate GPIO usage detection, in two tiers:
   //   hard — every claimant is enabled; robot will misbehave on next boot.
   //   soft — at least one claimant is disabled; fine right now but a latent
@@ -922,6 +936,10 @@ function renderEdit(entry) {
   for (const [role, g] of Object.entries(encoders)) {
     if (typeof g !== "number") continue;
     (usage[g] ||= []).push({ role: `encoders.${role}`, enabled: encodersEnabledEff });
+  }
+  for (const [role, g] of Object.entries(ultrasonic)) {
+    if (typeof g !== "number") continue;
+    (usage[g] ||= []).push({ role: `ultrasonic.${role}`, enabled: !!c.ultrasonic_enabled });
   }
   const dup = Object.entries(usage).filter(([, v]) => v.length > 1);
   const hard = dup.filter(([, v]) => v.every(x => x.enabled));
@@ -945,6 +963,9 @@ function renderEdit(entry) {
   for (const [role, g] of Object.entries(encoders)) {
     if (typeof g === "number") checkReserved(g, `encoders.${role}`, encodersEnabledEff);
   }
+  for (const [role, g] of Object.entries(ultrasonic)) {
+    if (typeof g === "number") checkReserved(g, `ultrasonic.${role}`, !!c.ultrasonic_enabled);
+  }
   // GPIOs to flag inline (red border on the input). Soft conflicts live in
   // the warning line only — they aren't actively-broken state, so flagging
   // both sides would mislead.
@@ -961,6 +982,10 @@ function renderEdit(entry) {
     : "";
 
   const ledFlagCls = (c.led_pin != null && flagged.has(c.led_pin)) ? " conflict" : "";
+  const usTrig = c.ultrasonic_pins?.trig ?? PI_DEFAULTS.ultrasonic_pins.trig;
+  const usEcho = c.ultrasonic_pins?.echo ?? PI_DEFAULTS.ultrasonic_pins.echo;
+  const usTrigCls = flagged.has(usTrig) ? " conflict" : "";
+  const usEchoCls = flagged.has(usEcho) ? " conflict" : "";
 
   $("pinout-body").innerHTML = `
     <div class="pinout-toolbar">
@@ -987,6 +1012,18 @@ function renderEdit(entry) {
       <label class="toolbar-toggle">
         <input type="checkbox" data-toggle="camera_auto" ${cameraChecked}>
         <span>Camera (auto)</span>
+      </label>
+      <label class="toolbar-toggle">
+        <input type="checkbox" data-toggle="ultrasonic_enabled" ${ultrasonicChecked}>
+        <span>Ultrasonic</span>
+        <!-- HC-SR04: TRIG = Pi → sensor (3V3 direct, fine). ECHO = sensor
+             → Pi, needs a 5V→3V3 divider on the wire or the GPIO burns
+             out over time. Firmware can't enforce that — only the wiring
+             can. -->
+        <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input${usTrigCls}"
+               data-path="ultrasonic_pins.trig" value="${usTrig}" title="TRIG (Pi → sensor)">
+        <input type="text" inputmode="numeric" maxlength="2" class="pinout-edit-input${usEchoCls}"
+               data-path="ultrasonic_pins.echo" value="${usEcho}" title="ECHO (sensor → Pi, needs divider)">
       </label>
     </div>
     ${renderBoardWithDriver(claims, { editable: true, editConfig: c, flagged })}
@@ -1066,6 +1103,7 @@ function renderEdit(entry) {
     editConfig.led_pin = PI_DEFAULTS.led_pin;
     editConfig.motors_pins = structuredClone(PI_DEFAULTS.motors_pins);
     editConfig.encoders_pins = structuredClone(PI_DEFAULTS.encoders_pins);
+    editConfig.ultrasonic_pins = structuredClone(PI_DEFAULTS.ultrasonic_pins);
     renderEdit(entry);
   });
   $("pinout-calibrate-btn")?.addEventListener("click", () => {

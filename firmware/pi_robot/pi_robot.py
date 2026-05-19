@@ -398,6 +398,23 @@ if ENCODERS_ENABLED:
     except Exception as e:
         log.warning("encoder init failed: %s", e)
         _enc_l_dev = _enc_r_dev = None
+
+# HC-SR04. gpiozero spawns its own polling thread; we just read .distance
+# on the telemetry tick. max_distance=2m is comfortable for indoor demos —
+# default 1m clips before the sensor's useful range. ECHO needs a 5V→3V3
+# divider on the wire; the firmware can't enforce that, so the comment
+# next to ULTRASONIC_PINS is the only line of defense.
+_us_dev: DistanceSensor | None = None
+if ULTRASONIC_ENABLED:
+    try:
+        _us_dev = DistanceSensor(
+            echo=ULTRASONIC_PINS["echo"],
+            trigger=ULTRASONIC_PINS["trig"],
+            max_distance=2.0,
+        )
+    except Exception as e:
+        log.warning("ultrasonic init failed: %s", e)
+        _us_dev = None
 _led_state = 0
 _server: BlessServer | None = None
 _loop: asyncio.AbstractEventLoop | None = None
@@ -1379,6 +1396,8 @@ async def _telemetry_task() -> None:
                 t["enc_l"] = _enc_l_ticks
             if _enc_r_dev is not None:
                 t["enc_r"] = _enc_r_ticks
+            if _us_dev is not None:
+                t["dist_cm"] = round(_us_dev.distance * 100)
             _publish(TELEMETRY_CHAR_UUID, _json_bytes(t))
         except Exception as e:
             log.warning("telemetry: %s", e)
