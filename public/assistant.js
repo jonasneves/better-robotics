@@ -822,6 +822,13 @@ function wireWatcherFireBridge() {
 // the browser (Firefox, older Safari builds) → the button just isn't
 // inserted, no broken affordance.
 let _dictation = null;
+// Sticky-mic flag: when true (user clicked the mic to enable), dictation
+// auto-restarts after every commit (submit / mid-turn injection / safety
+// verb). When false (user explicitly stopped, hit Escape, or never
+// started), dictation stays off after the next end-event. The motivation
+// is the "talk to your robot" loop — clicking the mic once should be
+// enough to issue a sequence of commands without re-clicking between each.
+let _micSticky = false;
 function wireMicButton() {
   if (!voiceInputSupported()) return;
   const form = document.querySelector(".pip-form");
@@ -832,7 +839,7 @@ function wireMicButton() {
   btn.type = "button";
   btn.className = "pip-mic-btn";
   btn.setAttribute("aria-label", "Voice input");
-  btn.title = "Voice input (press to start/stop)";
+  btn.title = "Voice input — click on; stays on across commands (click again or Escape to stop)";
   btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
     <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM19 11a7 7 0 0 1-14 0M12 18v3M8 21h8"
           stroke="currentColor" stroke-width="1.6" fill="none"
@@ -871,6 +878,10 @@ function wireMicButton() {
     if (_dictation) { stop(); return; }
     prefix = input.value.trim();
     setListening(true);
+    // CSS hook for "sticky-mode armed" — a subtle persistent ring around
+    // the mic so the operator knows clicking won't be needed between
+    // commands.
+    btn.classList.toggle("sticky", _micSticky);
     _dictation = startDictation({
       onInterim: writeTranscript,
       onFinal: (final) => { if (final) writeTranscript(final); },
@@ -913,16 +924,28 @@ function wireMicButton() {
         // of two.
         _dictation = null;
         setListening(false);
+        // Helper: re-arm dictation after a commit when the user's sticky
+        // intent is still on. Small delay so (a) the form submit
+        // dispatches before we re-grab the input element and (b) the
+        // mic's audio buffer flushes the just-spoken utterance before
+        // listening again (otherwise the next session can sometimes
+        // pick up the tail of the prior one as a phantom command).
+        const restartIfSticky = () => {
+          if (!_micSticky) return;
+          setTimeout(() => { if (_micSticky && !_dictation) start(); }, 400);
+        };
         if (reason === "cancel") {
           // Escape: restore pre-dictation input so the user gets their
-          // earlier draft back instead of the partial transcript.
+          // earlier draft back instead of the partial transcript. Escape
+          // also clears sticky — explicit "stop listening" intent.
+          _micSticky = false;
           input.value = prefix;
           input.dispatchEvent(new Event("input", { bubbles: true }));
           input.focus();
           return;
         }
         const text = input.value.trim();
-        if (!text) { input.focus(); return; }
+        if (!text) { input.focus(); restartIfSticky(); return; }
 
         // Mid-turn voice: don't go through pip-core's submit (input is
         // disabled during a running turn anyway). Inject as observation
@@ -933,6 +956,7 @@ function wireMicButton() {
           input.value = "";
           input.dispatchEvent(new Event("input", { bubbles: true }));
           input.focus();
+          restartIfSticky();
           return;
         }
 
@@ -940,14 +964,31 @@ function wireMicButton() {
         // flush + render before submit, so the user sees the final
         // transcript flash in the field for a beat.
         requestAnimationFrame(() => form.requestSubmit?.());
+        restartIfSticky();
       },
     });
   };
 
-  btn.addEventListener("click", () => (_dictation ? stop() : start()));
-  // Escape from anywhere bails an in-progress dictation without sending.
+  // Click toggles sticky-mode + dictation. First click → arm sticky AND
+  // start listening; second click → disarm sticky AND stop. Auto-restart
+  // in onEnd checks sticky; so submits / mid-turn injections don't drop
+  // the mic between commands.
+  btn.addEventListener("click", () => {
+    if (_dictation) {
+      _micSticky = false;
+      stop();
+    } else {
+      _micSticky = true;
+      start();
+    }
+  });
+  // Escape from anywhere bails an in-progress dictation without sending
+  // AND clears sticky — explicit "stop listening" intent.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && _dictation) stop({ cancel: true });
+    if (e.key === "Escape" && _dictation) {
+      _micSticky = false;
+      stop({ cancel: true });
+    }
   });
 }
 

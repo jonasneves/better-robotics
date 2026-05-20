@@ -76,19 +76,34 @@ const MAX_WORDS = 8;
 // long-running work, so only verbs whose meaning is unambiguous.
 export const SAFETY_INTENTS = new Set(["stop"]);
 
+// After a verb-pattern matches, drop the matched prefix + any optional
+// duration phrase ("for 1 second", "300ms") and see whether anything
+// else is left. If yes, the user wasn't issuing a bare verb — they were
+// saying a natural-language sentence that happens to start with one
+// ("turn left to the kitchen", "go forward toward the book") — and we
+// should route to Claude, not direct-dispatch a brief pulse and silently
+// drop the rest. Without this check, the matchers fire on partial
+// matches and the planner never sees the utterance.
+const DURATION_SUFFIX_RX = /(?:^|\s)(?:for\s+)?\d+(?:\.\d+)?\s*(?:s|sec|seconds?|ms|milliseconds?)\b/i;
+
 export function tryMatchCommand(text) {
   const trimmed = (text || "").trim();
   if (!trimmed) return null;
   if (trimmed.split(/\s+/).length > MAX_WORDS) return null;
   if (SKIP_RX.test(trimmed)) return null;
   for (const p of PATTERNS) {
-    if (p.rx.test(trimmed)) {
-      return {
-        intent: p.name,
-        tool: "move_motor",
-        partialInput: p.build(trimmed),
-      };
-    }
+    const m = p.rx.exec(trimmed);
+    if (!m) continue;
+    const after = trimmed.slice(m[0].length)
+      .replace(DURATION_SUFFIX_RX, "")
+      .replace(/[.!?,;\s]+$/, "")
+      .trim();
+    if (after.length > 0) return null;
+    return {
+      intent: p.name,
+      tool: "move_motor",
+      partialInput: p.build(trimmed),
+    };
   }
   return null;
 }
