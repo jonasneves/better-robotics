@@ -35,6 +35,11 @@
   <script src="error-capture.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <link rel="stylesheet" href="styles.css">
+  <!-- Pre-open TLS + connection to OpenAI's TTS API so the first speak()
+       skips the ~150-250ms handshake. `crossorigin` is mandatory — the
+       fetch from voice.js uses CORS mode and a preconnect without it
+       opens a separate anonymous socket that won't be reused. -->
+  <link rel="preconnect" href="https://api.openai.com" crossorigin>
   <script type="module" src="app.js"></script>
 </head>
 <body>

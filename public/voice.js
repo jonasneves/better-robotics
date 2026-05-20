@@ -2,101 +2,212 @@
 // watcher's speak action, user scripts, and Pip's speak tool all share
 // the same voice — flipping engines is a single-file change.
 //
-// Branch: if settings.pipOpenaiKey is configured we POST to OpenAI's
-// /v1/audio/speech and stream the response into a MediaSource for
-// progressive playback. Otherwise — and on any OpenAI failure
-// (network / key / quota) — fall back to Web Speech so the demo never
-// goes silent.
+// Latency stack (top → bottom in saved-ms):
+//   * Cache API hit (~0 ms)        — repeat phrases bypass network entirely
+//   * AudioContext PCM streaming   — ~100 ms vs MediaSource MP3; skips
+//                                    MP3 priming silence + decoder warmup
+//   * <link rel=preconnect>        — TLS pre-open in index.html
+//   * Warm GET on first speak()    — opens HTTP/2 connection for reuse
+//   * gpt-4o-mini-tts              — ~150 ms lower TTFB than tts-1, plus
+//                                    free-form `instructions` for voice
+//                                    character
+//   * cancel-on-new                — pre-empts stale playback so latest
+//                                    thought wins on rapid speak() calls
 //
-// Latency optimizations layered in:
-//   1. MediaSource streaming  — starts playback as soon as the first
-//      chunk arrives instead of buffering the whole response. Saves
-//      200-400ms time-to-first-audio.
-//   2. gpt-4o-mini-tts        — lower TTFB than tts-1 (~250ms vs
-//      ~400ms) AND supports a free-form `instructions` parameter for
-//      custom voice character (no more picking from 6 fixed voices).
-//   3. Connection pre-warm    — first speak() fires a parallel no-op
-//      HEAD request to pay the TLS handshake once. Subsequent calls
-//      reuse the keep-alive connection.
-//   4. cancel-on-new          — aborts the in-flight fetch AND pauses
-//      the in-flight Audio so a new speak() pre-empts cleanly instead
-//      of queueing behind stale work. Latest thought wins.
+// Falls back to Web Speech when no OpenAI key is configured OR any of
+// the cloud paths fail (network blip, bad key, quota hit, codec issue).
+// Demo never goes silent.
 //
 // Web Speech (the fallback) picks a voice by ordered name allowlist
-// preferring natural-sounding male voices on each platform (macOS
-// Alex, Windows 11 Microsoft Guy, etc.), then anything tagged "male",
-// then whatever's available.
+// preferring natural-sounding male voices on each platform.
 
 import { settings } from "./settings.js";
 
 // ─ OpenAI TTS configuration ─────────────────────────────────────────
 
-// gpt-4o-mini-tts ships custom voice instructions — the base voice
-// (alloy) is a neutral young-sounding starting point that the
-// instructions then characterize. Switch to "tts-1" + a fixed voice
-// (alloy/echo/fable/onyx/nova/shimmer) if you ever want the cheaper
-// or simpler model — tts-1 ignores `instructions`.
 const OPENAI_TTS_MODEL = "gpt-4o-mini-tts";
 const OPENAI_TTS_VOICE = "alloy";
-// Free-form voice direction — only honored by gpt-4o-mini-tts.
-// Peppy young-hero vibe instead of the deep-narrator onyx default.
 const OPENAI_TTS_INSTRUCTIONS =
   "Speak with a peppy, youthful, slightly excited energy. " +
   "Sound like a young hero — quick, enthusiastic, friendly. " +
   "American accent, slightly higher pitched than a typical narrator.";
-// mp3 is the most reliable MediaSource codec across browsers (Chrome,
-// Safari, Firefox all support audio/mpeg in MSE). Opus would be ~30%
-// smaller but Safari's MSE doesn't accept OGG-wrapped Opus, which is
-// what OpenAI returns. Stick with mp3 for now.
-const OPENAI_TTS_FORMAT = "mp3";
-const OPENAI_TTS_MIME = "audio/mpeg";
+// PCM @ 24kHz int16 mono — no container, no decoder priming silence,
+// each byte is audio the moment it lands. The AudioContext samples at
+// 24000 to skip resampling.
+const OPENAI_TTS_FORMAT = "pcm";
+const OPENAI_TTS_SAMPLE_RATE = 24000;
 const OPENAI_API = "https://api.openai.com";
+const CACHE_NAME = "tts-v1";
+
+// ─ AudioContext (lazy, gesture-bound) ───────────────────────────────
+
+// Created lazily inside the first speak() call. AudioContext needs a
+// user gesture to start producing audio in modern browsers — our first
+// speak is almost always inside one (mic button click → onSubmit, demo
+// slash command from typed input, etc.). resume() is idempotent and
+// cheap if already running.
+let _audioCtx = null;
+let _nextStartTs = 0;
+function audioCtx() {
+  if (_audioCtx) return _audioCtx;
+  try {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+      sampleRate: OPENAI_TTS_SAMPLE_RATE,
+      latencyHint: "interactive",
+    });
+  } catch {
+    _audioCtx = null;
+  }
+  return _audioCtx;
+}
 
 // ─ Cancel-on-new state ──────────────────────────────────────────────
 
-let _currentAudio = null;
+// Tracks every BufferSourceNode scheduled for the current utterance so
+// a new speak() can stop them all + abort the in-flight fetch.
+let _activeSources = [];
 let _currentAbort = null;
 
 function cancelOpenAIPlayback() {
   if (_currentAbort) { try { _currentAbort.abort(); } catch {} _currentAbort = null; }
-  if (_currentAudio) {
-    try { _currentAudio.pause(); } catch {}
-    if (_currentAudio.src) { try { URL.revokeObjectURL(_currentAudio.src); } catch {} }
-    _currentAudio = null;
+  for (const node of _activeSources) {
+    try { node.stop(); } catch {}
   }
+  _activeSources = [];
+  _nextStartTs = 0;
 }
 
 // ─ Connection pre-warm ──────────────────────────────────────────────
 
-// Pay the TLS handshake cost (~150-250ms) on the first speak() instead
-// of inside it. Subsequent speak()s reuse the kept-alive HTTP/2
-// connection from the browser's connection pool. Once per page load.
+// Pay the TLS handshake cost on first speak() instead of inside the
+// first user-visible request. <link rel=preconnect> already covers
+// the very first cold-start (HTML parse → connection open in parallel),
+// but the connection can be evicted before any speak runs. The warmup
+// GET re-opens it within the keep-alive window.
 let _warmedUp = false;
 function warmupConnection(key) {
   if (_warmedUp) return;
   _warmedUp = true;
-  // HEAD on a cheap endpoint — opens the connection, costs nothing.
-  // Fire-and-forget; we just want the side effect of the open socket.
+  // GET /v1/models negotiates the same ALPN / cipher path as the POST
+  // we'll soon make to /v1/audio/speech, unlike HEAD which can take a
+  // different path and not actually warm the right socket.
   fetch(`${OPENAI_API}/v1/models`, {
-    method: "HEAD",
+    method: "GET",
     headers: { "Authorization": `Bearer ${key}` },
   }).catch(() => { /* warmup is best-effort */ });
 }
 
+// ─ Cache API (repeat-phrase shortcut) ───────────────────────────────
+
+// Identity key = (model, voice, instructions, format, text). Hashed
+// via SubtleCrypto SHA-256 so the URL key stays a fixed length
+// regardless of phrase length. Cached value: the raw PCM bytes that
+// came back from the API, stored as a Response wrapping a Blob so the
+// Cache API accepts it.
+async function cacheKeyFor(text) {
+  const canonical = JSON.stringify({
+    m: OPENAI_TTS_MODEL,
+    v: OPENAI_TTS_VOICE,
+    i: OPENAI_TTS_INSTRUCTIONS,
+    f: OPENAI_TTS_FORMAT,
+    t: text,
+  });
+  const bytes = new TextEncoder().encode(canonical);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+  return `/tts-cache/${hex}.pcm`;
+}
+
+async function cacheGet(text) {
+  if (!("caches" in self)) return null;
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const key = await cacheKeyFor(text);
+    const res = await cache.match(key);
+    if (!res) return null;
+    return await res.arrayBuffer();
+  } catch { return null; }
+}
+
+async function cachePut(text, bytes) {
+  if (!("caches" in self)) return;
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const key = await cacheKeyFor(text);
+    // gpt-4o-mini-tts is NOT documented as deterministic across calls
+    // — but once cached, we replay the cached bytes forever, which is
+    // fine. Determinism would just mean a build-time pre-bake could
+    // also seed the same cache; without it, the first runtime call
+    // seeds it.
+    await cache.put(key, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
+  } catch { /* cache is best-effort */ }
+}
+
+// ─ Audio scheduling helpers ─────────────────────────────────────────
+
+// int16 PCM bytes → AudioBuffer + scheduled BufferSource on the
+// shared AudioContext. Returns the source node so callers can stash it
+// for cancel-on-new. nextStart is tracked at module scope so chained
+// chunks play head-to-tail without gaps.
+function scheduleInt16Chunk(ctx, int16Bytes) {
+  const i16 = new Int16Array(int16Bytes.buffer, int16Bytes.byteOffset, int16Bytes.byteLength / 2);
+  if (i16.length === 0) return null;
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+  const buf = ctx.createBuffer(1, f32.length, OPENAI_TTS_SAMPLE_RATE);
+  buf.copyToChannel(f32, 0);
+  const node = ctx.createBufferSource();
+  node.buffer = buf;
+  node.connect(ctx.destination);
+  if (_nextStartTs < ctx.currentTime) _nextStartTs = ctx.currentTime + 0.02;
+  node.start(_nextStartTs);
+  _nextStartTs += buf.duration;
+  _activeSources.push(node);
+  return node;
+}
+
+// Resolves when all scheduled chunks for this utterance have finished
+// playing. We attach onended to the LAST node we scheduled.
+function awaitPlaybackEnd(lastNode) {
+  if (!lastNode) return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    lastNode.onended = finish;
+    // Safety net in case onended doesn't fire (e.g. context closed):
+    // wait up to the buffer duration + 100ms past schedule.
+    setTimeout(finish, Math.max(500, (_nextStartTs - lastNode.context.currentTime) * 1000 + 500));
+  });
+}
+
 // ─ OpenAI TTS path ──────────────────────────────────────────────────
 
-// Returns a Promise that resolves when the audio FINISHES playing (or
-// errors / is preempted). Callers can await it to schedule the next
-// action — no need to estimate TTS duration. Non-awaiting callers get
-// fire-and-forget behavior (the Promise is just discarded).
+// Returns a Promise that resolves when audio FINISHES playing (or
+// errors / is preempted). Non-awaiting callers get fire-and-forget.
 async function speakOpenAI(text, key) {
   cancelOpenAIPlayback();
   if (typeof speechSynthesis !== "undefined") {
     try { speechSynthesis.cancel(); } catch {}
   }
 
+  const ctx = audioCtx();
+  if (!ctx) throw new Error("AudioContext unavailable");
+  if (ctx.state === "suspended") {
+    try { await ctx.resume(); } catch {}
+  }
+
   warmupConnection(key);
 
+  // Cache hit: full PCM bytes already on disk — schedule + play
+  // instantly, no network, no decoder. ~0ms TTFA.
+  const cached = await cacheGet(text);
+  if (cached) {
+    const lastNode = scheduleInt16Chunk(ctx, new Uint8Array(cached));
+    return awaitPlaybackEnd(lastNode);
+  }
+
+  // Miss: stream the PCM body and schedule chunks as they arrive.
+  // Cache the full body after success for the next call.
   const controller = new AbortController();
   _currentAbort = controller;
 
@@ -106,8 +217,6 @@ async function speakOpenAI(text, key) {
     input: text,
     response_format: OPENAI_TTS_FORMAT,
   };
-  // tts-1 ignores instructions but the API doesn't error on the
-  // extra field. Only send when we're on a model that honors it.
   if (OPENAI_TTS_MODEL.startsWith("gpt-4o")) {
     body.instructions = OPENAI_TTS_INSTRUCTIONS;
   }
@@ -127,106 +236,44 @@ async function speakOpenAI(text, key) {
     throw new Error(`OpenAI TTS ${res.status}: ${errText.slice(0, 200)}`);
   }
 
-  // Stream into MediaSource so playback starts as soon as the first
-  // chunk lands. Fallback to buffer-then-play if MediaSource isn't
-  // supported or the codec mismatches (Safari versions vary).
-  const mseOk = typeof MediaSource !== "undefined"
-    && typeof MediaSource.isTypeSupported === "function"
-    && MediaSource.isTypeSupported(OPENAI_TTS_MIME);
-  if (mseOk) {
-    return playStreamingMSE(res, controller);
+  const reader = res.body.getReader();
+  const buffered = [];     // for cache write
+  let lastNode = null;
+  // The first chunk often arrives as fewer bytes than 1 sample (PCM
+  // chunk boundaries don't align to int16 boundaries). Accumulate into
+  // a 1-sample-aligned buffer and flush in even-byte slices.
+  let tail = new Uint8Array(0);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (controller.signal.aborted) break;
+      if (done) break;
+      buffered.push(value);
+      // Merge tail + new value, then split off any trailing odd byte.
+      const merged = new Uint8Array(tail.length + value.length);
+      merged.set(tail, 0);
+      merged.set(value, tail.length);
+      const evenLen = merged.length - (merged.length % 2);
+      if (evenLen > 0) {
+        lastNode = scheduleInt16Chunk(ctx, merged.subarray(0, evenLen)) || lastNode;
+      }
+      tail = merged.subarray(evenLen);
+    }
+  } catch (err) {
+    if (!controller.signal.aborted) throw err;
   }
-  const blob = await res.blob();
   if (controller.signal.aborted) return;
-  return playBlob(blob);
-}
 
-// Progressive playback: read the response body chunk-by-chunk and
-// append into a MediaSource. Audio starts as soon as the decoder has
-// enough header data — typically within ~50-100ms of the first chunk.
-function playStreamingMSE(res, controller) {
-  return new Promise((resolve) => {
-    const mediaSource = new MediaSource();
-    const url = URL.createObjectURL(mediaSource);
-    const audio = new Audio(url);
-    _currentAudio = audio;
+  // Stitch all chunks back together for the cache (cheaper than
+  // re-fetching, and gpt-4o-mini-tts isn't documented deterministic so
+  // we can't assume a re-fetch would match).
+  const total = buffered.reduce((n, c) => n + c.length, 0);
+  const merged = new Uint8Array(total);
+  let off = 0;
+  for (const c of buffered) { merged.set(c, off); off += c.length; }
+  cachePut(text, merged);
 
-    let resolved = false;
-    const cleanup = () => {
-      if (resolved) return;
-      resolved = true;
-      if (_currentAudio === audio) _currentAudio = null;
-      try { URL.revokeObjectURL(url); } catch {}
-      resolve();
-    };
-    audio.onended = cleanup;
-    audio.onerror = cleanup;
-
-    mediaSource.addEventListener("sourceopen", async () => {
-      let sourceBuffer;
-      try {
-        sourceBuffer = mediaSource.addSourceBuffer(OPENAI_TTS_MIME);
-      } catch (err) {
-        console.warn("[voice] MSE addSourceBuffer failed, aborting stream:", err);
-        cleanup();
-        return;
-      }
-
-      // Backpressure queue — appendBuffer is async and we can't call
-      // it again until updateend fires. Reader can outrun the decoder.
-      const queue = [];
-      let reading = true;
-      const drain = () => {
-        if (controller.signal.aborted) {
-          try { if (mediaSource.readyState === "open") mediaSource.endOfStream(); } catch {}
-          return;
-        }
-        if (sourceBuffer.updating) return;
-        if (queue.length > 0) {
-          try { sourceBuffer.appendBuffer(queue.shift()); }
-          catch (err) { console.warn("[voice] appendBuffer failed:", err); cleanup(); }
-        } else if (!reading) {
-          try { if (mediaSource.readyState === "open") mediaSource.endOfStream(); } catch {}
-        }
-      };
-      sourceBuffer.addEventListener("updateend", drain);
-
-      const reader = res.body.getReader();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (controller.signal.aborted) break;
-          if (done) { reading = false; drain(); break; }
-          queue.push(value);
-          drain();
-        }
-      } catch (err) {
-        if (!controller.signal.aborted) console.warn("[voice] stream read failed:", err);
-        cleanup();
-      }
-    });
-
-    audio.play().catch(cleanup);
-  });
-}
-
-function playBlob(blob) {
-  const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-  _currentAudio = audio;
-  return new Promise((resolve) => {
-    let resolved = false;
-    const cleanup = () => {
-      if (resolved) return;
-      resolved = true;
-      if (_currentAudio === audio) _currentAudio = null;
-      try { URL.revokeObjectURL(url); } catch {}
-      resolve();
-    };
-    audio.onended = cleanup;
-    audio.onerror = cleanup;
-    audio.play().catch(cleanup);
-  });
+  return awaitPlaybackEnd(lastNode);
 }
 
 // ─ Web Speech path (the fallback) ───────────────────────────────────
@@ -275,8 +322,6 @@ if (typeof speechSynthesis !== "undefined") {
   }
 }
 
-// Same Promise-on-end semantics as speakOpenAI so callers can uniformly
-// await speak() regardless of which engine is active.
 function speakWebSpeech(text) {
   if (!text || typeof speechSynthesis === "undefined") return Promise.resolve();
   if (!_voiceResolved) refreshVoice();
@@ -315,7 +360,9 @@ export function currentVoice() {
       model: OPENAI_TTS_MODEL,
       voice: OPENAI_TTS_VOICE,
       instructions: OPENAI_TTS_MODEL.startsWith("gpt-4o") ? OPENAI_TTS_INSTRUCTIONS : null,
-      streaming: typeof MediaSource !== "undefined" && MediaSource.isTypeSupported(OPENAI_TTS_MIME),
+      streaming: typeof AudioContext !== "undefined" || typeof webkitAudioContext !== "undefined",
+      format: OPENAI_TTS_FORMAT,
+      cache: "caches" in self ? CACHE_NAME : null,
     };
   }
   return _voice
