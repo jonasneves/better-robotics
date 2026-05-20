@@ -225,42 +225,68 @@ async function introduce(ctx) {
   // TTS instructions ("peppy, excited") can cause gpt-4o-mini-tts to
   // vocalize punctuation ("around dot"). Cadence comes from the words.
   //
-  // Opening — small "lean in" forward as we greet, like a person
-  // taking a small step toward the audience to start a presentation.
-  await ctx.exec("speak", { text: "Hey" });
-  await pulse(ctx, SPEED, SPEED, 250);
-  await ctx.sleep(450);
+  // Speech and motion fire IN PARALLEL within each section via
+  // Promise.all (like a person gesturing while talking), so each beat
+  // is max(TTS, motion) instead of TTS+motion. Cuts the demo from
+  // ~18s to ~12s and removes the awkward silent-motion pauses that
+  // made the strict-sequential version feel sleepy. follow does the
+  // same trick implicitly (no speech between motion); introduce makes
+  // it explicit per beat.
+  //
+  // Inter-section "ctx.sleep" gaps removed — the natural prosody of
+  // each TTS phrase ending IS the beat.
 
-  // First line + face left side of the room
-  await speakAndWait(ctx, "I'm a little wheeled robot");
-  await pulse(ctx, -SPEED, SPEED, 700);   // ~90° left to "address" that side
-  await ctx.sleep(150);
+  // Opening — lean in while saying "Hey"
+  await Promise.all([
+    speakAndWait(ctx, "Hey"),
+    pulse(ctx, SPEED, SPEED, 250),
+  ]);
 
-  // Second line + sweep across to the right side
-  await speakAndWait(ctx, "I've got a camera, two motors, and a distance sensor");
-  await pulse(ctx,  SPEED, -SPEED, 1400); // ~180° spin to address the other side
-  await ctx.sleep(150);
+  // First line — turn 90° left to address that side of the room
+  // while saying it. (Subject line is short; if motion outlasts speech
+  // the robot finishes turning silently — fine, reads as deliberate.)
+  await Promise.all([
+    speakAndWait(ctx, "I'm a little wheeled robot"),
+    pulse(ctx, -SPEED, SPEED, 700),
+  ]);
 
-  // Capability demo — each verb illustrated by its motion
-  await speakAndWait(ctx, "I can drive");
-  await pulse(ctx, SPEED, SPEED, 700);    // forward burst to punctuate "drive"
+  // Second line — sweep 180° to address the other side mid-sentence.
+  // Motion is shorter than the TTS so it lands somewhere in the
+  // middle of "I've got a camera, two motors, and a distance sensor",
+  // which is the right place for the gesture beat.
+  await Promise.all([
+    speakAndWait(ctx, "I've got a camera, two motors, and a distance sensor"),
+    pulse(ctx, SPEED, -SPEED, 1400),
+  ]);
 
-  await speakAndWait(ctx, "spin");
-  // Empirically 1 max pulse ≈ 180° on this chassis; 2 chained = a
-  // proper full rotation that lands back facing the audience.
-  await pulse(ctx, -SPEED, SPEED, MAX);
-  await pulse(ctx, -SPEED, SPEED, MAX);
+  // Capability beats — each verb's motion overlaps its word.
+  await Promise.all([
+    speakAndWait(ctx, "I can drive"),
+    pulse(ctx, SPEED, SPEED, 700),
+  ]);
 
-  // "follow you around" → smooth S-curve forward instead of a settle
-  // spin. Spin already happened above; the closing should illustrate
-  // a different capability. Two gentle arcs in opposite directions
-  // both move forward, reading as "I'd come this way to find you."
-  await speakAndWait(ctx, "and follow you around");
-  await pulse(ctx, SPEED,       SPEED * 0.55, 1400);  // gentle right arc forward
-  await pulse(ctx, SPEED * 0.55, SPEED,       1400);  // gentle left arc forward
+  // spin: 2 chained max pulses ≈ 360° on this chassis. The motion is
+  // longer than the word "spin", so the robot keeps spinning briefly
+  // after the audio — appropriate for the verb being demonstrated.
+  await Promise.all([
+    speakAndWait(ctx, "spin"),
+    (async () => {
+      await pulse(ctx, -SPEED, SPEED, MAX);
+      await pulse(ctx, -SPEED, SPEED, MAX);
+    })(),
+  ]);
 
-  await ctx.sleep(250);
-  // Closing — open invitation, comma for natural prosody
+  // "and follow you around" — smooth S-curve forward illustrates
+  // "following" instead of "settling". Spin already happened above.
+  await Promise.all([
+    speakAndWait(ctx, "and follow you around"),
+    (async () => {
+      await pulse(ctx, SPEED,        SPEED * 0.55, 1400);
+      await pulse(ctx, SPEED * 0.55, SPEED,        1400);
+    })(),
+  ]);
+
+  // Closing — speech only. Open invitation; no motion to distract.
   await speakAndWait(ctx, "So, what should we try?");
 }
 
