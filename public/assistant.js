@@ -401,6 +401,13 @@ async function onSubmit(text, { turnEl }) {
       // expires). Lets demos pause-and-resume around reflex halts
       // instead of bailing out of the loop.
       awaitReflexGate,
+      // Forward ultrasonic distance in cm (or null when telemetry
+      // hasn't arrived yet). Demos use this to detect obstacles —
+      // firmware silently clips pure-forward motion when dist_cm<15
+      // and returns ok:true from move_motor, so an inattentive demo
+      // happily "drives" into a wall forever. Polling between
+      // segments lets the demo break the leg early and turn around.
+      getDistCm: () => state.devices.get(robotId)?.telemetry?.dist_cm ?? null,
     };
     try { await demo.run(ctx); }
     catch (err) {

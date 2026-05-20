@@ -235,7 +235,11 @@ async function introduce(ctx) {
   await pulse(ctx, SPEED, SPEED, 700);    // quick forward burst to punctuate "drive"
 
   await speakAndWait(ctx, "spin...");
-  await pulse(ctx, -SPEED, SPEED, MAX);   // full 360 to literally spin
+  // Empirically: 1 max pulse at speed 40 ≈ 180° on this chassis (the
+  // earlier "full 360" comment was wrong). Two chained pulses for a
+  // proper full rotation that lands back facing the audience.
+  await pulse(ctx, -SPEED, SPEED, MAX);
+  await pulse(ctx, -SPEED, SPEED, MAX);
 
   await speakAndWait(ctx, "and follow you around.");
   await pulse(ctx,  SPEED, -SPEED, 700);  // settle back to facing forward
@@ -328,9 +332,23 @@ async function stopsignPatrol(ctx) {
   // motion per leg ≈ 7-8m at 35 cm/s. Firmware caps speed at 40 and
   // pulse duration at 2000ms so this is as fast as a single leg can go
   // without changing the firmware floor.
+  //
+  // dist_cm guard: firmware silently clips pure-forward motion when
+  // dist_cm < ~15 and still returns ok:true, so without this check the
+  // demo would keep "driving" into a wall forever. Break the leg as
+  // soon as we're under the threshold — the outer loop's turn-around
+  // gets us pointed away.
+  const NEAR_OBSTACLE_CM = 20;
+  let blockedAhead = false;
   const wavyForward = async (segments = 12) => {
+    blockedAhead = false;
     for (let i = 0; i < segments; i++) {
       if (breakLeg()) return;
+      const dist = ctx.getDistCm?.();
+      if (typeof dist === "number" && dist < NEAR_OBSTACLE_CM) {
+        blockedAhead = true;
+        return;
+      }
       const arc = i % 2 === 0
         ? [SPEED,         SPEED * 0.75]
         : [SPEED * 0.75,  SPEED       ];
@@ -338,13 +356,15 @@ async function stopsignPatrol(ctx) {
     }
   };
 
-  // 180° spin in place. Two max-duration spin pulses are roughly a
-  // half rotation at speed 40; tune the count if the robot under-turns.
+  // 180° turn-around. Empirically 1 MAX pulse at speed 40 ≈ 180° on
+  // this chassis (earlier "2 pulses = half rotation" comment was wrong;
+  // 2 pulses = full 360° = robot ends up facing the SAME way it was,
+  // which is why patrol seemed to stop making progress — the firmware
+  // ultrasonic clip stopped it, then we "turned" all the way around
+  // back toward the same wall).
   const turnAround = async () => {
-    for (let i = 0; i < 2; i++) {
-      if (breakLeg()) return;
-      await pulse(ctx, -SPEED, SPEED, MAX);
-    }
+    if (breakLeg()) return;
+    await pulse(ctx, -SPEED, SPEED, MAX);
   };
 
   try {
@@ -396,7 +416,13 @@ async function stopsignPatrol(ctx) {
         continue;
       }
 
-      await ctx.exec("speak", { text: "Around we go." });
+      // If the leg cut short because of an obstacle, say so — otherwise
+      // the user sees the robot stop and turn for no apparent reason.
+      if (blockedAhead) {
+        await ctx.exec("speak", { text: "Wall ahead — turning." });
+      } else {
+        await ctx.exec("speak", { text: "Around we go." });
+      }
       await turnAround();
     }
   } finally {
