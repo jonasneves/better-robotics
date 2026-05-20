@@ -203,6 +203,21 @@ const ALL_TOOLS = [
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: true },
   },
   {
+    name: "drive_arc",
+    description: "Drive a curved/circular path at a chosen wheel-speed ratio for a target duration. Single call → executor chains 2000ms move_motor pulses inline at ~30 Hz, no LLM round-trips between pulses. Same primitive that powers drive_distance_cm for straight motion. Use this for ANY sustained-curve motion (full circles, arcs, gentle veers) instead of issuing repeated move_motor pulses — saves 1-2s of planning latency per pulse and BLE round-trips. Common patterns: full circle ≈ {l:40, r:20, total_ms:10000} (radius ~30cm); tight circle ≈ {l:40, r:0, total_ms:6000}; wide arc ≈ {l:40, r:30, total_ms:5000}; figure-eight = two arcs with flipped l/r in succession. Negate both l and r for reverse arcs. Returns { ok, total_ms, executed_pulses, results }.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id:       { type: "string" },
+        l:        { type: "number", minimum: -40, maximum: 40, description: "Left wheel speed, [-40, 40]. Equal to r = straight; bigger = arc toward the opposite wheel." },
+        r:        { type: "number", minimum: -40, maximum: 40, description: "Right wheel speed, [-40, 40]." },
+        total_ms: { type: "number", minimum: 100, maximum: 30000, description: "Total motion duration in ms (chunked to firmware's 2000ms pulse cap)." },
+      },
+      required: ["id", "l", "r", "total_ms"],
+    },
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: true },
+  },
+  {
     name: "approach_until",
     description: "Closed-loop forward approach run inside the executor at ~3 Hz. Drives in pulses, optionally centering on a COCO target between them. Halts on the FIRST of three stop predicates: (a) ultrasonic dist_cm < stop_dist_cm — useful for walls / large flat targets; (b) target bbox area >= stop_bbox_area — the reliable signal for small / short / off-axis targets (bottles, cups) that the ultrasonic cone misses; (c) target lost 3 consecutive frames after being seen — prevents blindly driving past an overshot target. Returns { ok, reason, steps, final_dist_cm, trajectory }. Use INSTEAD of repeated move_motor + view_robot_frame cycles when approaching something.",
     input_schema: {
@@ -563,6 +578,51 @@ async function dispatch(name, input) {
         ok: !gatedAt,
         requested_cm: cm,
         executed_cm: +executed_cm.toFixed(1) * dir,
+        pulses: pulses.length,
+        results,
+        ...(gatedAt ? { error: gatedAt.error } : {}),
+      };
+    }
+    case "drive_arc": {
+      // Same chunking shape as drive_distance_cm but parameterized on
+      // wheel speeds + total duration instead of distance + direction.
+      // Lets the planner issue ONE call for any sustained-curve motion
+      // (full circles, arcs, gentle veers) instead of N pulses with N
+      // LLM round-trips between them. The motor gate is checked before
+      // each chunk so a reflex (stop sign, pause gesture) appearing mid-
+      // arc halts the chain instead of letting queued chunks blast through.
+      const e = state.devices.get(input.id);
+      if (!e) return { error: `no robot with id ${input.id}` };
+      const l = Math.max(-40, Math.min(40, Number(input.l) || 0));
+      const r = Math.max(-40, Math.min(40, Number(input.r) || 0));
+      const totalMs = Math.max(100, Math.min(30000, Number(input.total_ms) || 0));
+      if (totalMs === 0) return { error: "total_ms must be > 0" };
+      const PULSE_MAX = 2000;   // firmware cap per move_motor pulse
+      const pulses = [];
+      let remaining = totalMs;
+      while (remaining > 0) {
+        const ms = Math.min(PULSE_MAX, remaining);
+        if (ms < 50) break;     // firmware floor; tail < 50ms is noise
+        pulses.push(ms);
+        remaining -= ms;
+      }
+      e.lastMotorActionAt = Date.now();
+      const results = [];
+      let executed_ms = 0;
+      let gatedAt = null;
+      for (const ms of pulses) {
+        const gateErr = await awaitMotorGate(input.id);
+        if (gateErr) { gatedAt = gateErr; break; }
+        const res = await pulseMotors(input.id, l, r, ms);
+        results.push(res);
+        if (!res?.ok) break;
+        executed_ms += ms;
+        await new Promise(res2 => setTimeout(res2, ms + 30));
+      }
+      return {
+        ok: !gatedAt,
+        total_ms: totalMs,
+        executed_ms,
         pulses: pulses.length,
         results,
         ...(gatedAt ? { error: gatedAt.error } : {}),
