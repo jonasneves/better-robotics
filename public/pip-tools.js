@@ -221,7 +221,7 @@ const ALL_TOOLS = [
   },
   {
     name: "start_robot_watcher",
-    description: "Start a continuous reflex on the robot's camera. Two model paths: (a) `halt`/`speak`/`notify` actions run MediaPipe COCO closed-vocab object detection on `classes` (~10ms/frame, 3s cool-down between fires); (b) `follow` action runs MediaPipe Gesture Recognizer for hand tracking — `classes` is ignored, and built-in gestures double as commands (Open_Palm/Closed_Fist pause+halt, Thumb_Up resumes). A [reflex-fire] / [reflex-clear] block appears in your next tool_result when something triggers. Idempotent: a second call replaces any prior. By default halt/follow speak narration aloud — set silent:true if your own logic narrates these events to avoid two voices overlapping.",
+    description: "Start a continuous reflex on the robot's camera. Two model paths: (a) `halt`/`speak`/`notify` actions run MediaPipe COCO closed-vocab object detection on `classes` (~10ms/frame, 3s cool-down between fires); (b) `follow` action runs MediaPipe Gesture Recognizer for hand tracking — `classes` is ignored. Follow always drives toward the hand, speaks any high-confidence gesture aloud (Open_Palm, Closed_Fist, Pointing_Up, Thumb_Up, Victory, ILoveYou), and overrides palm-tracking with a directional spin when the operator points sideways. A [reflex-fire] / [reflex-clear] block appears in your next tool_result when something triggers. Idempotent: a second call replaces any prior. By default halt/follow speak narration aloud — set silent:true if your own logic narrates these events.",
     input_schema: {
       type: "object",
       properties: {

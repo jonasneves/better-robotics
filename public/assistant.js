@@ -756,11 +756,11 @@ export function initAssistant() {
 //   - render a small inline notice in the active turn so the operator
 //     sees what got injected
 // `kind` is one of:
-//   "fire"            — halt-mode target entered frame
-//   "clear"           — halt-mode target left frame
-//   "gesture-pause"   — follow-mode operator gesture engaged the gate
-//   "gesture-resume"  — follow-mode operator gesture released the gate
-//   "follow-lost"    — follow-mode lost the hand for N consecutive ticks
+//   "fire"             — halt-mode target entered frame (motion gate engaged)
+//   "clear"            — halt-mode target left frame (motion gate released)
+//   "gesture-detected" — follow-mode classifier returned a high-confidence
+//                        gesture; informational, no gate change
+//   "follow-lost"      — follow-mode lost the hand for N consecutive ticks
 //   "follow-reacquire" — follow-mode regained the hand after a lost streak
 function wireWatcherFireBridge() {
   onWatcherFire((entry, det, kind = "fire") => {
@@ -777,15 +777,10 @@ function wireWatcherFireBridge() {
         noticeHtml = `Reflex clear: <strong>${escHtml(String(det?.label || ""))}</strong> left frame — motion resumed.`;
         isReleaseShape = true;
         break;
-      case "gesture-pause":
-        obsText = `[reflex-fire] operator gestured "${det?.gesture}" to ${entry.name} at ${ts}; follow paused and motion gate engaged until they signal resume.`;
-        noticeHtml = `Gesture: <strong>${escHtml(String(det?.gesture || ""))}</strong> — follow paused, motion gated.`;
+      case "gesture-detected":
+        obsText = `[reflex-fire] operator gestured "${det?.gesture}" to ${entry.name} (score ${score}) at ${ts}; informational — follow tracking continues.`;
+        noticeHtml = `Gesture: <strong>${escHtml(String(det?.gesture || ""))}</strong> (${score})`;
         isReleaseShape = false;
-        break;
-      case "gesture-resume":
-        obsText = `[reflex-clear] operator gestured "${det?.gesture}" to ${entry.name} at ${ts}; motion gate released, follow resumed.`;
-        noticeHtml = `Gesture: <strong>${escHtml(String(det?.gesture || ""))}</strong> — follow resumed.`;
-        isReleaseShape = true;
         break;
       case "follow-lost":
         obsText = `[reflex-fire] follow lost the operator's hand on ${entry.name} at ${ts}; robot is idle (not chasing) until the hand reappears.`;

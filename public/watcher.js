@@ -83,19 +83,26 @@ const FOLLOW_LOST_TICKS = 4;
 // triggers an announcement every few seconds. 3s lands between "still
 // feels live" and "not whip-sawing chat for noise."
 const FOLLOW_ANNOUNCE_COOLDOWN_MS = 3000;
-// Gesture command map. Open_Palm and Closed_Fist are the most reliably
-// classified across the literature for the pause role. Thumb_Up replaced
-// the original Pointing_Up resume choice after the floor-mounted robot
-// run showed Pointing_Up is awkward from above (operator looking down
-// at robot doesn't naturally point an index finger UP at it). Thumb_Up
-// is the natural "go / continue" gesture and benchmarks reliably above
-// 90% in the GestureBot data. Thumb_Down explicitly skipped — 70.7% in
-// the same benchmark, confuses with similar poses.
-const FOLLOW_GESTURE_COMMANDS = {
-  Open_Palm:   "pause",
-  Closed_Fist: "pause",
-  Thumb_Up:    "resume",
-};
+// Confidence floor + dedupe cool-down for the speak-the-gesture path.
+// 0.7 is a safety margin above the recognizer's default 0.5 detection
+// floor — at 0.7 misfires are rare enough that they don't dominate the
+// audio channel; at 0.5 every flickering Victory/ILoveYou crosstalk
+// announces itself. Per Google's Gesture Recognizer docs the score is
+// the classifier's `categoryScore` in [0,1].
+const FOLLOW_GESTURE_SPEAK_THRESHOLD = 0.7;
+const FOLLOW_GESTURE_SPEAK_COOLDOWN_MS = 1500;
+// Pointing-direction threshold. We classify a "Pointing_Up" detection
+// as left/right when the index-finger vector (landmark 5 MCP → landmark
+// 8 tip) is dominantly horizontal (|dx| > |dy| × ratio). Below this
+// ratio the finger is too vertical or ambiguous — fall through to
+// default palm-centroid tracking. 0.8 means "horizontal component must
+// be at least 80% of vertical" — pointing straight sideways clears it,
+// a 45° upward point doesn't.
+const FOLLOW_POINTING_HORIZ_RATIO = 0.8;
+// Skip announcing Thumb_Down — GestureBot benchmark measured 70.7%
+// accuracy vs >90% for the other gesture classes, and a Thumb_Down
+// misfire is the kind of false positive that lands wrong in a demo.
+const FOLLOW_GESTURE_SPEAK_SKIP = new Set(["Thumb_Down", "None"]);
 
 // Fire-event listeners — assistant.js subscribes so it can inject a
 // synthetic observation into Pip's active turn (L2 "harness pushes state
@@ -335,34 +342,37 @@ function runHaltLoop(entry, cfg) {
   tick();
 }
 
-// Follow-action loop. Polls the Gesture Recognizer for the operator's
-// hand; runs a centroid P-loop that turn-pulses to center the palm in
-// frame and drive-pulses to close distance when far. Built-in gestures
-// double as commands — Open_Palm/Closed_Fist pause (engage motor gate
-// + halt), Pointing_Up resumes. Same gate primitive as runHaltLoop, so
-// "pause follow" cleanly composes with Pip if it's running concurrently
-// AND a hard-stop verb survives whatever the operator is otherwise doing.
-//
-// State machine:
-//   tracking → (Open_Palm)      → paused
-//   tracking → (Closed_Fist)    → paused
-//   paused   → (Pointing_Up)    → tracking
-//   tracking → (no hand × N)    → idle (no chase-spin — staying put is
-//                                  far less unnerving than a robot that
-//                                  hunts for you when you've stepped away)
-//   idle     → (hand reappears) → tracking
+// Follow-action loop. Three concurrent jobs per tick:
+//   1. Track the hand. P-controller on palm centroid: turn toward it
+//      when off-center; drive forward when centered; hold when close.
+//      No pause state — the operator drops their hand to stop. (The
+//      earlier pause/resume gestures were redundant: most of the time
+//      the robot is already stationary, and the Stop button + voice
+//      "stop" still kill motion immediately via releaseAllGates.)
+//   2. Speak any confidently-detected gesture (score >= 0.7), deduped
+//      by transition + cool-down. Per Google's Gesture Recognizer docs
+//      the `categoryScore` is the classifier's confidence in [0,1];
+//      0.7 is a safety margin above the recognizer's default 0.5 floor.
+//      Thumb_Down skipped — known noisy class, embarrassing misfire.
+//   3. When the user is pointing (Pointing_Up class confident) AND the
+//      index finger vector is dominantly horizontal, OVERRIDE the
+//      palm-tracking turn with a fixed-direction spin. Lets the operator
+//      steer the robot while it's still approaching their hand. Vector
+//      = landmarks[8] (index fingertip) - landmarks[5] (index MCP), in
+//      image-normalized coords; image-space direction matches "where
+//      the finger visibly points," which reads as right to the audience
+//      regardless of selfie-mirror conventions.
 function runFollowLoop(entry, cfg) {
   let stopped = false;
   let timer = null;
-  let paused = false;
   let lostCount = 0;
-  let lastGesture = null;
-  let lastAnnounceTs = 0;
+  let lastSpokenGesture = null;
+  let lastSpokenTs = 0;
+  let lastLostAnnounceTs = 0;
   const stopFn = () => {
     if (stopped) return;
     stopped = true;
     if (timer) { clearTimeout(timer); timer = null; }
-    releaseGate(entry.id);
   };
   _running.set(entry.id, { stop: stopFn });
 
@@ -387,73 +397,73 @@ function runFollowLoop(entry, cfg) {
       return;
     }
 
-    // Gesture commands — fire only on transition (not every tick the
-    // gesture stays held) so the audience hears one announcement per
-    // user action, not a stream.
-    const g = det?.gesture;
-    if (g && g !== "None" && g !== lastGesture && FOLLOW_GESTURE_COMMANDS[g]) {
-      const cmd = FOLLOW_GESTURE_COMMANDS[g];
-      if (cmd === "pause" && !paused) {
-        paused = true;
-        try { await pulseMotors(entry.id, 0, 0, 200); } catch {}
-        if (stopped) return;
-        if (!cfg.silent) ttsSpeak(`paused, ${g.toLowerCase().replace(/_/g, " ")}`);
-        setGateBlocked(entry.id, `gesture ${g}`);
-        emitFire(entry, { gesture: g, ts: Date.now() }, "gesture-pause");
-      } else if (cmd === "resume" && paused) {
-        paused = false;
-        if (!cfg.silent) ttsSpeak("following again");
-        releaseGate(entry.id);
-        emitFire(entry, { gesture: g, ts: Date.now() }, "gesture-resume");
+    // (2) Speak confident gestures — fires on transition AND on cool-
+    // down expiry, so holding a gesture only triggers one announcement
+    // per ~1.5 s. Renders in chat too via the gesture-detected emit.
+    if (det && det.score >= FOLLOW_GESTURE_SPEAK_THRESHOLD && !FOLLOW_GESTURE_SPEAK_SKIP.has(det.gesture)) {
+      const now = Date.now();
+      const newGesture = det.gesture !== lastSpokenGesture;
+      const cooledDown = (now - lastSpokenTs) > FOLLOW_GESTURE_SPEAK_COOLDOWN_MS;
+      if (newGesture && cooledDown) {
+        if (!cfg.silent) ttsSpeak(det.gesture.toLowerCase().replace(/_/g, " "));
+        emitFire(entry, { gesture: det.gesture, score: det.score, ts: now }, "gesture-detected");
+        lastSpokenGesture = det.gesture;
+        lastSpokenTs = now;
       }
     }
-    if (g) lastGesture = g;
 
-    // Tracking — skipped entirely while paused (the gate is engaged;
-    // even an erroneous pulse here would be a no-op via pip-tools, but
-    // skipping is cheaper + cleaner).
-    if (!paused) {
-      if (!det) {
-        lostCount++;
-        if (lostCount === FOLLOW_LOST_TICKS) {
-          const now = Date.now();
-          if (now - lastAnnounceTs > FOLLOW_ANNOUNCE_COOLDOWN_MS) {
-            if (!cfg.silent) ttsSpeak("lost the hand");
-            emitFire(entry, { ts: now }, "follow-lost");
-            lastAnnounceTs = now;
-            renderEntry(entry);
-          }
+    // (3) Pointing-direction override. Compute only when the recognizer
+    // says Pointing_Up with confidence — the class fires when the index
+    // is extended and other fingers curled, which is exactly the
+    // "pointing" pose we want to read direction from.
+    let pointingDir = null;
+    if (det && det.gesture === "Pointing_Up" && det.score >= FOLLOW_GESTURE_SPEAK_THRESHOLD) {
+      const lm = det.landmarks;
+      const mcp = lm[5];   // index MCP — base knuckle
+      const tip = lm[8];   // index fingertip
+      if (mcp && tip) {
+        const dx = tip.x - mcp.x;
+        const dy = tip.y - mcp.y;
+        // Dominantly horizontal? Use sign of dx for direction. Otherwise
+        // (finger pointing up, down, or diagonal-ish) skip the override
+        // and let palm-centroid tracking decide.
+        if (Math.abs(dx) > Math.abs(dy) * FOLLOW_POINTING_HORIZ_RATIO) {
+          pointingDir = dx > 0 ? "right" : "left";
         }
+      }
+    }
+
+    // (1) Movement. If pointing-direction override fires, spin that way
+    // at max turn speed. Otherwise default to palm-centroid P-tracking.
+    if (det) {
+      if (lostCount >= FOLLOW_LOST_TICKS) {
+        const now = Date.now();
+        if (now - lastLostAnnounceTs > FOLLOW_ANNOUNCE_COOLDOWN_MS) {
+          if (!cfg.silent) ttsSpeak("found you");
+          emitFire(entry, { ts: now }, "follow-reacquire");
+          lastLostAnnounceTs = now;
+        }
+      }
+      lostCount = 0;
+      cfg.lastDetection = { label: "hand", score: det.score, ts: Date.now() };
+
+      if (pointingDir === "left") {
+        try { await pulseMotors(entry.id, -FOLLOW_MAX_TURN_SPEED, FOLLOW_MAX_TURN_SPEED, FOLLOW_TURN_MS); } catch {}
+      } else if (pointingDir === "right") {
+        try { await pulseMotors(entry.id, FOLLOW_MAX_TURN_SPEED, -FOLLOW_MAX_TURN_SPEED, FOLLOW_TURN_MS); } catch {}
       } else {
-        if (lostCount >= FOLLOW_LOST_TICKS) {
-          const now = Date.now();
-          if (now - lastAnnounceTs > FOLLOW_ANNOUNCE_COOLDOWN_MS) {
-            if (!cfg.silent) ttsSpeak("found you");
-            emitFire(entry, { ts: now }, "follow-reacquire");
-            lastAnnounceTs = now;
-          }
-        }
-        lostCount = 0;
-        cfg.lastDetection = { label: "hand", score: det.score, ts: Date.now() };
         const cx = det.palmCentroid.cx;
         const area = det.bboxArea;
         const offset = cx - 0.5;          // -0.5 (far left) … +0.5 (far right)
         const absOffset = Math.abs(offset);
-
         if (area >= FOLLOW_HOLD_AREA) {
           // Close enough — hold. No pulse, no narration. Keeps the
           // operator in the "I can move my hand around without dragging
           // the robot in" sweet spot the audience reads as "it knows
-          // I'm close." Lower than this and we'd overshoot the hand;
-          // higher and the palm detector starts losing context.
+          // I'm close."
         } else if (absOffset < FOLLOW_DEADBAND) {
           try { await pulseMotors(entry.id, FOLLOW_DRIVE_SPEED, FOLLOW_DRIVE_SPEED, FOLLOW_DRIVE_MS); } catch {}
         } else {
-          // Proportional turn — small offset → small pulse, edge of
-          // frame → max pulse. Linear ramp from MIN_TURN at the deadband
-          // boundary to MAX_TURN at the frame edge. Without this, every
-          // off-center hand triggered a full-speed pulse and the robot
-          // overshot a near-camera hand on a single tick.
           const overshoot = absOffset - FOLLOW_DEADBAND;
           const ramp = Math.min(1, overshoot / (0.5 - FOLLOW_DEADBAND));
           const speed = Math.round(FOLLOW_MIN_TURN_SPEED + ramp * (FOLLOW_MAX_TURN_SPEED - FOLLOW_MIN_TURN_SPEED));
@@ -461,8 +471,19 @@ function runFollowLoop(entry, cfg) {
           const rMot = offset < 0 ?  speed : -speed;
           try { await pulseMotors(entry.id, lMot, rMot, FOLLOW_TURN_MS); } catch {}
         }
-        if (stopped) return;
-        renderEntry(entry);
+      }
+      if (stopped) return;
+      renderEntry(entry);
+    } else {
+      lostCount++;
+      if (lostCount === FOLLOW_LOST_TICKS) {
+        const now = Date.now();
+        if (now - lastLostAnnounceTs > FOLLOW_ANNOUNCE_COOLDOWN_MS) {
+          if (!cfg.silent) ttsSpeak("lost the hand");
+          emitFire(entry, { ts: now }, "follow-lost");
+          lastLostAnnounceTs = now;
+          renderEntry(entry);
+        }
       }
     }
 
@@ -543,11 +564,9 @@ function renderSection(entry) {
   if (!enabled) {
     state = last ? `saw ${last.label} at ${fmtClock(last.ts)}` : "off";
   } else if (isFollow) {
-    state = gated
-      ? `PAUSED — gesture engaged · show Pointing_Up to resume`
-      : last
-        ? `tracking hand · last seen at ${fmtClock(last.ts)}`
-        : `tracking hand — show one to the camera`;
+    state = last
+      ? `tracking hand · last seen at ${fmtClock(last.ts)}`
+      : `tracking hand — show one to the camera`;
   } else {
     state = gated
       ? `BLOCKED — ${last?.label || cfg.classes[0]} visible · motion gated`
@@ -568,19 +587,17 @@ function renderSection(entry) {
   const datalistId = `coco-classes-${entry.id}`;
   const datalistOpts = COCO_CLASSES.map(c => `<option value="${c}">`).join("");
   const cocoListHtml = COCO_CLASSES.map(c => escapeHtml(c)).join(", ");
-  // Follow mode swaps the "Watch for" combobox for a gesture cheat-sheet
-  // so the audience knows which hand shapes do anything. Listed in
-  // priority order — pause verbs first, resume verb after. Resume is
-  // Thumb_Up rather than Pointing_Up because the operator is typically
-  // looking DOWN at a floor-mounted robot, and an upward-pointing index
-  // finger is awkward from that angle; thumbs-up reads naturally as
-  // "good, continue."
+  // Follow mode swaps the "Watch for" combobox for a behavior cheat-
+  // sheet: the robot tracks the hand by default, points-left/right
+  // override to spin that way, any confident gesture gets spoken aloud.
+  // No pause/halt gestures — the operator drops their hand to stop, and
+  // Stop button / "stop" voice command stay as the hard kill paths.
   const followCheatSheet = `
     <div class="watcher-gestures">
-      <div class="watcher-gesture-row"><strong>Open palm</strong> · pause + halt</div>
-      <div class="watcher-gesture-row"><strong>Closed fist</strong> · pause + halt</div>
-      <div class="watcher-gesture-row"><strong>Thumbs up</strong> · resume tracking</div>
-      <div class="meta">Show a hand near the camera; gestures fire on transition (one announcement per pose change).</div>
+      <div class="watcher-gesture-row"><strong>Show a hand</strong> · robot tracks toward it</div>
+      <div class="watcher-gesture-row"><strong>Point left / right</strong> · steer that way (overrides tracking)</div>
+      <div class="watcher-gesture-row"><strong>Any clear gesture</strong> · robot speaks what it sees</div>
+      <div class="meta">Drop your hand to stop. Press Stop or say "stop" for a hard kill.</div>
     </div>
   `;
   const reflexBody = `
