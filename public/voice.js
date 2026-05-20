@@ -22,11 +22,14 @@ import { settings } from "./settings.js";
 
 // ─ OpenAI TTS path ──────────────────────────────────────────────────
 
-// onyx is the closest tts-1 voice to a friendly-male-narrator vibe.
-// Other options: alloy, echo, fable, nova, shimmer. tts-1 is the fast/
-// cheap model; tts-1-hd is ~2× the quality but ~2× the latency + cost.
+// fable = young, expressive, lightly British — closest tts-1 voice to a
+// "Spiderman" peppy-young-hero vibe. Onyx (the previous default) reads
+// as a deep-adult narrator and felt slightly sensual / wrong for a
+// small robot. Other options to try: alloy (neutral, younger than
+// onyx), echo (warm), nova (young female), shimmer (young female).
+// tts-1 is the fast/cheap model; tts-1-hd is ~2× quality and cost.
 const OPENAI_TTS_MODEL = "tts-1";
-const OPENAI_TTS_VOICE = "onyx";
+const OPENAI_TTS_VOICE = "fable";
 
 // Cancel-on-new state: we pause the in-flight Audio element AND abort
 // the in-flight fetch so a new speak() pre-empts cleanly instead of
@@ -43,9 +46,12 @@ function cancelOpenAIPlayback() {
   }
 }
 
+// Returns a Promise that resolves when the audio FINISHES playing (or
+// errors / is preempted). Callers can await it to schedule the next
+// action — no need to estimate TTS duration. Non-awaiting callers get
+// fire-and-forget behavior (the Promise is just discarded).
 async function speakOpenAI(text, key) {
   cancelOpenAIPlayback();
-  // Also cancel any Web Speech still going from a previous turn.
   if (typeof speechSynthesis !== "undefined") {
     try { speechSynthesis.cancel(); } catch {}
   }
@@ -78,13 +84,19 @@ async function speakOpenAI(text, key) {
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   _currentAudio = audio;
-  const cleanup = () => {
-    if (_currentAudio === audio) _currentAudio = null;
-    try { URL.revokeObjectURL(url); } catch {}
-  };
-  audio.onended = cleanup;
-  audio.onerror = cleanup;
-  await audio.play();
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      if (_currentAudio === audio) _currentAudio = null;
+      try { URL.revokeObjectURL(url); } catch {}
+      resolve();
+    };
+    audio.onended = cleanup;
+    audio.onerror = cleanup;
+    // play() returns a Promise that rejects if playback is interrupted
+    // (cancelOpenAIPlayback called pause()). That's a normal preempt,
+    // not a failure — resolve cleanly in either case.
+    audio.play().catch(cleanup);
+  });
 }
 
 // ─ Web Speech path (the fallback) ───────────────────────────────────
@@ -137,33 +149,41 @@ if (typeof speechSynthesis !== "undefined") {
   }
 }
 
+// Same Promise-on-end semantics as speakOpenAI so callers can uniformly
+// await speak() regardless of which engine is active.
 function speakWebSpeech(text) {
-  if (!text || typeof speechSynthesis === "undefined") return;
-  // If our very first call beat the voiceschanged event, try once more.
+  if (!text || typeof speechSynthesis === "undefined") return Promise.resolve();
   if (!_voiceResolved) refreshVoice();
-  try {
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(String(text));
-    if (_voice) u.voice = _voice;
-    speechSynthesis.speak(u);
-  } catch {}
+  return new Promise((resolve) => {
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(String(text));
+      if (_voice) u.voice = _voice;
+      const done = () => resolve();
+      u.onend = done;
+      u.onerror = done;
+      speechSynthesis.speak(u);
+    } catch { resolve(); }
+  });
 }
 
 // ─ Public surface ───────────────────────────────────────────────────
 
+// Returns a Promise that resolves when the utterance has actually
+// finished playing (audio.onended / utterance.onend). Callers that
+// don't await get the old fire-and-forget behavior. On any OpenAI
+// failure we silently fall back to Web Speech so the demo never goes
+// silent.
 export function speak(text) {
-  if (!text) return;
+  if (!text) return Promise.resolve();
   const key = settings?.pipOpenaiKey;
   if (key) {
-    // Fire-and-forget; on any failure, silently fall back to Web Speech
-    // so the demo never goes silent because of a network blip / bad key.
-    speakOpenAI(String(text), key).catch(err => {
+    return speakOpenAI(String(text), key).catch(err => {
       console.warn("[voice] OpenAI TTS failed, falling back to Web Speech:", err?.message || err);
-      speakWebSpeech(text);
+      return speakWebSpeech(text);
     });
-    return;
   }
-  speakWebSpeech(text);
+  return speakWebSpeech(text);
 }
 
 // Diagnostic — exposed on window so the user can audit voice selection

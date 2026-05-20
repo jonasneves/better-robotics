@@ -707,7 +707,13 @@ async function dispatch(name, input) {
     case "speak": {
       const text = String(input.text || "").trim();
       if (!text) return { error: "text is required" };
-      voiceSpeak(text);
+      // Await so the tool returns only after audio has actually
+      // finished playing — lets demos chain speak → motion without
+      // truncating mid-word. voiceSpeak now returns a Promise that
+      // resolves on audio.onended (OpenAI TTS) or utterance.onend
+      // (Web Speech). Wrapped in await-then-resolve so we never throw
+      // a tool-side error if the playback itself errors.
+      await voiceSpeak(text).catch(() => {});
       return { ok: true };
     }
     case "ask_human": {

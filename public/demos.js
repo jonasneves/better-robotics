@@ -36,19 +36,16 @@ async function pulse(ctx, l, r, ms) {
   await ctx.sleep(ms + 30);
 }
 
-// speak() returns immediately and TTS plays async; the NEXT speak
-// cancels any prior utterance still speaking (see pip-tools.js speak
-// case). So calling speak then immediately doing motion (or another
-// speak) cuts off the audio mid-word. speakAndWait pads with a sleep
-// based on a rough TTS-rate estimate (~70ms/char + small fixed tail)
-// so the words actually land before the next action. Cap at 6s so a
-// runaway long line can't stall a demo forever.
-async function speakAndWait(ctx, text, paddingMs = 250) {
+// Sequential speak — the speak tool now awaits actual audio.onended /
+// utterance.onend (see pip-tools.js speak case), so we just await the
+// exec and the next action runs after the audio finishes for real.
+// Tiny optional padding for a more deliberate cadence between
+// phrase + motion (0 = back-to-back).
+async function speakAndWait(ctx, text, paddingMs = 0) {
   const t = String(text || "").trim();
   if (!t) return;
   await ctx.exec("speak", { text: t });
-  const estMs = Math.min(6000, t.length * 70 + paddingMs);
-  await ctx.sleep(estMs);
+  if (paddingMs > 0) await ctx.sleep(paddingMs);
 }
 
 // chain forward — N consecutive max-duration drives. Each ~2s pulse
