@@ -6,7 +6,7 @@ import { state } from "./state.js";
 import { isSupported as voiceInputSupported, startDictation } from "./voice-input.js";
 import { tryMatchCommand, SAFETY_INTENTS } from "./voice-commands.js";
 import { tryMatchDemo, DEMO_NAMES, STATIC_DEMO_PHRASES } from "./demos.js";
-import { prewarmCache as prewarmTtsCache } from "./voice.js";
+import { prewarmCache as prewarmTtsCache, onSpeakingChange, isSpeaking } from "./voice.js";
 import { onWatcherFire, releaseAllGates, awaitReflexGate } from "./watcher.js";
 import { AUTH_URL } from "./endpoints.js";
 import { createPip, renderMd } from "https://cdn.jsdelivr.net/npm/@jonasneves/pip@2.9.5/pip-core.esm.js";
@@ -876,6 +876,13 @@ function wireMicButton() {
 
   const start = () => {
     if (_dictation) { stop(); return; }
+    // Don't open the mic while TTS is currently speaking — the recognizer
+    // would transcribe the robot's own voice as the next user command
+    // (classic full-duplex problem; Alexa/Siri/Google all suspend mic
+    // during their own TTS playback for this reason). The speaking-end
+    // listener below will call start() again once audio finishes if
+    // sticky is on.
+    if (isSpeaking()) return;
     prefix = input.value.trim();
     setListening(true);
     // CSS hook for "sticky-mode armed" — a subtle persistent ring around
@@ -988,6 +995,20 @@ function wireMicButton() {
     if (e.key === "Escape" && _dictation) {
       _micSticky = false;
       stop({ cancel: true });
+    }
+  });
+
+  // TTS feedback-gating. While the robot is speaking, kill the mic so
+  // the recognizer can't transcribe its own voice back as the next
+  // command. When TTS ends, restart if sticky is on. 300ms tail delay
+  // before restart so audio-system AEC has a chance to settle (without
+  // this, the very tail of the just-played utterance can be picked up
+  // as a phantom one-syllable command).
+  onSpeakingChange((speaking) => {
+    if (speaking) {
+      if (_dictation) stop({ cancel: true });  // drop the partial; don't commit phantom audio
+    } else if (_micSticky && !_dictation) {
+      setTimeout(() => { if (_micSticky && !_dictation && !isSpeaking()) start(); }, 300);
     }
   });
 }

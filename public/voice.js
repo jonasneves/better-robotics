@@ -343,18 +343,60 @@ function speakWebSpeech(text) {
   });
 }
 
+// ─ Speaking-state broadcast (for mic-input feedback gating) ─────────
+
+// All major voice assistants (Alexa, Siri, Google) suspend the mic
+// while TTS is speaking — Web Speech Recognition can't accept a custom
+// getUserMedia stream so we can't apply browser-level echo cancellation
+// at the recognizer; and on mobile, hardware AEC is unreliable. So
+// assistant.js subscribes to these events and stops/restarts dictation
+// around every utterance. Without this, the recognizer transcribes the
+// robot's own voice back as the next user command.
+const _speakingListeners = new Set();
+let _speakingCount = 0;
+
+function setSpeaking(on) {
+  if (on) {
+    _speakingCount++;
+    if (_speakingCount === 1) emitSpeaking(true);
+  } else {
+    _speakingCount = Math.max(0, _speakingCount - 1);
+    if (_speakingCount === 0) emitSpeaking(false);
+  }
+}
+
+function emitSpeaking(speaking) {
+  for (const fn of _speakingListeners) {
+    try { fn(speaking); } catch (err) { console.warn("[voice] speaking-listener:", err); }
+  }
+}
+
+export function onSpeakingChange(fn) {
+  _speakingListeners.add(fn);
+  return () => _speakingListeners.delete(fn);
+}
+
+export function isSpeaking() { return _speakingCount > 0; }
+
 // ─ Public surface ───────────────────────────────────────────────────
 
 export function speak(text) {
   if (!text) return Promise.resolve();
+  setSpeaking(true);
   const key = settings?.pipOpenaiKey;
-  if (key) {
-    return speakOpenAI(String(text), key).catch(err => {
-      console.warn("[voice] OpenAI TTS failed, falling back to Web Speech:", err?.message || err);
-      return speakWebSpeech(text);
-    });
-  }
-  return speakWebSpeech(text);
+  const p = key
+    ? speakOpenAI(String(text), key).catch(err => {
+        console.warn("[voice] OpenAI TTS failed, falling back to Web Speech:", err?.message || err);
+        return speakWebSpeech(text);
+      })
+    : speakWebSpeech(text);
+  // Decrement on resolve OR reject — utterance played, was cancelled,
+  // or errored; either way it's no longer producing audio. Both paths
+  // resolve their promise even on cancellation (cancel-on-new fires
+  // onended on the buffer source nodes, Web Speech utterance.onend fires
+  // on cancel + on error).
+  p.then(() => setSpeaking(false), () => setSpeaking(false));
+  return p;
 }
 
 // Pre-warm the TTS cache for hardcoded phrases. Called from
