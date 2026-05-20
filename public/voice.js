@@ -357,6 +357,52 @@ export function speak(text) {
   return speakWebSpeech(text);
 }
 
+// Pre-warm the TTS cache for hardcoded phrases. Called from
+// assistant.js on dashboard init — runs in the background so the first
+// time any demo speaks a stock phrase, the audio is already in Cache
+// API and plays instantly with zero network. Skipped silently if no
+// OpenAI key is configured (Web Speech path doesn't benefit from
+// caching — utterances render in-engine).
+//
+// Sequential rather than concurrent so we don't slam the API with 30
+// parallel requests on every page load — adds a few seconds of
+// background work but no visible latency. Cache hits skip the fetch
+// entirely, so subsequent reloads only fetch genuinely new phrases.
+export async function prewarmCache(phrases) {
+  const key = settings?.pipOpenaiKey;
+  if (!key || !Array.isArray(phrases) || phrases.length === 0) return { cached: 0, fetched: 0, skipped: 0 };
+  if (!("caches" in self)) return { cached: 0, fetched: 0, skipped: phrases.length };
+  let cached = 0, fetched = 0, failed = 0;
+  for (const text of phrases) {
+    const t = String(text || "").trim();
+    if (!t) continue;
+    if (await cacheGet(t)) { cached++; continue; }
+    try {
+      const body = {
+        model: OPENAI_TTS_MODEL,
+        voice: OPENAI_TTS_VOICE,
+        input: t,
+        response_format: OPENAI_TTS_FORMAT,
+      };
+      if (OPENAI_TTS_MODEL.startsWith("gpt-4o")) body.instructions = OPENAI_TTS_INSTRUCTIONS;
+      const res = await fetch(`${OPENAI_API}/v1/audio/speech`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) { failed++; continue; }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      await cachePut(t, bytes);
+      fetched++;
+    } catch {
+      failed++;
+    }
+  }
+  const result = { cached, fetched, failed, total: phrases.length };
+  console.info("[voice] cache prewarm:", result);
+  return result;
+}
+
 export function currentVoice() {
   const usingOpenAI = !!settings?.pipOpenaiKey;
   if (usingOpenAI) {

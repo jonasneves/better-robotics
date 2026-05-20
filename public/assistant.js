@@ -5,7 +5,8 @@ import { settings, saveSettings } from "./settings.js";
 import { state } from "./state.js";
 import { isSupported as voiceInputSupported, startDictation } from "./voice-input.js";
 import { tryMatchCommand, SAFETY_INTENTS } from "./voice-commands.js";
-import { tryMatchDemo, DEMO_NAMES } from "./demos.js";
+import { tryMatchDemo, DEMO_NAMES, STATIC_DEMO_PHRASES } from "./demos.js";
+import { prewarmCache as prewarmTtsCache } from "./voice.js";
 import { onWatcherFire, releaseAllGates, awaitReflexGate } from "./watcher.js";
 import { AUTH_URL } from "./endpoints.js";
 import { createPip, renderMd } from "https://cdn.jsdelivr.net/npm/@jonasneves/pip@2.9.5/pip-core.esm.js";
@@ -717,6 +718,13 @@ export function initAssistant() {
   });
   registerInitialSlashCommands();
   if (showIntro) { try { localStorage.setItem(seenKey, "1"); } catch {} }
+  // Background-fetch the cached audio for every hardcoded demo phrase
+  // on first load (cache hits skip the network entirely on subsequent
+  // loads). No-op when no OpenAI key is configured. Runs after pip
+  // boots so the user sees the dashboard immediately; finishes within
+  // a few seconds, by which time the first demo audio is already
+  // staged in Cache API and plays with zero network round-trip.
+  prewarmTtsCache(STATIC_DEMO_PHRASES);
   // Inject in-chat ask handler so pip-tools' ask_human can render option
   // buttons / free-text input inline in the active turn.
   //

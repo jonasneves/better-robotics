@@ -492,6 +492,40 @@ const DEMOS = {
 
 export const DEMO_NAMES = Object.keys(DEMOS);
 
+// Stock phrases used by the scripted demos. Exported so voice.js can
+// pre-warm the TTS cache on dashboard init — every line here gets one
+// background fetch on first page load (or returns from existing cache
+// on subsequent loads), so the first time you run any demo the audio
+// is already in Cache API and plays instantly with zero network. Only
+// includes hardcoded text — dynamic lines (askAboutFrame greetings,
+// `Following ${target}`, `I see ${list}`) stay realtime since we
+// can't predict them. Keep this list in sync when adding new demo
+// speak() calls; the cost is one ~$0.0009 TTS render per missing
+// entry on first run.
+export const STATIC_DEMO_PHRASES = [
+  // dance
+  "Watch this.", "Charge!", "Boom.",
+  // patrol
+  "Patrolling. Keep an eye out.", "Sweep done.",
+  // react
+  "Hmm, who's around...", "Nobody around. I'll keep an eye out.", "Hello there!",
+  // introduce
+  "Hey", "I'm a little wheeled robot",
+  "I've got a camera, two motors, and a distance sensor",
+  "I can drive", "spin", "and follow you around", "So, what should we try?",
+  // wiggle — no speak
+  // selfie
+  "One sec, let me look around...", "I can't quite make out the room. Bring something closer?", "Nice meeting you.",
+  // figure8 / zigzag
+  "Figure eight. Here we go.", "Hmm... scanning around.", "All clear.",
+  // stopsign
+  "Patrolling. Watch this.",
+  "Whoa — stop sign. Holding.", "Stop sign again. Pausing.", "Alright, I see it. Holding here.",
+  "Off again.", "Wall ahead — turning.", "Around we go.", "Patrol stopped.",
+  // showoff
+  "Alright. Showtime.", "Figure eight.", "Happy wiggle.", "That's a wrap. Thanks for watching.",
+];
+
 // Match `demo <name>` or `/demo <name>`. Aliases cover the variations
 // Web Speech produces — "figure eight" / "figure 8", "zig zag" /
 // "zigzag", "show off" / "showoff", etc. Dictated demo invocations
